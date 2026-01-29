@@ -1,0 +1,11 @@
+{
+  "name": "create-checkout-session",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.971.0",
+    "@aws-sdk/client-dynamodb": "^3.971.0",
+    "@aws-sdk/lib-dynamodb": "^3.971.0",
+    "stripe": "^20.2.0"
+  }
+}

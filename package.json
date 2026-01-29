@@ -10,7 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@aws-amplify/auth": "^6.18.0",
     "@aws-amplify/ui-react": "~6.13.2",
+    "@aws-sdk/client-cognito-identity-provider": "^3.975.0",
+    "@aws-sdk/lib-dynamodb": "^3.975.0",
     "aws-amplify": "~6.15.10",
     "react": "~18.3.1",
     "react-dom": "~18.3.1"
@@ -22,11 +25,14 @@
   "devDependencies": {
     "@aws-amplify/backend": "~1.19.0",
     "@aws-amplify/backend-cli": "~1.8.1",
-    "@eslint/compat":  "~2.0.1",
+    "@aws-sdk/client-dynamodb": "^3.975.0",
+    "@eslint/compat": "~2.0.1",
     "@eslint/eslintrc": "~3.3.3",
     "@eslint/js": "~9.39.2",
+    "@types/node": "^25.0.10",
     "@types/react": "~18.3.27",
     "@types/react-dom": "~18.3.7",
+    "@types/stripe": "^8.0.416",
     "@typescript-eslint/eslint-plugin": "~8.53.0",
     "@typescript-eslint/parser": "~8.53.0",
     "@vitejs/plugin-react": "~5.1.2",

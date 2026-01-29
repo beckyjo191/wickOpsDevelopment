@@ -1,40 +1,58 @@
+import { useAuthenticator } from "@aws-amplify/ui-react";
 import { useEffect, useState } from "react";
-import type { Schema } from "../amplify/data/resource";
-import { generateClient } from "aws-amplify/data";
+import SubscriptionPage from "./components/SubscriptionPage";
+import { InviteUsersPage } from "./components/InviteUsersPage";
 
-const client = generateClient<Schema>();
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
-function App() {
-  const [todos, setTodos] = useState<Array<Schema["Todo"]["type"]>>([]);
+type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
+
+export default function App() {
+  const { user, authStatus, signOut } = useAuthenticator();
+  const [subState, setSubState] = useState<{
+    status: SubscriptionState;
+    maxUsers: number;
+    seatsUsed: number;
+    accessSuspended: boolean;
+  }>({ status: "loading", maxUsers: 5, seatsUsed: 0, accessSuspended: false });
+
+  if (!authStatus || authStatus === "configuring") return <div>Loading...</div>;
+  if (authStatus !== "authenticated" || !user) return null;
+
+  const email = user.username; // email is username
 
   useEffect(() => {
-    client.models.Todo.observeQuery().subscribe({
-      next: (data) => setTodos([...data.items]),
-    });
-  }, []);
+    const checkSubscription = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/user-subscription?userId=${email}`);
+        if (!res.ok) throw new Error("Subscription check failed");
 
-  function createTodo() {
-    client.models.Todo.create({ content: window.prompt("Todo content") });
-  }
+        const data = await res.json();
+
+        setSubState({
+          status: data.subscribed && !data.accessSuspended ? "subscribed" : "unsubscribed",
+          maxUsers: data.maxUsers || 5,
+          seatsUsed: data.seatsUsed || 0,
+          accessSuspended: !!data.accessSuspended,
+        });
+      } catch (err) {
+        console.error(err);
+        setSubState({ status: "unsubscribed", maxUsers: 5, seatsUsed: 0, accessSuspended: true });
+      }
+    };
+
+    checkSubscription();
+  }, [email]);
+
+  if (subState.status === "loading") return <div>Loading...</div>;
+  if (subState.status === "unsubscribed") return <SubscriptionPage userEmail={email} />;
 
   return (
-    <main>
-      <h1>My todos</h1>
-      <button onClick={createTodo}>+ new</button>
-      <ul>
-        {todos.map((todo) => (
-          <li key={todo.id}>{todo.content}</li>
-        ))}
-      </ul>
-      <div>
-        🥳 App successfully hosted. Try creating a new todo.
-        <br />
-        <a href="https://docs.amplify.aws/react/start/quickstart/#make-frontend-updates">
-          Review next step of this tutorial.
-        </a>
-      </div>
-    </main>
+    <InviteUsersPage
+      userEmail={email}
+      signOut={signOut}
+      maxUsers={subState.maxUsers}
+      seatsUsed={subState.seatsUsed}
+    />
   );
 }
-
-export default App;

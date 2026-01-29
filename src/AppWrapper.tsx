@@ -31,7 +31,7 @@ export default function AppWrapper() {
 
                 {/* Friendly display name (NOT Cognito attribute) */}
                 <TextField
-                  name="displayName"
+                  name="name"
                   label="Your Name"
                   placeholder="John Smith"
                   required

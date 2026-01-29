@@ -5,10 +5,16 @@ import Stripe from "stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {});
 const ddbClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region: "us-east-2" }));
+console.log("Environment variables at runtime:", {
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY?.slice(0,4),
+  stripeSecretKey: process.env.stripeSecretKey?.slice(0,4),
+  STRIPE_PRICE_ID: process.env.STRIPE_PRICE_ID,
+  FRONTEND_URL: process.env.FRONTEND_URL,
+});
 
 // Allowed origins for CORS
 const allowedOrigins = [
-  "http://localhost:5174",
+  "http://localhost:5173",
   "https://systems.wickops.com",
 ];
 
@@ -40,11 +46,11 @@ export const handler: Handler = async (event) => {
       line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
       success_url: `${frontendUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${frontendUrl}/billing/cancel`,
-      metadata: {
-        organizationId,
-        ...(organizationName && { organizationName }),
-      },
-    });
+       metadata: {
+    organizationId, // always attach orgId here
+    organizationName, // optional
+  },
+});
 
     return { statusCode: 200, headers, body: JSON.stringify({ url: session.url }) };
   } catch (err: unknown) {

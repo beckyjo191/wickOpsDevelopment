@@ -1,9 +1,9 @@
-import { defineAuth } from '@aws-amplify/backend';
-import { postConfirmationLambda } from '../functions/postConfirmationLambda/resource';
+import { defineAuth } from "@aws-amplify/backend";
+import { postConfirmationLambda } from "../functions/postConfirmationLambda/resource";
 
 export const auth = defineAuth({
   loginWith: {
-    email: true, // email is username
+    email: true,
   },
 
   userAttributes: {
@@ -12,9 +12,8 @@ export const auth = defineAuth({
       mutable: true,
     },
 
-    // Optional — enforced in Lambda, NOT Cognito
-    'custom:organizationName': {
-      dataType: 'String',
+    "custom:organizationName": {
+      dataType: "String",
       mutable: false,
       maxLen: 100,
     },

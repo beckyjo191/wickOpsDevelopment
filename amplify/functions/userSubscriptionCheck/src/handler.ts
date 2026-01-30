@@ -15,39 +15,54 @@ const headers = {
   "Access-Control-Allow-Methods": "OPTIONS,GET",
 };
 
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return typeof err === "string" ? err : "Unknown error";
-}
-
 export const handler: Handler = async (event) => {
-  if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers, body: "" };
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 204, headers, body: "" };
+  }
 
   try {
-    const { email } = event.queryStringParameters || {};
+    const email = event.queryStringParameters?.email;
     if (!email) {
-      return { statusCode: 400, headers, body: JSON.stringify({ error: "Email required" }) };
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: "Email required" }),
+      };
     }
 
-    // Lookup user by email
+    // Fetch user
     const userResult = await ddb.send(
-      new GetCommand({ TableName: USER_TABLE, Key: { id: email } })
+      new GetCommand({
+        TableName: USER_TABLE,
+        Key: { id: email },
+      })
     );
 
     if (!userResult.Item) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: "User not found" }) };
+      return {
+        statusCode: 404,
+        headers,
+        body: JSON.stringify({ error: "User not found" }),
+      };
     }
 
     const user = userResult.Item;
     const orgId = user.organizationId;
 
-    // Lookup organization
+    // Fetch organization
     const orgResult = await ddb.send(
-      new GetCommand({ TableName: ORG_TABLE, Key: { id: orgId } })
+      new GetCommand({
+        TableName: ORG_TABLE,
+        Key: { id: orgId },
+      })
     );
 
     if (!orgResult.Item) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: "Organization not found" }) };
+      return {
+        statusCode: 404,
+        headers,
+        body: JSON.stringify({ error: "Organization not found" }),
+      };
     }
 
     const org = orgResult.Item;
@@ -60,10 +75,19 @@ export const handler: Handler = async (event) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ subscribed, maxUsers, seatsUsed, accessSuspended }),
+      body: JSON.stringify({
+        subscribed,
+        maxUsers,
+        seatsUsed,
+        accessSuspended,
+      }),
     };
-  } catch (err: unknown) {
-    console.error("Subscription check failed:", getErrorMessage(err));
-    return { statusCode: 500, headers, body: JSON.stringify({ error: getErrorMessage(err) }) };
+  } catch (err) {
+    console.error("Subscription check failed:", err);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: "Internal server error" }),
+    };
   }
 };

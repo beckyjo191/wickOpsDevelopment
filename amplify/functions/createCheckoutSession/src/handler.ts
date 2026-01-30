@@ -1,60 +1,102 @@
 import type { Handler } from "aws-lambda";
+import Stripe from "stripe";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
-import Stripe from "stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {});
-const ddbClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region: "us-east-2" }));
-console.log("Environment variables at runtime:", {
-  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY?.slice(0,4),
-  stripeSecretKey: process.env.stripeSecretKey?.slice(0,4),
-  STRIPE_PRICE_ID: process.env.STRIPE_PRICE_ID,
-  FRONTEND_URL: process.env.FRONTEND_URL,
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  
 });
 
-// Allowed origins for CORS
-const allowedOrigins = [
+const ddb = DynamoDBDocumentClient.from(
+  new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-2" })
+);
+
+/**
+ * Allowed frontend origins
+ * Add preview domains here if needed
+ */
+const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173",
   "https://systems.wickops.com",
-];
+]);
 
-export const handler: Handler = async (event) => {
-  const origin = event.headers.origin;
-  const headers = {
-    "Access-Control-Allow-Origin": allowedOrigins.includes(origin) ? origin : "",
+function getCorsHeaders(origin?: string) {
+  const allowedOrigin = origin && ALLOWED_ORIGINS.has(origin)
+    ? origin
+    : "https://systems.wickops.com";
+
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
     "Access-Control-Allow-Methods": "OPTIONS,POST",
-    "Access-Control-Allow-Credentials": "false",
   };
+}
 
+export const handler: Handler = async (event) => {
+  const origin = event.headers?.origin ?? event.headers?.Origin;
+  const headers = getCorsHeaders(origin);
+
+  // Preflight
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers, body: "" };
-  }
-
-  const { organizationId, organizationName } = JSON.parse(event.body || "{}");
-
-  if (!organizationId) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: "organizationId required" }) };
+    return {
+      statusCode: 204,
+      headers,
+      body: "",
+    };
   }
 
   try {
-    // Use FRONTEND_URL for Stripe URLs to ensure full valid URL
-    const frontendUrl = process.env.FRONTEND_URL!;
+    if (!event.body) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: "Missing request body" }),
+      };
+    }
+
+    const { organizationId, organizationName } = JSON.parse(event.body);
+
+    if (!organizationId) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ error: "organizationId required" }),
+      };
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL;
+    if (!frontendUrl) {
+      throw new Error("FRONTEND_URL is not configured");
+    }
+
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
       mode: "subscription",
-      line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price: process.env.STRIPE_PRICE_ID!,
+          quantity: 1,
+        },
+      ],
       success_url: `${frontendUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${frontendUrl}/billing/cancel`,
-       metadata: {
-    organizationId, // always attach orgId here
-    organizationName, // optional
-  },
-});
+      metadata: {
+        organizationId,
+        organizationName,
+      },
+    });
 
-    return { statusCode: 200, headers, body: JSON.stringify({ url: session.url }) };
-  } catch (err: unknown) {
-    console.error("Checkout creation failed:", err);
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "Internal server error" }) };
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ url: session.url }),
+    };
+  } catch (err) {
+    console.error("Checkout session creation failed:", err);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ error: "Internal server error" }),
+    };
   }
 };

@@ -12,45 +12,29 @@ import {
 } from "@aws-sdk/client-cognito-identity-provider";
 
 const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: "us-east-2" })
+  new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-2" })
 );
 
-const cognito = new CognitoIdentityProviderClient({ region: "us-east-2" });
+const cognito = new CognitoIdentityProviderClient({ region: process.env.AWS_REGION || "us-east-2" });
 
 export const handler: Handler = async (event) => {
   console.log("PostConfirmation event:", JSON.stringify(event, null, 2));
 
-  /* ================================
-     1️⃣ SOURCE OF TRUTH
-  ================================= */
-
   const email = event.request.userAttributes?.email;
-  if (!email) {
-    throw new Error("Email attribute missing from Cognito user");
-  }
+  if (!email) throw new Error("Email attribute missing");
 
   const displayName =
     event.request.clientMetadata?.displayName ??
     event.request.userAttributes?.name ??
     email;
 
-  const orgNameInput =
-    event.request.userAttributes?.["custom:organizationName"];
-
-  /* ================================
-     2️⃣ ENV / CONFIG
-  ================================= */
+  const orgNameInput = event.request.userAttributes?.["custom:organizationName"];
 
   const ORG_TABLE = process.env.ORG_TABLE!;
   const USER_TABLE = process.env.USER_TABLE!;
   const USER_POOL_ID = event.userPoolId;
 
-  /* ================================
-     3️⃣ ORGANIZATION LOGIC
-  ================================= */
-
   const isPersonal = !orgNameInput || orgNameInput.trim() === "";
-
   const organizationName = isPersonal
     ? `Personal - ${displayName}`
     : orgNameInput.trim();
@@ -62,20 +46,13 @@ export const handler: Handler = async (event) => {
   const seatLimit = isPersonal ? 1 : 5;
   let isAdmin = false;
 
-  /* ================================
-     4️⃣ CREATE / UPDATE ORG
-  ================================= */
-
+  // Check org exists
   const orgResult = await ddb.send(
-    new GetCommand({
-      TableName: ORG_TABLE,
-      Key: { id: organizationId },
-    })
+    new GetCommand({ TableName: ORG_TABLE, Key: { id: organizationId } })
   );
 
   if (!orgResult.Item) {
     isAdmin = true;
-
     await ddb.send(
       new PutCommand({
         TableName: ORG_TABLE,
@@ -102,40 +79,32 @@ export const handler: Handler = async (event) => {
     );
   }
 
-  /* ================================
-     5️⃣ CREATE USER
-  ================================= */
-
+  // Create user with Cognito UUID as id
   await ddb.send(
     new PutCommand({
       TableName: USER_TABLE,
       Item: {
-        id: email,                    // ✅ email is canonical ID
+        id: event.userName, // Cognito UUID
         email,
-        displayName,                  // ✅ Bekah Wick
+        displayName,
         organizationId,
         role: isAdmin ? "ADMIN" : "MEMBER",
-        accessSuspended: true,        // 🔒 until Stripe confirms payment
+        accessSuspended: true, // until payment confirmed
         createdAt: new Date().toISOString(),
       },
     })
   );
 
-  /* ================================
-     6️⃣ ADMIN GROUP
-  ================================= */
-
   if (isAdmin) {
     await cognito.send(
       new AdminAddUserToGroupCommand({
         UserPoolId: USER_POOL_ID,
-        Username: event.userName, // Cognito internal username
+        Username: event.userName,
         GroupName: "Admins",
       })
     );
   }
 
   console.log(`✅ User ${email} created (admin=${isAdmin})`);
-
   return event;
 };

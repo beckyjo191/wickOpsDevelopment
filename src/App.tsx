@@ -2,83 +2,97 @@ import { useAuthenticator } from "@aws-amplify/ui-react";
 import { useEffect, useState } from "react";
 import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
+import { authFetch } from "./lib/authFetch";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 
 export default function App() {
-  const { user, authStatus, signOut } = useAuthenticator();
+  const { user, authStatus, signOut } = useAuthenticator() as any;
 
   const [subState, setSubState] = useState<{
     status: SubscriptionState;
-    maxUsers: number;
+    seatLimit: number;
     seatsUsed: number;
     accessSuspended: boolean;
   }>({
     status: "loading",
-    maxUsers: 5,
+    seatLimit: 1,
     seatsUsed: 0,
     accessSuspended: false,
   });
 
-  const email = user?.username ?? null;
-
-  // 🔐 Always call hooks — no early returns above this point
   useEffect(() => {
-    if (!email || authStatus !== "authenticated") return;
+    if (authStatus !== "authenticated") return;
+
+    let pollInterval: number | undefined;
 
     const checkSubscription = async () => {
       try {
-        const res = await fetch(
-          `${API_BASE_URL}/user-subscription?email=${encodeURIComponent(email)}`
-        );
-
+        const res = await authFetch(`${API_BASE_URL}/user-subscription`);
         if (!res.ok) throw new Error("Subscription check failed");
 
         const data = await res.json();
 
+        const status =
+          data.subscribed && !data.accessSuspended
+            ? "subscribed"
+            : "unsubscribed";
+
         setSubState({
-          status:
-            data.subscribed && !data.accessSuspended
-              ? "subscribed"
-              : "unsubscribed",
-          maxUsers: data.maxUsers ?? 5,
+          status,
+          seatLimit: data.seatLimit ?? 1,
           seatsUsed: data.seatsUsed ?? 0,
           accessSuspended: !!data.accessSuspended,
         });
+
+        if (status === "subscribed" && pollInterval) {
+          clearInterval(pollInterval);
+        }
       } catch (err) {
         console.error("Subscription check error:", err);
-        setSubState({
-          status: "unsubscribed",
-          maxUsers: 5,
-          seatsUsed: 0,
-          accessSuspended: true,
-        });
       }
     };
 
     checkSubscription();
-  }, [email, authStatus]);
 
-  // Conditional rendering AFTER hooks
+    if (window.location.pathname === "/success") {
+      pollInterval = window.setInterval(checkSubscription, 3000);
+      setTimeout(() => {
+        if (pollInterval) clearInterval(pollInterval);
+      }, 30000);
+    }
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [authStatus]);
+
   if (authStatus === "configuring" || subState.status === "loading") {
     return <div>Loading...</div>;
   }
 
   if (authStatus !== "authenticated" || !user) return null;
 
-  // 🔒 Always enforce subscription and access
   if (subState.status === "unsubscribed" || subState.accessSuspended) {
-    return <SubscriptionPage userEmail={email!} />;
+    return <SubscriptionPage />;
+  }
+
+  // Only render InviteUsersPage if there are seats remaining
+  const seatsRemaining = subState.seatLimit - subState.seatsUsed;
+  if (seatsRemaining <= 0) {
+    return <div>All seats have been used. Contact admin to invite more users.</div>;
   }
 
   return (
     <InviteUsersPage
-      userEmail={email!}
       signOut={signOut}
-      maxUsers={subState.maxUsers}
-      seatsUsed={subState.seatsUsed}
+      maxUsers={subState.seatLimit}  // total seats
+      seatsUsed={subState.seatsUsed} // seats already used
+      userEmail={
+        user?.attributes?.email ?? user?.signInDetails?.loginId ?? ""
+      }
     />
   );
 }

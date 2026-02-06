@@ -1,102 +1,80 @@
-import type { Handler } from "aws-lambda";
 import Stripe from "stripe";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  
-});
+// Stripe initialization
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {});
 
-const ddb = DynamoDBDocumentClient.from(
-  new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-2" })
-);
+// DynamoDB client
+const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
-/**
- * Allowed frontend origins
- * Add preview domains here if needed
- */
-const ALLOWED_ORIGINS = new Set([
-  "http://localhost:5173",
-  "https://systems.wickops.com",
-]);
+const USER_TABLE = process.env.USER_TABLE!;
+const ORG_TABLE = process.env.ORG_TABLE!;
+const FRONTEND_URL = process.env.FRONTEND_URL!;
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID!;
 
-function getCorsHeaders(origin?: string) {
-  const allowedOrigin = origin && ALLOWED_ORIGINS.has(origin)
-    ? origin
-    : "https://systems.wickops.com";
-
-  return {
-    "Access-Control-Allow-Origin": allowedOrigin,
-    "Access-Control-Allow-Headers": "Content-Type,Authorization",
-    "Access-Control-Allow-Methods": "OPTIONS,POST",
-  };
-}
-
-export const handler: Handler = async (event) => {
-  const origin = event.headers?.origin ?? event.headers?.Origin;
-  const headers = getCorsHeaders(origin);
-
-  // Preflight
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 204,
-      headers,
-      body: "",
-    };
-  }
-
+export const handler = async (event: any) => {
   try {
-    if (!event.body) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "Missing request body" }),
-      };
+    const claims =
+      event.requestContext?.authorizer?.jwt?.claims ??
+      event.requestContext?.authorizer?.claims;
+
+    const userId = claims?.sub;
+    if (!userId) {
+      return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
     }
 
-    const { organizationId, organizationName } = JSON.parse(event.body);
+    // Load user
+    const userRes = await ddb.send(new GetCommand({ TableName: USER_TABLE, Key: { id: userId } }));
+    if (!userRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "User not found" }) };
+    const user = userRes.Item;
 
-    if (!organizationId) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: "organizationId required" }),
-      };
+    if (!user.organizationId) {
+      return { statusCode: 500, body: JSON.stringify({ error: "User missing organizationId" }) };
     }
 
-    const frontendUrl = process.env.FRONTEND_URL;
-    if (!frontendUrl) {
-      throw new Error("FRONTEND_URL is not configured");
+    // Load organization
+    const orgRes = await ddb.send(new GetCommand({ TableName: ORG_TABLE, Key: { id: user.organizationId } }));
+    if (!orgRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "Organization not found" }) };
+    const org = orgRes.Item;
+
+    // Create Stripe customer if needed
+    let stripeCustomerId = org.stripeCustomerId;
+    if (!stripeCustomerId) {
+      const customer = await stripe.customers.create({
+        email: user.email,
+        metadata: { organizationId: org.id },
+      });
+      stripeCustomerId = customer.id;
+
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORG_TABLE,
+          Key: { id: org.id },
+          UpdateExpression: "SET stripeCustomerId = :cid",
+          ExpressionAttributeValues: { ":cid": stripeCustomerId },
+        })
+      );
     }
 
+    // Create checkout session
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price: process.env.STRIPE_PRICE_ID!,
-          quantity: 1,
+      customer: stripeCustomerId,
+      line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+      success_url: `${FRONTEND_URL}/success`,
+      cancel_url: `${FRONTEND_URL}/billing`,
+      subscription_data: {
+        metadata: {
+          organizationId: org.id,
+          userId: user.id, // ✅ pass userId
         },
-      ],
-      success_url: `${frontendUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${frontendUrl}/billing/cancel`,
-      metadata: {
-        organizationId,
-        organizationName,
       },
     });
 
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({ url: session.url }),
-    };
-  } catch (err) {
-    console.error("Checkout session creation failed:", err);
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: "Internal server error" }),
-    };
+    return { statusCode: 200, body: JSON.stringify({ url: session.url }) };
+  } catch (err: any) {
+    console.error("createCheckoutSession error:", err);
+    return { statusCode: 500, body: JSON.stringify({ error: err.message ?? String(err) }) };
   }
 };

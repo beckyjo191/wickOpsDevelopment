@@ -1,17 +1,17 @@
 import { useState } from "react";
 
 interface InviteUsersPageProps {
-  userEmail: string;     // email of current user (admin)
   signOut: () => void;
   maxUsers: number;      // total seats allowed
   seatsUsed: number;     // current seats already used
+  userEmail: string;
 }
 
 export function InviteUsersPage({
-  userEmail,
   signOut,
   maxUsers,
   seatsUsed,
+  userEmail,  
 }: InviteUsersPageProps) {
   const seatsRemaining = maxUsers - seatsUsed;
   const [emails, setEmails] = useState<string[]>([""]);

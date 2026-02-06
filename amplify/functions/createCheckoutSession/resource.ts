@@ -7,7 +7,8 @@ export const createCheckoutSession = defineFunction({
     STRIPE_SECRET_KEY: "STRIPE_SECRET_KEY",
     ORG_TABLE: "ORG_TABLE",
     STRIPE_PRICE_ID: "STRIPE_PRICE_ID",
-    FRONTEND_URL: "FRONTEND_URL"
+    FRONTEND_URL: "FRONTEND_URL",
+    USER_TABLE: "USER_TABLE"
   },
   layers: {
     "stripe": "stripe-layer:1"

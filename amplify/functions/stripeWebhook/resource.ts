@@ -6,7 +6,8 @@ export const stripeWebhook = defineFunction({
   environment: {
     STRIPE_SECRET_KEY: "STRIPE_SECRET_KEY",
     STRIPE_WEBHOOK_SECRET: "STRIPE_WEBHOOK_SECRET",
-    ORG_TABLE: "ORG_TABLE"
+    ORG_TABLE: "ORG_TABLE",
+    USER_TABLE: "USER_TABLE"
   },
   
   layers: {

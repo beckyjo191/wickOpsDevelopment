@@ -2,6 +2,7 @@ import { useAuthenticator } from "@aws-amplify/ui-react";
 import { useEffect, useState } from "react";
 import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
+import { InventoryPage } from "./components/InventoryPage";
 import { authFetch } from "./lib/authFetch";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -82,7 +83,7 @@ export default function App() {
   // Only render InviteUsersPage if there are seats remaining
   const seatsRemaining = subState.seatLimit - subState.seatsUsed;
   if (seatsRemaining <= 0) {
-    return <div>All seats have been used. Contact admin to invite more users.</div>;
+    return <InventoryPage />;
   }
 
   return (

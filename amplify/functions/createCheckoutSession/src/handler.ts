@@ -64,6 +64,10 @@ export const handler = async (event: any) => {
       line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
       success_url: `${FRONTEND_URL}/success`,
       cancel_url: `${FRONTEND_URL}/billing`,
+      metadata: {
+        organizationId: org.id,
+        userId: user.id,
+      },
       subscription_data: {
         metadata: {
           organizationId: org.id,

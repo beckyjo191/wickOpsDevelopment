@@ -24,5 +24,19 @@ export const data = defineData({
     createdAt: a.datetime().required(),
   })
   .authorization((allow) => [allow.authenticated()]),
+
+    invite: a
+  .model({
+    id: a.id(),
+    email: a.string().required(),
+    organizationId: a.id().required(),
+    role: a.string().required(),        // ADMIN | EDITOR | VIEWER
+    status: a.string().required(),      // PENDING | ACCEPTED | REVOKED
+    invitedBy: a.id().required(),
+    createdAt: a.datetime().required(),
+    expiresAt: a.datetime(),
+    acceptedAt: a.datetime(),
+  })
+  .authorization((allow) => [allow.authenticated()]),
   }),
 });

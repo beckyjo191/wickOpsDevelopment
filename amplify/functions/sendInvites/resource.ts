@@ -1,8 +1,7 @@
 import { defineFunction, secret } from "@aws-amplify/backend";
 
-// --- userSubscriptionCheck Lambda ---
-export const userSubscriptionCheck = defineFunction({
-  name: "userSubscriptionCheck",
+export const sendInvites = defineFunction({
+  name: "sendInvites",
   entry: "./src/handler.ts",
   environment: {
     ORG_TABLE: secret("ORG_TABLE"),

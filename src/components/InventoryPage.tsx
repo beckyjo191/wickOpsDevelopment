@@ -1,6 +1,11 @@
 import { useAuthenticator } from "@aws-amplify/ui-react";
 
-export function InventoryPage() {
+interface InventoryPageProps {
+  canInviteMore: boolean;
+  onInviteMore: () => void;
+}
+
+export function InventoryPage({ canInviteMore, onInviteMore }: InventoryPageProps) {
   const { user, signOut } = useAuthenticator() as any;
 
   return (
@@ -9,6 +14,13 @@ export function InventoryPage() {
       <p>Welcome, {user?.attributes?.email ?? "User"}!</p>
       <p>Your subscription is active. 🎉</p>
       <p>This is where the inventory table will go.</p>
+      {canInviteMore && (
+        <>
+          <button onClick={onInviteMore}>Invite More Users</button>
+          <br />
+          <br />
+        </>
+      )}
       <button onClick={signOut}>Sign Out</button>
     </div>
   );

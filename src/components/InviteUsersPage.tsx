@@ -1,43 +1,63 @@
 import { useState } from "react";
 
+type InviteRole = "ADMIN" | "EDITOR" | "VIEWER";
+
+type InviteEntry = {
+  email: string;
+  role: InviteRole;
+};
+
 interface InviteUsersPageProps {
   signOut: () => void;
   maxUsers: number;      // total seats allowed
   seatsUsed: number;     // current seats already used
   userEmail: string;
+  onContinue: (invites: InviteEntry[]) => Promise<void>;
 }
 
 export function InviteUsersPage({
   signOut,
   maxUsers,
   seatsUsed,
-  userEmail,  
+  userEmail,
+  onContinue,
 }: InviteUsersPageProps) {
   const seatsRemaining = maxUsers - seatsUsed;
-  const [emails, setEmails] = useState<string[]>([""]);
+  const [invites, setInvites] = useState<InviteEntry[]>([
+    { email: "", role: "VIEWER" },
+  ]);
   const [loading, setLoading] = useState(false);
 
   const addEmailField = () => {
-    if (emails.length < seatsRemaining) setEmails([...emails, ""]);
+    if (invites.length < seatsRemaining) {
+      setInvites([...invites, { email: "", role: "VIEWER" }]);
+    }
   };
 
-  const handleChange = (idx: number, value: string) => {
-    const newEmails = [...emails];
-    newEmails[idx] = value;
-    setEmails(newEmails);
+  const handleEmailChange = (idx: number, value: string) => {
+    const next = [...invites];
+    next[idx] = { ...next[idx], email: value };
+    setInvites(next);
+  };
+
+  const handleRoleChange = (idx: number, value: InviteRole) => {
+    const next = [...invites];
+    next[idx] = { ...next[idx], role: value };
+    setInvites(next);
   };
 
   const handleSubmit = async () => {
     setLoading(true);
     try {
-      const validEmails = emails.filter((e) => e);
-      if (!validEmails.length) return alert("Please enter at least one email");
+      const validInvites = invites
+        .map((invite) => ({
+          email: invite.email.trim().toLowerCase(),
+          role: invite.role,
+        }))
+        .filter((invite) => invite.email.length > 0);
+      if (!validInvites.length) return alert("Please enter at least one email");
 
-      // TODO: call Lambda to create invites
-      console.log("Inviting emails:", validEmails);
-
-      // Redirect to inventory or another page
-      window.location.href = "/inventory";
+      await onContinue(validInvites);
     } catch (err) {
       console.error(err);
       alert("Failed to send invites.");
@@ -56,18 +76,28 @@ export function InviteUsersPage({
         You can invite up to <strong>{seatsRemaining}</strong> more users based on your subscription plan.
       </p>
 
-      {emails.map((email, idx) => (
-        <input
-          key={idx}
-          type="email"
-          placeholder="Enter email"
-          value={email}
-          onChange={(e) => handleChange(idx, e.target.value)}
-          style={{ display: "block", marginBottom: 8, padding: 8, width: 300 }}
-        />
+      {invites.map((invite, idx) => (
+        <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+          <input
+            type="email"
+            placeholder="Enter email"
+            value={invite.email}
+            onChange={(e) => handleEmailChange(idx, e.target.value)}
+            style={{ padding: 8, width: 300 }}
+          />
+          <select
+            value={invite.role}
+            onChange={(e) => handleRoleChange(idx, e.target.value as InviteRole)}
+            style={{ padding: 8 }}
+          >
+            <option value="VIEWER">Read Only</option>
+            <option value="EDITOR">Read / Write</option>
+            <option value="ADMIN">Admin</option>
+          </select>
+        </div>
       ))}
 
-      {emails.length < seatsRemaining && (
+      {invites.length < seatsRemaining && (
         <button onClick={addEmailField} disabled={loading}>
           Add another email
         </button>

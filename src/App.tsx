@@ -3,17 +3,19 @@ import { useEffect, useState } from "react";
 import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
 import { InventoryPage } from "./components/InventoryPage";
+import { SettingsPage } from "./components/SettingsPage";
 import { authFetch } from "./lib/authFetch";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-const INVITES_API_BASE_URL =
-  import.meta.env.VITE_INVITES_API_BASE_URL ?? API_BASE_URL;
+const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
+const INVITES_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVITES_API_BASE_URL);
 const INVITE_STEP_COMPLETE_KEY = "wickops_invite_step_complete";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
+  const [view, setView] = useState<"dashboard" | "invite" | "settings">("dashboard");
   const [inviteStepComplete, setInviteStepComplete] = useState<boolean>(() => {
     return localStorage.getItem(INVITE_STEP_COMPLETE_KEY) === "true";
   });
@@ -96,11 +98,21 @@ export default function App() {
 
   if (subState.loadError) {
     return (
-      <div style={{ padding: 32 }}>
-        <h2>Could not load subscription state</h2>
-        <p>Please refresh in a few seconds.</p>
-        <button onClick={signOut}>Sign Out</button>
-      </div>
+      <section className="app-page">
+        <div className="app-card">
+          <header className="app-header">
+            <div>
+              <h2 className="app-title">Could Not Load Subscription</h2>
+              <p className="app-subtitle">Please refresh in a few seconds and try again.</p>
+            </div>
+          </header>
+          <div className="app-actions">
+            <button className="button button-ghost" onClick={signOut}>
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </section>
     );
   }
 
@@ -110,26 +122,40 @@ export default function App() {
     return <SubscriptionPage />;
   }
 
+  const userEmail = user?.attributes?.email ?? user?.signInDetails?.loginId ?? "";
   const seatsRemaining = subState.seatLimit - subState.seatsUsed;
+  const canInviteMore = subState.canInviteUsers && seatsRemaining > 0;
 
-  if (inviteStepComplete) {
+  if (view === "settings") {
+    return (
+      <SettingsPage
+        userEmail={userEmail}
+        onBack={() => setView("dashboard")}
+      />
+    );
+  }
+
+  if (view === "dashboard" && (inviteStepComplete || !canInviteMore)) {
     return (
       <InventoryPage
-        canInviteMore={subState.canInviteUsers && seatsRemaining > 0}
+        canInviteMore={canInviteMore}
         onInviteMore={() => {
           localStorage.removeItem(INVITE_STEP_COMPLETE_KEY);
           setInviteStepComplete(false);
+          setView("invite");
         }}
+        onOpenSettings={() => setView("settings")}
       />
     );
   }
 
   // Only render InviteUsersPage if there are seats remaining
-  if (!subState.canInviteUsers || seatsRemaining <= 0) {
+  if (!canInviteMore) {
     return (
       <InventoryPage
         canInviteMore={false}
         onInviteMore={() => {}}
+        onOpenSettings={() => setView("settings")}
       />
     );
   }
@@ -139,10 +165,17 @@ export default function App() {
       signOut={signOut}
       maxUsers={subState.seatLimit}  // total seats
       seatsUsed={subState.seatsUsed} // seats already used
-      userEmail={
-        user?.attributes?.email ?? user?.signInDetails?.loginId ?? ""
-      }
+      userEmail={userEmail}
+      onBackToDashboard={() => {
+        localStorage.setItem(INVITE_STEP_COMPLETE_KEY, "true");
+        setInviteStepComplete(true);
+        setView("dashboard");
+      }}
       onContinue={async (invites) => {
+        if (!INVITES_API_BASE_URL) {
+          throw new Error("Missing VITE_INVITES_API_BASE_URL");
+        }
+
         const res = await authFetch(`${INVITES_API_BASE_URL}/send-invites`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -161,6 +194,7 @@ export default function App() {
 
         localStorage.setItem(INVITE_STEP_COMPLETE_KEY, "true");
         setInviteStepComplete(true);
+        setView("dashboard");
       }}
     />
   );

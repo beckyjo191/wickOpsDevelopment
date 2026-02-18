@@ -29,6 +29,10 @@ export function LandingPage() {
             <a className="lp-button lp-button-primary" href="/signup">Create Organization Account</a>
             <a className="lp-button lp-button-secondary" href="/app">Go To Existing Account</a>
           </div>
+          <p className="lp-signup-note">
+            Organization sign-up includes up to <strong>5 users</strong>. Other sign-ups are
+            <strong> personal</strong> accounts.
+          </p>
         </section>
 
         <section className="lp-pillars" aria-label="Core value">

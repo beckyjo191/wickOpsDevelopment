@@ -564,6 +564,101 @@ const parseDateToIsoDay = (value: string): string => {
   return parsed.toISOString().slice(0, 10);
 };
 
+const isLikelyUrlValue = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return /^(https?:\/\/|www\.)\S+$/i.test(trimmed);
+};
+
+const normalizeLinkForImport = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+};
+
+const isPhoneHeader = (header: string): boolean =>
+  /(phone|mobile|cell|tel|fax)/i.test(header);
+
+const isLikelyPhoneValue = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const digits = trimmed.replace(/\D/g, "");
+  const hasPhonePunctuation = /[()+\-\s]/.test(trimmed);
+  if (digits.length === 10 && hasPhonePunctuation) return true;
+  if (digits.length === 11 && digits.startsWith("1") && hasPhonePunctuation) return true;
+  return false;
+};
+
+const formatPhoneNumber = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const extMatch = trimmed.match(/\b(?:ext\.?|x)\s*(\d{1,6})$/i);
+  const ext = extMatch?.[1];
+  const main = extMatch && extMatch.index !== undefined
+    ? trimmed.slice(0, extMatch.index).trim()
+    : trimmed;
+  const digits = main.replace(/\D/g, "");
+
+  let formatted = trimmed;
+  if (digits.length === 10) {
+    formatted = `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  } else if (digits.length === 11 && digits.startsWith("1")) {
+    formatted = `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+
+  return ext ? `${formatted} x${ext}` : formatted;
+};
+
+const parseBooleanOrBlank = (
+  value: string,
+): { ok: true; value: boolean | "" } | { ok: false; error: string } => {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return { ok: true, value: "" };
+  if (["true", "t", "yes", "y", "1"].includes(trimmed)) return { ok: true, value: true };
+  if (["false", "f", "no", "n", "0"].includes(trimmed)) return { ok: true, value: false };
+  return { ok: false, error: "must be a boolean value (true/false, yes/no, 1/0)" };
+};
+
+const parseNumberOrBlank = (
+  value: string,
+): { ok: true; value: number | "" } | { ok: false; error: string } => {
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, value: "" };
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return { ok: false, error: "must be a number" };
+  }
+  return { ok: true, value: parsed };
+};
+
+const isDateValue = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return true;
+  const parsed = new Date(trimmed);
+  return !Number.isNaN(parsed.getTime());
+};
+
+const inferColumnType = (
+  header: string,
+  sourceIndex: number,
+  dataRows: string[][],
+): InventoryColumnType => {
+  const values = dataRows
+    .map((row) => String(row[sourceIndex] ?? "").trim())
+    .filter((value) => value.length > 0);
+  if (values.length === 0) return "text";
+
+  if (values.every((value) => isLikelyUrlValue(value))) return "link";
+  if (values.every((value) => parseBooleanOrBlank(value).ok)) return "boolean";
+  if (values.every((value) => isDateValue(value))) return "date";
+  if (isPhoneHeader(header) || values.every((value) => isLikelyPhoneValue(value))) return "text";
+  if (values.every((value) => parseNumberOrBlank(value).ok)) return "number";
+  return "text";
+};
+
 const parseNonNegativeNumberOrBlank = (
   value: string,
 ): { ok: true; value: number | "" } | { ok: false; error: string } => {
@@ -980,6 +1075,27 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
     return json(400, { error: "CSV does not contain importable data" });
   }
 
+  const requestedHeaders = Array.isArray(body?.selectedHeaders)
+    ? body.selectedHeaders
+      .map((value: unknown) => String(value ?? "").trim())
+      .filter((value: string) => value.length > 0)
+    : [];
+  const selectedHeaderLooseSet =
+    requestedHeaders.length > 0
+      ? new Set(requestedHeaders.map((header: string) => normalizeLooseKey(header)))
+      : null;
+  if (selectedHeaderLooseSet) {
+    const availableLooseSet = new Set(headers.map((header) => normalizeLooseKey(header)));
+    const missingRequested = requestedHeaders.filter(
+      (header: string) => !availableLooseSet.has(normalizeLooseKey(header)),
+    );
+    if (missingRequested.length > 0) {
+      return json(400, {
+        error: `Selected columns not found in CSV: ${missingRequested.join(", ")}`,
+      });
+    }
+  }
+
   const mapping: Array<{ sourceIndex: number; header: string; column: InventoryColumn }> = [];
   const createdColumns: InventoryColumn[] = [];
 
@@ -987,6 +1103,9 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
     const header = headers[headerIndex];
     if (!header) continue;
     const loose = normalizeLooseKey(header);
+    if (selectedHeaderLooseSet && !selectedHeaderLooseSet.has(loose)) {
+      continue;
+    }
     const aliasKey = HEADER_ALIASES[loose];
     let mapped = (aliasKey ? byKey.get(aliasKey) : undefined) ?? byLoose.get(loose);
 
@@ -1013,7 +1132,7 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
         module: "inventory",
         key,
         label: header,
-        type: "text",
+        type: inferColumnType(header, headerIndex, dataRows),
         isCore: false,
         isRequired: false,
         isVisible: true,
@@ -1032,6 +1151,10 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
     }
 
     mapping.push({ sourceIndex: headerIndex, header, column: mapped });
+  }
+
+  if (mapping.length === 0) {
+    return json(400, { error: "No selected columns could be mapped for import." });
   }
 
   const hasItemNameMapping = mapping.some((entry) => entry.column.key === "itemName");
@@ -1080,8 +1203,33 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
           });
         }
         values[target.key] = parsed.value;
+      } else if (target.type === "date") {
+        values[target.key] = parseDateToIsoDay(cell);
+      } else if (target.type === "number") {
+        const parsed = parseNumberOrBlank(cell);
+        if (!parsed.ok) {
+          const reason = "error" in parsed ? parsed.error : "must be a number";
+          return json(400, {
+            error: `Invalid ${target.label} value '${cell}': ${reason}`,
+          });
+        }
+        values[target.key] = parsed.value;
+      } else if (target.type === "boolean") {
+        const parsed = parseBooleanOrBlank(cell);
+        if (!parsed.ok) {
+          const reason = "error" in parsed ? parsed.error : "must be boolean";
+          return json(400, {
+            error: `Invalid ${target.label} value '${cell}': ${reason}`,
+          });
+        }
+        values[target.key] = parsed.value;
+      } else if (target.type === "link") {
+        values[target.key] = normalizeLinkForImport(cell);
       } else {
-        values[target.key] = cell;
+        values[target.key] =
+          (isPhoneHeader(entry.header) || isLikelyPhoneValue(cell))
+            ? formatPhoneNumber(cell)
+            : cell;
       }
     }
 

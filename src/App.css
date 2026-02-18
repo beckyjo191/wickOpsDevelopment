@@ -322,6 +322,28 @@
   color: var(--text-soft);
 }
 
+.signup-account-note {
+  font-size: 0.83rem;
+  line-height: 1.4;
+  color: #173b59;
+  border: 1px solid #c7d8e8;
+  background: #eef5fc;
+  border-radius: 2px;
+  padding: 0.5rem 0.6rem;
+}
+
+.auth-account-note {
+  margin: 0.55rem auto 0;
+  width: min(520px, 100%);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: #1c415f;
+  border: 1px solid #c7d8e8;
+  background: #eef5fc;
+  border-radius: 2px;
+  padding: 0.45rem 0.6rem;
+}
+
 .user-chip {
   display: inline-flex;
   align-items: center;
@@ -651,6 +673,79 @@
   border-radius: 0;
   background: #fff;
   max-height: 68vh;
+}
+
+.inventory-import-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 25, 37, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 120;
+}
+
+.inventory-import-dialog {
+  width: min(560px, 100%);
+  background: #fff;
+  border: 1px solid #aebfd1;
+  box-shadow: 0 20px 36px rgba(16, 35, 52, 0.26);
+  border-radius: 2px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.inventory-import-title {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: #133956;
+}
+
+.inventory-import-subtitle {
+  margin: 0;
+  font-size: 0.84rem;
+  color: #36536d;
+}
+
+.inventory-import-list {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid #c6d4e1;
+  padding: 0.4rem;
+  display: grid;
+  gap: 0.25rem;
+  background: #f9fcff;
+}
+
+.inventory-import-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 0.35rem 0.4rem;
+  color: #1a3b58;
+  font-size: 0.82rem;
+}
+
+.inventory-import-item:hover {
+  background: #eef5fc;
+  border-color: #d5e2ee;
+}
+
+.inventory-import-item input {
+  width: 14px;
+  height: 14px;
+}
+
+.inventory-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .inventory-tabs {

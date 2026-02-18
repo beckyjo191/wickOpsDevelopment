@@ -144,6 +144,7 @@ export const saveInventoryItems = async (
 
 export const importInventoryCsv = async (
   csvText: string,
+  selectedHeaders?: string[],
 ): Promise<{
   ok: boolean;
   createdCount: number;
@@ -155,12 +156,69 @@ export const importInventoryCsv = async (
   const res = await authFetch(`${base}/inventory/import-csv`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ csvText }),
+    body: JSON.stringify({
+      csvText,
+      selectedHeaders,
+    }),
   });
   if (!res.ok) {
     throw new Error((await res.text()) || "Failed to import CSV");
   }
   return await res.json();
+};
+
+const detectDelimiter = (text: string): string => {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+  const commaCount = (firstLine.match(/,/g) ?? []).length;
+  const tabCount = (firstLine.match(/\t/g) ?? []).length;
+  const semicolonCount = (firstLine.match(/;/g) ?? []).length;
+  if (tabCount >= commaCount && tabCount >= semicolonCount && tabCount > 0) return "\t";
+  if (semicolonCount > commaCount && semicolonCount > 0) return ";";
+  return ",";
+};
+
+export const extractCsvHeaders = (csvText: string): string[] => {
+  const delimiter = detectDelimiter(csvText);
+  const headers: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i += 1) {
+    const char = csvText[i];
+    const next = csvText[i + 1];
+
+    if (char === "\"") {
+      if (inQuotes && next === "\"") {
+        current += "\"";
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (!inQuotes && char === delimiter) {
+      headers.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    if (!inQuotes && (char === "\n" || char === "\r")) {
+      if (char === "\r" && next === "\n") {
+        i += 1;
+      }
+      headers.push(current.trim());
+      return headers.filter((header) => header.length > 0);
+    }
+
+    current += char;
+  }
+
+  if (current.trim().length > 0) {
+    headers.push(current.trim());
+  }
+
+  return headers.filter((header) => header.length > 0);
 };
 
 export const createInventoryColumn = async (input: {

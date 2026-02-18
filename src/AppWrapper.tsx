@@ -30,6 +30,11 @@ export default function AppWrapper({ initialState = "signIn" }: AppWrapperProps)
           FormFields() {
             return (
               <>
+                <View className="signup-account-note" marginBottom="0.8rem">
+                  <strong>Sign-up options:</strong> Organization accounts include up to 5 users.
+                  Leave Organization Name blank for a personal account (1 user).
+                </View>
+
                 {/* Optional Organization Name */}
                 <TextField
                   name="custom:organizationName"

@@ -100,6 +100,16 @@
   gap: 0.65rem;
 }
 
+.lp-signup-note {
+  margin-top: 0.65rem;
+  color: #2f4f6a;
+  font-size: 0.86rem;
+}
+
+.lp-signup-note strong {
+  color: #173f61;
+}
+
 .lp-button {
   display: inline-flex;
   align-items: center;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
+  extractCsvHeaders,
   importInventoryCsv,
   isInventoryProvisioningError,
   loadInventoryBootstrap,
@@ -37,6 +38,14 @@ const PROVISIONING_LINES = [
 
 const pickRandom = (items: string[]): string =>
   items[Math.floor(Math.random() * items.length)] ?? "Loading inventory...";
+
+const normalizeHeaderKey = (value: string): string => value.trim().toLowerCase();
+
+type CsvImportDialogState = {
+  csvText: string;
+  headers: string[];
+  selectedHeaders: string[];
+};
 
 const createBlankInventoryRow = (
   columns: InventoryColumn[],
@@ -78,6 +87,7 @@ export function InventoryPage({
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickRandom(LOADING_LINES));
+  const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const resizeStateRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   const canEditTable = canEditInventory && activeFilter === "all";
 
@@ -427,6 +437,11 @@ export function InventoryPage({
   const onRemoveSelectedRows = () => {
     if (!canEditTable) return;
     if (selectedRowIds.size === 0) return;
+    const count = selectedRowIds.size;
+    const confirmed = window.confirm(
+      `Delete ${count} selected ${count === 1 ? "row" : "rows"}?`,
+    );
+    if (!confirmed) return;
     const idsToDelete = new Set(selectedRowIds);
     const persistedIdsToDelete = rows
       .filter((row) => idsToDelete.has(row.id) && Boolean(row.createdAt))
@@ -670,13 +685,56 @@ export function InventoryPage({
     event.currentTarget.value = "";
     if (!file) return;
     if (!canEditInventory) return;
+    try {
+      const csvText = await file.text();
+      const headers = extractCsvHeaders(csvText);
+      if (headers.length === 0) {
+        throw new Error("Could not detect CSV headers.");
+      }
+      setCsvImportDialog({
+        csvText,
+        headers,
+        selectedHeaders: [...headers],
+      });
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to import CSV");
+    }
+  };
+
+  const onToggleImportHeader = (header: string) => {
+    setCsvImportDialog((prev) => {
+      if (!prev) return prev;
+      const key = normalizeHeaderKey(header);
+      const selected = prev.selectedHeaders.some((item) => normalizeHeaderKey(item) === key);
+      const nextSelected = selected
+        ? prev.selectedHeaders.filter((item) => normalizeHeaderKey(item) !== key)
+        : [...prev.selectedHeaders, header];
+      return {
+        ...prev,
+        selectedHeaders: nextSelected,
+      };
+    });
+  };
+
+  const onCancelCsvImport = () => {
+    if (importingCsv) return;
+    setCsvImportDialog(null);
+  };
+
+  const onConfirmCsvImport = async () => {
+    if (!csvImportDialog) return;
+    const selectedHeaders = csvImportDialog.selectedHeaders;
+    if (selectedHeaders.length === 0) {
+      alert("Select at least one column to import.");
+      return;
+    }
 
     setImportingCsv(true);
     try {
-      const csvText = await file.text();
-      const result = await importInventoryCsv(csvText);
+      const result = await importInventoryCsv(csvImportDialog.csvText, selectedHeaders);
       const bootstrap = await loadInventoryBootstrap();
       applyBootstrap(bootstrap);
+      setCsvImportDialog(null);
 
       const createdColsText =
         result.createdColumns.length > 0
@@ -1153,6 +1211,42 @@ export function InventoryPage({
           </table>
         </div>
       </div>
+      {csvImportDialog ? (
+        <div className="inventory-import-overlay" role="dialog" aria-modal="true" aria-label="Choose import columns">
+          <div className="inventory-import-dialog">
+            <h3 className="inventory-import-title">Check which columns you want to import.</h3>
+            <p className="inventory-import-subtitle">
+              Columns will be auto created if they do not exist.
+            </p>
+            <div className="inventory-import-list">
+              {csvImportDialog.headers.map((header, index) => {
+                const checked = csvImportDialog.selectedHeaders.some(
+                  (item) => normalizeHeaderKey(item) === normalizeHeaderKey(header),
+                );
+                return (
+                  <label key={`${header}-${index}`} className="inventory-import-item">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggleImportHeader(header)}
+                      disabled={importingCsv}
+                    />
+                    <span>{header}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="inventory-import-actions">
+              <button className="button button-secondary" onClick={onCancelCsvImport} disabled={importingCsv}>
+                Cancel
+              </button>
+              <button className="button button-primary" onClick={() => void onConfirmCsvImport()} disabled={importingCsv}>
+                {importingCsv ? "Importing..." : "Import Selected Columns"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

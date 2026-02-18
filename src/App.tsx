@@ -14,6 +14,16 @@ const INVITES_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVITES_API_B
 const VIEW_STORAGE_KEY = "wickops.activeView";
 const SUBSCRIPTION_RETRY_MS = 2000;
 const MAX_SUBSCRIPTION_RETRIES = 6;
+const APP_LOADING_LINES = [
+  "Warming up the dashboard hamsters...",
+  "Polishing your seat count...",
+  "Negotiating with the loading bar...",
+  "Counting pixels twice for accuracy...",
+  "Folding business logic into tiny squares...",
+];
+
+const pickRandom = (items: string[]): string =>
+  items[Math.floor(Math.random() * items.length)] ?? "Loading...";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 type AppView = "dashboard" | "inventory" | "invite" | "settings";
@@ -37,6 +47,7 @@ const loadInitialView = (): AppView => {
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
   const [view, setView] = useState<AppView>(() => loadInitialView());
+  const [loadingLine, setLoadingLine] = useState(() => pickRandom(APP_LOADING_LINES));
 
   const [subState, setSubState] = useState<{
     status: SubscriptionState;
@@ -170,8 +181,18 @@ export default function App() {
     }
   }, [view]);
 
+  useEffect(() => {
+    if (!(authStatus === "configuring" || (subState.status === "loading" && !subState.loadError))) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setLoadingLine(pickRandom(APP_LOADING_LINES));
+    }, 2200);
+    return () => window.clearInterval(interval);
+  }, [authStatus, subState.status, subState.loadError]);
+
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
-    return <div>Loading...</div>;
+    return <div>{loadingLine}</div>;
   }
 
   if (subState.loadError) {

@@ -21,6 +21,22 @@ const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
 const AUTOSAVE_DELAY_MS = 20000;
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "wickops.inventory.columnWidths:";
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
+const LOADING_LINES = [
+  "Counting bolts and pretending it's fun...",
+  "Teaching the forklift to whisper...",
+  "Dusting shelves for dramatic effect...",
+  "Arguing with barcodes...",
+  "Rehearsing the inventory roll call...",
+];
+const PROVISIONING_LINES = [
+  "Building table legs for your table...",
+  "Aligning columns with the moon phase...",
+  "Applying premium spreadsheet vibes...",
+  "Installing tiny seats for your rows...",
+];
+
+const pickRandom = (items: string[]): string =>
+  items[Math.floor(Math.random() * items.length)] ?? "Loading inventory...";
 
 const createBlankInventoryRow = (
   columns: InventoryColumn[],
@@ -61,7 +77,7 @@ export function InventoryPage({
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [loadError, setLoadError] = useState<string>("");
-  const [loadingMessage, setLoadingMessage] = useState("Loading inventory...");
+  const [loadingMessage, setLoadingMessage] = useState(() => pickRandom(LOADING_LINES));
   const resizeStateRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   const canEditTable = canEditInventory && activeFilter === "all";
 
@@ -89,7 +105,7 @@ export function InventoryPage({
     const load = async () => {
       setLoading(true);
       setLoadError("");
-      setLoadingMessage("Loading inventory...");
+      setLoadingMessage(pickRandom(LOADING_LINES));
 
       while (!cancelled) {
         try {
@@ -101,7 +117,7 @@ export function InventoryPage({
         } catch (err: any) {
           if (cancelled) return;
           if (isInventoryProvisioningError(err)) {
-            setLoadingMessage("Preparing your inventory table...");
+            setLoadingMessage(pickRandom(PROVISIONING_LINES));
             const retryAfterMs =
               Number(err.retryAfterMs) > 0 ? Number(err.retryAfterMs) : DEFAULT_PROVISIONING_RETRY_MS;
             await new Promise((resolve) => window.setTimeout(resolve, retryAfterMs));
@@ -119,6 +135,17 @@ export function InventoryPage({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!loading) return;
+    const interval = window.setInterval(() => {
+      setLoadingMessage((current) => {
+        const source = PROVISIONING_LINES.includes(current) ? PROVISIONING_LINES : LOADING_LINES;
+        return pickRandom(source);
+      });
+    }, 2200);
+    return () => window.clearInterval(interval);
+  }, [loading]);
 
   const visibleColumns = useMemo(
     () =>

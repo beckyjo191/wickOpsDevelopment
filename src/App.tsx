@@ -7,6 +7,12 @@ import { SettingsPage } from "./components/SettingsPage";
 import { DashboardPage } from "./components/DashboardPage";
 import { AppToolbar } from "./components/AppToolbar";
 import { authFetch } from "./lib/authFetch";
+import {
+  applyThemePreference,
+  loadThemePreference,
+  saveThemePreference,
+  type ThemePreference,
+} from "./lib/themePreference";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
@@ -48,6 +54,7 @@ export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
   const [view, setView] = useState<AppView>(() => loadInitialView());
   const [loadingLine, setLoadingLine] = useState(() => pickRandom(APP_LOADING_LINES));
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
 
   const [subState, setSubState] = useState<{
     status: SubscriptionState;
@@ -182,6 +189,11 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
+    applyThemePreference(themePreference);
+    saveThemePreference(themePreference);
+  }, [themePreference]);
+
+  useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       const openMenus = Array.from(document.querySelectorAll<HTMLDetailsElement>("details[open]"));
@@ -287,6 +299,8 @@ export default function App() {
         seatLimit={subState.seatLimit}
         seatsUsed={subState.seatsUsed}
         canManageInventoryColumns={canManageInventoryColumns}
+        themePreference={themePreference}
+        onThemePreferenceChange={setThemePreference}
         onInviteUsers={() => {
           if (!canInviteMore) return;
           setView("invite");

@@ -89,7 +89,9 @@ export function InventoryPage({
   const [deletedRowIds, setDeletedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const [copiedRowValues, setCopiedRowValues] = useState<Record<string, string | number | boolean | null> | null>(null);
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
+  const [editingDateCell, setEditingDateCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickRandom(LOADING_LINES));
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
@@ -113,6 +115,7 @@ export function InventoryPage({
     setDeletedRowIds(new Set());
     setSelectedRowIds(new Set());
     setSelectedRowId(nextRows[0]?.id ?? null);
+    setCopiedRowValues(null);
   };
 
   useEffect(() => {
@@ -207,11 +210,19 @@ export function InventoryPage({
   ): string[] => {
     const raw = String(value ?? "").trim();
     if (!raw) return [];
-    const parsed = new Date(raw);
-    if (Number.isNaN(parsed.getTime())) return [raw.toLowerCase()];
-    const iso = parsed.toISOString().slice(0, 10);
-    const us = parsed.toLocaleDateString("en-US");
-    return [raw.toLowerCase(), iso.toLowerCase(), us.toLowerCase()];
+    const iso = toDateInputValue(raw);
+    if (!iso) return [raw.toLowerCase()];
+    const parsedLocal = new Date(`${iso}T00:00:00`);
+    const us = parsedLocal.toLocaleDateString("en-US");
+    const usPadded = `${String(parsedLocal.getMonth() + 1).padStart(2, "0")}/${String(parsedLocal.getDate()).padStart(2, "0")}/${parsedLocal.getFullYear()}`;
+    const usCompact = us.replace(/\b0(\d)/g, "$1");
+    return [
+      raw.toLowerCase(),
+      iso.toLowerCase(),
+      us.toLowerCase(),
+      usPadded.toLowerCase(),
+      usCompact.toLowerCase(),
+    ];
   };
 
   const locationOptions = useMemo(() => {
@@ -482,6 +493,72 @@ export function InventoryPage({
     });
   };
 
+  const onCopySelectedRow = () => {
+    if (!canEditTable || !selectedRowId) return;
+    const sourceRow = rows.find((row) => row.id === selectedRowId);
+    if (!sourceRow) return;
+    const copied: Record<string, string | number | boolean | null> = {};
+    for (const column of allColumns) {
+      const value = sourceRow.values[column.key];
+      copied[column.key] = value === undefined ? (column.type === "number" ? 0 : "") : value;
+    }
+    setCopiedRowValues(copied);
+  };
+
+  const onPasteToSelectedRow = () => {
+    if (!canEditTable || !selectedRowId || !copiedRowValues) return;
+    let changedRowId: string | null = null;
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== selectedRowId) return row;
+        const nextValues = { ...row.values };
+        let changed = false;
+
+        for (const column of allColumns) {
+          const copiedValue = copiedRowValues[column.key];
+          let normalizedValue: string | number | boolean | null;
+
+          if (column.type === "number") {
+            const parsed = Number(copiedValue);
+            normalizedValue = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+          } else if (column.type === "date") {
+            normalizedValue = toDateInputValue(String(copiedValue ?? ""));
+          } else if (column.type === "link") {
+            normalizedValue = normalizeLinkValue(String(copiedValue ?? ""));
+          } else if (column.type === "boolean") {
+            const raw = String(copiedValue ?? "").trim().toLowerCase();
+            if (typeof copiedValue === "boolean") {
+              normalizedValue = copiedValue;
+            } else if (!raw) {
+              normalizedValue = "";
+            } else {
+              normalizedValue = raw === "true";
+            }
+          } else {
+            normalizedValue = String(copiedValue ?? "");
+          }
+
+          if (row.values[column.key] !== normalizedValue) {
+            nextValues[column.key] = normalizedValue;
+            changed = true;
+          }
+        }
+
+        if (!changed) return row;
+        changedRowId = row.id;
+        return { ...row, values: nextValues };
+      }),
+    );
+
+    if (changedRowId) {
+      setDirtyRowIds((prev) => {
+        const next = new Set(prev);
+        next.add(changedRowId);
+        return next;
+      });
+    }
+  };
+
   const onRemoveSelectedRows = () => {
     if (!canEditTable) return;
     if (selectedRowIds.size === 0) return;
@@ -607,6 +684,8 @@ export function InventoryPage({
 
   const isEditingLinkCell = (rowId: string, columnKey: string) =>
     editingLinkCell?.rowId === rowId && editingLinkCell?.columnKey === columnKey;
+  const isEditingDateCell = (rowId: string, columnKey: string) =>
+    editingDateCell?.rowId === rowId && editingDateCell?.columnKey === columnKey;
 
   const getColumnMinWidth = (column: InventoryColumn): number => {
     if (column.key === "itemName") return 280;
@@ -648,12 +727,12 @@ export function InventoryPage({
     window.addEventListener("mouseup", onMouseUp);
   };
 
-  const onCellChange = (rowIndex: number, column: InventoryColumn, value: string) => {
+  const onCellChange = (rowId: string, column: InventoryColumn, value: string) => {
     if (!canEditTable) return;
     let changedRowId: string | null = null;
     setRows((prev) =>
-      prev.map((row, index) => {
-        if (index !== rowIndex) return row;
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
         const currentValue = row.values[column.key];
         if (NUMBER_COLUMN_KEYS.has(column.key)) {
           const parsed = Number(value);
@@ -722,6 +801,81 @@ export function InventoryPage({
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!canEditTable) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+
+      const target = event.target as HTMLElement | null;
+      const isEditableTarget = !!target && (
+        target.tagName.toLowerCase() === "input" ||
+        target.tagName.toLowerCase() === "textarea" ||
+        target.isContentEditable
+      );
+      if (isEditableTarget) {
+        const active = target as HTMLInputElement | HTMLTextAreaElement;
+        const hasSelectionRange =
+          typeof active.selectionStart === "number" &&
+          typeof active.selectionEnd === "number" &&
+          active.selectionEnd > active.selectionStart;
+        const hasDocumentSelection = (window.getSelection()?.toString() ?? "").length > 0;
+        if (hasSelectionRange || hasDocumentSelection) {
+          return;
+        }
+      }
+
+      const key = event.key.toLowerCase();
+      if (key === "c") {
+        if (!selectedRowId) return;
+        event.preventDefault();
+        onCopySelectedRow();
+        return;
+      }
+      if (key === "v") {
+        if (!selectedRowId || !copiedRowValues) return;
+        event.preventDefault();
+        onPasteToSelectedRow();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [canEditTable, selectedRowId, copiedRowValues, rows, allColumns]);
+
+  useEffect(() => {
+    const trySavePending = () => {
+      if (!canEditInventory) return;
+      if (saving) return;
+      if (dirtyRowIds.size === 0 && deletedRowIds.size === 0) return;
+      void onSave(true);
+    };
+
+    const onPageHide = () => {
+      trySavePending();
+    };
+
+    const onBeforeUnload = () => {
+      trySavePending();
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        trySavePending();
+      }
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [canEditInventory, saving, dirtyRowIds, deletedRowIds, onSave]);
 
   const onChooseCsvImport = () => {
     if (!canEditInventory || importingCsv) return;
@@ -809,20 +963,13 @@ export function InventoryPage({
 
     setImportingCsv(true);
     try {
-      const result = await importInventoryCsv(csvImportDialog.csvText, selectedHeaders);
+      await importInventoryCsv(csvImportDialog.csvText, selectedHeaders);
       const bootstrap = await loadInventoryBootstrap();
       applyBootstrap(bootstrap);
       setCsvImportDialog(null);
-
-      const createdColsText =
-        result.createdColumns.length > 0
-          ? ` New columns: ${result.createdColumns.map((column) => column.label).join(", ")}.`
-          : "";
-      alert(
-        `Import complete. Added ${result.createdCount} rows and updated ${result.updatedCount} rows.${createdColsText}`,
-      );
+      alert("Import complete.");
     } catch (err: any) {
-      alert(err?.message ?? "Failed to import CSV");
+      alert(err?.message ?? "Import failed. Please verify your file headers and row values.");
     } finally {
       setImportingCsv(false);
     }
@@ -1017,12 +1164,25 @@ export function InventoryPage({
               </button>
             ) : null}
           </div>
-          <input
-            className="inventory-search-input"
-            placeholder="Search inventory..."
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-          />
+          <div className="inventory-search-wrap">
+            <input
+              className="inventory-search-input"
+              placeholder="Search inventory..."
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+            />
+            {searchTerm ? (
+              <button
+                type="button"
+                className="inventory-search-clear"
+                onClick={() => setSearchTerm("")}
+                aria-label="Clear search"
+                title="Clear search"
+              >
+                ×
+              </button>
+            ) : null}
+          </div>
           <details className="inventory-columns-menu">
             <summary className="inventory-columns-trigger">Columns</summary>
             <div className="inventory-columns-panel">
@@ -1232,11 +1392,11 @@ export function InventoryPage({
                                   setSelectedRowId(row.id);
                                   setEditingLinkCell({ rowId: row.id, columnKey: column.key });
                                 }}
-                                onChange={(event) => onCellChange(rowIndex, column, event.target.value)}
+                                onChange={(event) => onCellChange(row.id, column, event.target.value)}
                                 onBlur={(event) => {
                                   const normalized = normalizeLinkValue(event.target.value);
                                   if (normalized !== event.target.value) {
-                                    onCellChange(rowIndex, column, normalized);
+                                    onCellChange(row.id, column, normalized);
                                   }
                                   setEditingLinkCell(null);
                                 }}
@@ -1244,7 +1404,7 @@ export function InventoryPage({
                                   const pasted = event.clipboardData.getData("text");
                                   if (!pasted) return;
                                   event.preventDefault();
-                                  onCellChange(rowIndex, column, normalizeLinkValue(pasted));
+                                  onCellChange(row.id, column, normalizeLinkValue(pasted));
                                 }}
                                 onKeyDown={(event) => {
                                   if (event.key === "Enter") {
@@ -1280,12 +1440,9 @@ export function InventoryPage({
                         })()
                       ) : column.type === "text" ? (
                         <textarea
-                          key={`${row.id}-${column.key}`}
-                          defaultValue={String(row.values[column.key] ?? "")}
+                          value={String(row.values[column.key] ?? "")}
                           onFocus={() => setSelectedRowId(row.id)}
-                          onBlur={(event) => {
-                            onCellChange(rowIndex, column, event.currentTarget.value);
-                          }}
+                          onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
                           onKeyDown={(event) => {
                             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                               (event.currentTarget as HTMLTextAreaElement).blur();
@@ -1294,18 +1451,81 @@ export function InventoryPage({
                           disabled={!canEditTable}
                           rows={2}
                         />
+                      ) : column.type === "date" ? (
+                        (() => {
+                          const isoValue = toDateInputValue(row.values[column.key]);
+                          const editing = isEditingDateCell(row.id, column.key);
+                          if (!isoValue && !editing) {
+                            return (
+                              <button
+                                type="button"
+                                className="inventory-date-add"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedRowId(row.id);
+                                  setEditingDateCell({ rowId: row.id, columnKey: column.key });
+                                }}
+                                disabled={!canEditTable}
+                              >
+                                Add date
+                              </button>
+                            );
+                          }
+
+                          return (
+                            <div className="inventory-date-edit-wrap">
+                              <input
+                                type="date"
+                                value={isoValue}
+                                autoFocus={editing}
+                                onFocus={() => {
+                                  setSelectedRowId(row.id);
+                                  setEditingDateCell({ rowId: row.id, columnKey: column.key });
+                                }}
+                                onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
+                                onBlur={() => {
+                                  setEditingDateCell((prev) =>
+                                    prev?.rowId === row.id && prev?.columnKey === column.key ? null : prev,
+                                  );
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    (event.currentTarget as HTMLInputElement).blur();
+                                  }
+                                }}
+                                disabled={!canEditTable}
+                              />
+                              {isoValue ? (
+                                <button
+                                  type="button"
+                                  className="inventory-date-clear"
+                                  onMouseDown={(event) => event.preventDefault()}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onCellChange(row.id, column, "");
+                                    setEditingDateCell({ rowId: row.id, columnKey: column.key });
+                                  }}
+                                  disabled={!canEditTable}
+                                  aria-label="Clear date"
+                                  title="Clear date"
+                                >
+                                  ×
+                                </button>
+                              ) : null}
+                            </div>
+                          );
+                        })()
                       ) : (
                         <input
-                          key={`${row.id}-${column.key}`}
                           type={column.type === "number" ? "number" : column.type === "date" ? "date" : "text"}
                           min={column.type === "number" ? 0 : undefined}
-                          defaultValue={
+                          value={
                             column.type === "date"
                               ? toDateInputValue(row.values[column.key])
                               : String(row.values[column.key] ?? "")
                           }
                           onFocus={() => setSelectedRowId(row.id)}
-                          onBlur={(event) => onCellChange(rowIndex, column, event.currentTarget.value)}
+                          onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
                               (event.currentTarget as HTMLInputElement).blur();

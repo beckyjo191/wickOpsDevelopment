@@ -698,6 +698,45 @@ const buildImportMatchKey = (values: Record<string, unknown>): string => {
   return `${itemName}||${location}||${expirationDate}`;
 };
 
+const normalizeFingerprintValue = (column: InventoryColumn, value: unknown): string => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  if (column.key === "expirationDate" || column.type === "date") {
+    return parseDateToIsoDay(raw);
+  }
+
+  if (column.key === "quantity" || column.key === "minQuantity" || column.type === "number") {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? String(parsed) : raw;
+  }
+
+  if (column.type === "boolean") {
+    if (typeof value === "boolean") return value ? "true" : "false";
+    const parsed = parseBooleanOrBlank(raw);
+    if (parsed.ok && parsed.value !== "") {
+      return parsed.value ? "true" : "false";
+    }
+    return raw.toLowerCase();
+  }
+
+  if (column.type === "link") {
+    return normalizeLinkForImport(raw).toLowerCase();
+  }
+
+  return raw.toLowerCase();
+};
+
+const buildImportRowFingerprint = (
+  mapping: Array<{ sourceIndex: number; header: string; column: InventoryColumn }>,
+  values: Record<string, unknown>,
+): string => {
+  if (mapping.length === 0) return "";
+  return mapping
+    .map((entry) => `${entry.column.key}:${normalizeFingerprintValue(entry.column, values[entry.column.key])}`)
+    .join("||");
+};
+
 const detectHeaderRowIndex = (
   rows: string[][],
   byKey: Map<string, InventoryColumn>,
@@ -1177,8 +1216,24 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
   let createdCount = 0;
   let updatedCount = 0;
   let skippedCount = 0;
+  let duplicateSkippedCount = 0;
+  const existingFingerprintSet = new Set<string>();
+  for (const item of existingItems) {
+    let parsedValues: Record<string, unknown> = {};
+    try {
+      parsedValues = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, unknown>;
+    } catch {
+      parsedValues = {};
+    }
+    const fingerprint = buildImportRowFingerprint(mapping, parsedValues);
+    if (fingerprint) {
+      existingFingerprintSet.add(fingerprint);
+    }
+  }
 
-  for (const row of dataRows) {
+  for (let rowIndex = 0; rowIndex < dataRows.length; rowIndex += 1) {
+    const row = dataRows[rowIndex];
+    const csvRowNumber = headerRowIndex + 2 + rowIndex;
     const isBlankMappedRow = mapping.every(
       (entry) => String(row[entry.sourceIndex] ?? "").trim() === "",
     );
@@ -1199,7 +1254,7 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
         if (!parsed.ok) {
           const reason = "error" in parsed ? parsed.error : "must be a number";
           return json(400, {
-            error: `Invalid ${target.label} value '${cell}' for item '${String(values.itemName ?? "").trim() || "unknown"}': ${reason}`,
+            error: `Row ${csvRowNumber}: Invalid ${target.label} value '${cell}' for item '${String(values.itemName ?? "").trim() || "unknown"}': ${reason}`,
           });
         }
         values[target.key] = parsed.value;
@@ -1210,7 +1265,7 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
         if (!parsed.ok) {
           const reason = "error" in parsed ? parsed.error : "must be a number";
           return json(400, {
-            error: `Invalid ${target.label} value '${cell}': ${reason}`,
+            error: `Row ${csvRowNumber}: Invalid ${target.label} value '${cell}': ${reason}`,
           });
         }
         values[target.key] = parsed.value;
@@ -1219,7 +1274,7 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
         if (!parsed.ok) {
           const reason = "error" in parsed ? parsed.error : "must be boolean";
           return json(400, {
-            error: `Invalid ${target.label} value '${cell}': ${reason}`,
+            error: `Row ${csvRowNumber}: Invalid ${target.label} value '${cell}': ${reason}`,
           });
         }
         values[target.key] = parsed.value;
@@ -1239,6 +1294,12 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
       continue;
     }
     const existingMatch = matchKey ? existingByMatchKey.get(matchKey) : undefined;
+    const rowFingerprint = buildImportRowFingerprint(mapping, values);
+    if (!existingMatch && rowFingerprint && existingFingerprintSet.has(rowFingerprint)) {
+      skippedCount += 1;
+      duplicateSkippedCount += 1;
+      continue;
+    }
     const isUpdate = !!existingMatch;
     const itemId = existingMatch?.id ?? randomUUID();
     const createdAt = existingMatch?.createdAt ?? new Date().toISOString();
@@ -1276,6 +1337,9 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
       if (matchKey) {
         existingByMatchKey.set(matchKey, itemPayload);
       }
+      if (rowFingerprint) {
+        existingFingerprintSet.add(rowFingerprint);
+      }
     }
   }
 
@@ -1284,6 +1348,7 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
     createdCount,
     updatedCount,
     skippedCount,
+    duplicateSkippedCount,
     importedRows: dataRows.length,
     headerRowIndex: headerRowIndex + 1,
     createdColumns: createdColumns.map((column) => ({

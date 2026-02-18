@@ -7,8 +7,10 @@ import './index.css';
 import './App.css';
 import '@aws-amplify/ui-react/styles.css';
 import { LandingPage } from './components/LandingPage';
+import { applyThemePreference, loadThemePreference } from './lib/themePreference';
 
 Amplify.configure(outputs);
+applyThemePreference(loadThemePreference());
 
 const pathname = window.location.pathname;
 const search = new URLSearchParams(window.location.search);

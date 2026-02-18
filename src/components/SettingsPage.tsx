@@ -7,6 +7,7 @@ import {
   updateInventoryColumnVisibility,
   type InventoryColumn,
 } from "../lib/inventoryApi";
+import type { ThemePreference } from "../lib/themePreference";
 
 interface SettingsPageProps {
   canInviteMore: boolean;
@@ -14,6 +15,8 @@ interface SettingsPageProps {
   seatLimit: number;
   seatsUsed: number;
   canManageInventoryColumns: boolean;
+  themePreference: ThemePreference;
+  onThemePreferenceChange: (preference: ThemePreference) => void;
   onInviteUsers: () => void;
 }
 
@@ -23,6 +26,8 @@ export function SettingsPage({
   seatLimit,
   seatsUsed,
   canManageInventoryColumns,
+  themePreference,
+  onThemePreferenceChange,
   onInviteUsers,
 }: SettingsPageProps) {
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
@@ -220,6 +225,45 @@ export function SettingsPage({
         <div className="empty-state spacer-top">
           Configuration sections for profile, modules, billing, and notifications will live here.
         </div>
+
+        <details className="settings-section spacer-top" open>
+          <summary className="settings-section-title">Appearance</summary>
+          <p className="settings-section-copy">
+            Choose how WickOps should look on this device.
+          </p>
+          <div className="settings-theme-options" role="radiogroup" aria-label="Theme preference">
+            <label className="settings-theme-option">
+              <input
+                type="radio"
+                name="theme-preference"
+                value="system"
+                checked={themePreference === "system"}
+                onChange={() => onThemePreferenceChange("system")}
+              />
+              <span>System</span>
+            </label>
+            <label className="settings-theme-option">
+              <input
+                type="radio"
+                name="theme-preference"
+                value="light"
+                checked={themePreference === "light"}
+                onChange={() => onThemePreferenceChange("light")}
+              />
+              <span>Light</span>
+            </label>
+            <label className="settings-theme-option">
+              <input
+                type="radio"
+                name="theme-preference"
+                value="dark"
+                checked={themePreference === "dark"}
+                onChange={() => onThemePreferenceChange("dark")}
+              />
+              <span>Dark</span>
+            </label>
+          </div>
+        </details>
 
         <details className="settings-section spacer-top">
           <summary className="settings-section-title">Inventory Columns</summary>

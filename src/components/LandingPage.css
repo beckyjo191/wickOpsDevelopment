@@ -1,10 +1,10 @@
 .lp-page {
   min-height: 100vh;
   background:
-    radial-gradient(circle at 12% 10%, rgba(14, 75, 125, 0.22) 0%, transparent 42%),
-    radial-gradient(circle at 88% 90%, rgba(26, 72, 98, 0.18) 0%, transparent 45%),
-    linear-gradient(180deg, #f4f8fc 0%, #dbe6f3 100%);
-  color: #10233a;
+    radial-gradient(circle at 12% 10%, var(--lp-radial-a) 0%, transparent 42%),
+    radial-gradient(circle at 88% 90%, var(--lp-radial-b) 0%, transparent 45%),
+    linear-gradient(180deg, var(--lp-bg-start) 0%, var(--lp-bg-end) 100%);
+  color: var(--lp-text);
   padding: 1.15rem;
 }
 
@@ -33,7 +33,7 @@
 
 .lp-brand-word {
   font: 800 1.2rem/1.1 "Merriweather Sans", "Trebuchet MS", sans-serif;
-  color: #133a5d;
+  color: var(--lp-brand);
 }
 
 .lp-nav-actions {
@@ -43,7 +43,7 @@
 }
 
 .lp-link {
-  color: #173d5f;
+  color: var(--lp-link);
   text-decoration: none;
   font-weight: 700;
 }
@@ -56,10 +56,10 @@
 }
 
 .lp-hero {
-  border: 1px solid #c2d3e4;
-  background: linear-gradient(155deg, #ffffff 0%, #f0f6fc 100%);
+  border: 1px solid var(--lp-card-border);
+  background: var(--lp-card-bg);
   border-radius: 2px;
-  box-shadow: 0 16px 38px rgba(14, 41, 73, 0.14);
+  box-shadow: var(--lp-card-shadow);
   padding: clamp(1.2rem, 2.4vw, 2rem);
   animation: lp-rise 360ms ease-out;
 }
@@ -69,7 +69,7 @@
   letter-spacing: 0.07em;
   text-transform: uppercase;
   font-weight: 800;
-  color: #1f5885;
+  color: var(--lp-kicker);
   font-size: 0.78rem;
 }
 
@@ -89,7 +89,7 @@
 
 .lp-sub {
   margin-top: 0.85rem;
-  color: #3f5a73;
+  color: var(--text-soft);
   max-width: 70ch;
 }
 
@@ -102,12 +102,12 @@
 
 .lp-signup-note {
   margin-top: 0.65rem;
-  color: #2f4f6a;
+  color: var(--lp-copy-strong);
   font-size: 0.86rem;
 }
 
 .lp-signup-note strong {
-  color: #173f61;
+  color: var(--lp-copy-emphasis);
 }
 
 .lp-button {
@@ -123,22 +123,22 @@
 }
 
 .lp-button-primary {
-  color: #fff;
-  background: linear-gradient(180deg, #0f4c81 0%, #0a3558 100%);
+  color: var(--surface);
+  background: linear-gradient(180deg, var(--primary) 0%, var(--primary-strong) 100%);
 }
 
 .lp-button-primary:hover {
-  background: linear-gradient(180deg, #13588f 0%, #0c3d64 100%);
+  background: linear-gradient(180deg, var(--primary-hover) 0%, var(--primary-hover-strong) 100%);
 }
 
 .lp-button-secondary {
-  color: #1a3d5c;
-  border-color: #b8cadc;
-  background: #edf4fb;
+  color: var(--text-heading);
+  border-color: var(--lp-btn-secondary-border);
+  background: var(--lp-btn-secondary-bg);
 }
 
 .lp-button-secondary:hover {
-  background: #e2edf8;
+  background: var(--lp-btn-secondary-bg-hover);
 }
 
 .lp-pillars {
@@ -148,8 +148,8 @@
 }
 
 .lp-pillars article {
-  background: rgba(255, 255, 255, 0.76);
-  border: 1px solid #c4d4e5;
+  background: var(--lp-pill-bg);
+  border: 1px solid var(--lp-pill-border);
   border-radius: 2px;
   padding: 0.85rem 0.9rem;
 }
@@ -161,7 +161,7 @@
 
 .lp-pillars p {
   margin: 0.48rem 0 0;
-  color: #496683;
+  color: var(--lp-copy);
 }
 
 .lp-use-cases {
@@ -171,8 +171,8 @@
 }
 
 .lp-use-cases article {
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid #c4d4e5;
+  background: var(--lp-pill-bg);
+  border: 1px solid var(--lp-pill-border);
   border-radius: 2px;
   padding: 0.85rem 0.9rem;
 }
@@ -180,17 +180,17 @@
 .lp-use-cases h2 {
   margin: 0;
   font-size: 1.01rem;
-  color: #153e63;
+  color: var(--text-heading);
 }
 
 .lp-use-cases p {
   margin: 0.45rem 0 0;
-  color: #496683;
+  color: var(--lp-copy);
 }
 
 .lp-modules {
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid #bfd1e2;
+  background: var(--lp-pill-bg);
+  border: 1px solid var(--lp-pill-border);
   border-radius: 2px;
   padding: 0.95rem;
   display: grid;
@@ -200,12 +200,12 @@
 .lp-modules h2 {
   margin: 0;
   font-size: 1.12rem;
-  color: #153e63;
+  color: var(--text-heading);
 }
 
 .lp-modules p {
   margin: 0;
-  color: #496683;
+  color: var(--lp-copy);
 }
 
 .lp-module-tags {
@@ -215,11 +215,11 @@
 }
 
 .lp-module-tags span {
-  border: 1px solid #b5cadc;
-  background: #eff6fd;
+  border: 1px solid var(--lp-tag-border);
+  background: var(--lp-tag-bg);
   border-radius: 999px;
   padding: 0.32rem 0.6rem;
-  color: #184262;
+  color: var(--lp-tag-text);
   font-size: 0.8rem;
   font-weight: 700;
 }

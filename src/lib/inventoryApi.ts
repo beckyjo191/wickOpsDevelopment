@@ -67,6 +67,19 @@ const requireBaseUrl = () => {
   return INVENTORY_API_BASE_URL;
 };
 
+const getApiErrorMessage = async (res: Response, fallback: string): Promise<string> => {
+  const text = (await res.text()).trim();
+  if (!text) return fallback;
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();
+    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
+  } catch {
+    // Ignore JSON parse errors and return raw text.
+  }
+  return text;
+};
+
 const parseValues = (valuesJson: string): Record<string, string | number | boolean | null> => {
   try {
     const parsed = JSON.parse(valuesJson ?? "{}");
@@ -149,6 +162,8 @@ export const importInventoryCsv = async (
   ok: boolean;
   createdCount: number;
   updatedCount: number;
+  skippedCount: number;
+  duplicateSkippedCount: number;
   importedRows: number;
   createdColumns: Array<{ id: string; key: string; label: string }>;
 }> => {
@@ -162,7 +177,7 @@ export const importInventoryCsv = async (
     }),
   });
   if (!res.ok) {
-    throw new Error((await res.text()) || "Failed to import CSV");
+    throw new Error(await getApiErrorMessage(res, "Import failed. Please check your file and try again."));
   }
   return await res.json();
 };

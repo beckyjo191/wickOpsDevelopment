@@ -587,9 +587,10 @@ export function InventoryPage({
       }),
     );
     if (changedRowId) {
+      const resolvedRowId = changedRowId;
       setDirtyRowIds((prev) => {
         const next = new Set(prev);
-        next.add(changedRowId);
+        next.add(resolvedRowId);
         return next;
       });
     }

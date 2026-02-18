@@ -4,21 +4,19 @@ import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
 import { InventoryPage } from "./components/InventoryPage";
 import { SettingsPage } from "./components/SettingsPage";
+import { DashboardPage } from "./components/DashboardPage";
+import { AppToolbar } from "./components/AppToolbar";
 import { authFetch } from "./lib/authFetch";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
 const INVITES_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVITES_API_BASE_URL);
-const INVITE_STEP_COMPLETE_KEY = "wickops_invite_step_complete";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
-  const [view, setView] = useState<"dashboard" | "invite" | "settings">("dashboard");
-  const [inviteStepComplete, setInviteStepComplete] = useState<boolean>(() => {
-    return localStorage.getItem(INVITE_STEP_COMPLETE_KEY) === "true";
-  });
+  const [view, setView] = useState<"dashboard" | "inventory" | "invite" | "settings">("dashboard");
 
   const [subState, setSubState] = useState<{
     status: SubscriptionState;
@@ -26,6 +24,7 @@ export default function App() {
     seatsUsed: number;
     accessSuspended: boolean;
     canInviteUsers: boolean;
+    role: string;
     loadError: boolean;
   }>({
     status: "loading",
@@ -33,6 +32,7 @@ export default function App() {
     seatsUsed: 0,
     accessSuspended: false,
     canInviteUsers: false,
+    role: "",
     loadError: false,
   });
 
@@ -59,6 +59,7 @@ export default function App() {
           seatsUsed: data.seatsUsed ?? 0,
           accessSuspended: !!data.accessSuspended,
           canInviteUsers: !!data.canInviteUsers,
+          role: String(data.role ?? "").toUpperCase(),
           loadError: false,
         });
 
@@ -73,6 +74,7 @@ export default function App() {
           seatsUsed: 0,
           accessSuspended: false,
           canInviteUsers: false,
+          role: "",
           loadError: true,
         });
       }
@@ -123,79 +125,86 @@ export default function App() {
   }
 
   const userEmail = user?.attributes?.email ?? user?.signInDetails?.loginId ?? "";
+  const userName =
+    user?.attributes?.name?.trim() ||
+    user?.attributes?.preferred_username?.trim() ||
+    userEmail ||
+    "User";
   const seatsRemaining = subState.seatLimit - subState.seatsUsed;
   const canInviteMore = subState.canInviteUsers && seatsRemaining > 0;
+  const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
+  const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
 
+  let content: JSX.Element;
   if (view === "settings") {
-    return (
+    content = (
       <SettingsPage
-        userEmail={userEmail}
+        canInviteMore={canInviteMore}
+        canManageInventoryColumns={canManageInventoryColumns}
+        onInviteUsers={() => {
+          if (!canInviteMore) return;
+          setView("invite");
+        }}
         onBack={() => setView("dashboard")}
       />
     );
-  }
-
-  if (view === "dashboard" && (inviteStepComplete || !canInviteMore)) {
-    return (
-      <InventoryPage
-        canInviteMore={canInviteMore}
-        onInviteMore={() => {
-          localStorage.removeItem(INVITE_STEP_COMPLETE_KEY);
-          setInviteStepComplete(false);
-          setView("invite");
+  } else if (view === "inventory") {
+    content = <InventoryPage canEditInventory={canEditInventory} />;
+  } else if (view === "invite") {
+    content = canInviteMore ? (
+      <InviteUsersPage
+        maxUsers={subState.seatLimit}  // total seats
+        seatsUsed={subState.seatsUsed} // seats already used
+        onBackToDashboard={() => {
+          setView("dashboard");
         }}
-        onOpenSettings={() => setView("settings")}
+        onContinue={async (invites) => {
+          if (!INVITES_API_BASE_URL) {
+            throw new Error("Missing VITE_INVITES_API_BASE_URL");
+          }
+
+          const res = await authFetch(`${INVITES_API_BASE_URL}/send-invites`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ invites }),
+          });
+
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to send invites");
+          }
+
+          const data = await res.json();
+          if ((data?.invitedCount ?? 0) <= 0) {
+            throw new Error(data?.failed?.[0]?.error ?? "No invites were sent");
+          }
+
+          setView("dashboard");
+        }}
+      />
+    ) : (
+      <DashboardPage
+        onGoToInventory={() => setView("inventory")}
       />
     );
-  }
-
-  // Only render InviteUsersPage if there are seats remaining
-  if (!canInviteMore) {
-    return (
-      <InventoryPage
-        canInviteMore={false}
-        onInviteMore={() => {}}
-        onOpenSettings={() => setView("settings")}
+  } else {
+    content = (
+      <DashboardPage
+        onGoToInventory={() => setView("inventory")}
       />
     );
   }
 
   return (
-    <InviteUsersPage
-      signOut={signOut}
-      maxUsers={subState.seatLimit}  // total seats
-      seatsUsed={subState.seatsUsed} // seats already used
-      userEmail={userEmail}
-      onBackToDashboard={() => {
-        localStorage.setItem(INVITE_STEP_COMPLETE_KEY, "true");
-        setInviteStepComplete(true);
-        setView("dashboard");
-      }}
-      onContinue={async (invites) => {
-        if (!INVITES_API_BASE_URL) {
-          throw new Error("Missing VITE_INVITES_API_BASE_URL");
-        }
-
-        const res = await authFetch(`${INVITES_API_BASE_URL}/send-invites`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ invites }),
-        });
-
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(text || "Failed to send invites");
-        }
-
-        const data = await res.json();
-        if ((data?.invitedCount ?? 0) <= 0) {
-          throw new Error(data?.failed?.[0]?.error ?? "No invites were sent");
-        }
-
-        localStorage.setItem(INVITE_STEP_COMPLETE_KEY, "true");
-        setInviteStepComplete(true);
-        setView("dashboard");
-      }}
-    />
+    <section className="app-shell">
+      <AppToolbar
+        currentView={view}
+        userName={userName}
+        onGoToDashboard={() => setView("dashboard")}
+        onOpenSettings={() => setView("settings")}
+        onLogout={signOut}
+      />
+      {content}
+    </section>
   );
 }

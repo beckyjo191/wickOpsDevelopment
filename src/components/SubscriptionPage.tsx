@@ -31,21 +31,30 @@ export default function SubscriptionPage() {
   };
 
   return (
-    <div style={{ padding: 32 }}>
-      <h2>Subscription Required</h2>
-      <p>
-        Your organization does not have an active subscription.
-        Please subscribe to continue.
-      </p>
+    <section className="app-page">
+      <div className="app-card">
+        <header className="app-header">
+          <div>
+            <h2 className="app-title">Subscription Required</h2>
+            <p className="app-subtitle">
+              Your organization does not have an active plan yet.
+            </p>
+          </div>
+        </header>
 
-      <button onClick={startCheckout}>
-        Continue to Checkout
-      </button>
+        <div className="status-panel">
+          Subscribe to continue using team features like user management and organization inventory.
+        </div>
 
-      <br />
-      <br />
-
-      <button type="button" onClick={signOut}>Sign Out</button>
-    </div>
+        <div className="app-actions">
+          <button className="button button-primary" onClick={startCheckout}>
+            Continue to Checkout
+          </button>
+          <button className="button button-ghost" type="button" onClick={signOut}>
+            Sign Out
+          </button>
+        </div>
+      </div>
+    </section>
   );
 }

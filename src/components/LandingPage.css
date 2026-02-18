@@ -1,0 +1,172 @@
+.lp-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 12% 10%, rgba(14, 75, 125, 0.22) 0%, transparent 42%),
+    radial-gradient(circle at 88% 90%, rgba(26, 72, 98, 0.18) 0%, transparent 45%),
+    linear-gradient(180deg, #f4f8fc 0%, #dbe6f3 100%);
+  color: #10233a;
+  padding: 1.15rem;
+}
+
+.lp-nav {
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.lp-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  text-decoration: none;
+}
+
+.lp-brand-mark-image {
+  height: 2rem;
+  width: auto;
+  object-fit: contain;
+  object-position: center;
+  flex: 0 0 auto;
+}
+
+.lp-brand-word {
+  font: 800 1.2rem/1.1 "Merriweather Sans", "Trebuchet MS", sans-serif;
+  color: #133a5d;
+}
+
+.lp-nav-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.lp-link {
+  color: #173d5f;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.lp-main {
+  width: min(1120px, 100%);
+  margin: 1.1rem auto 0;
+  display: grid;
+  gap: 1.1rem;
+}
+
+.lp-hero {
+  border: 1px solid #c2d3e4;
+  background: linear-gradient(155deg, #ffffff 0%, #f0f6fc 100%);
+  border-radius: 18px;
+  box-shadow: 0 16px 38px rgba(14, 41, 73, 0.14);
+  padding: clamp(1.2rem, 2.4vw, 2rem);
+  animation: lp-rise 360ms ease-out;
+}
+
+.lp-kicker {
+  margin: 0;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: #1f5885;
+  font-size: 0.78rem;
+}
+
+.lp-hero-logo {
+  display: block;
+  width: min(620px, 100%);
+  height: auto;
+  margin-bottom: 0.75rem;
+  border-radius: 12px;
+}
+
+.lp-hero h1 {
+  margin-top: 0.5rem;
+  font-size: clamp(1.55rem, 4vw, 2.45rem);
+  line-height: 1.13;
+}
+
+.lp-sub {
+  margin-top: 0.85rem;
+  color: #3f5a73;
+  max-width: 70ch;
+}
+
+.lp-cta-row {
+  margin-top: 1.05rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.lp-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0 0.95rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  text-decoration: none;
+  font-weight: 800;
+}
+
+.lp-button-primary {
+  color: #fff;
+  background: linear-gradient(180deg, #0f4c81 0%, #0a3558 100%);
+}
+
+.lp-button-primary:hover {
+  background: linear-gradient(180deg, #13588f 0%, #0c3d64 100%);
+}
+
+.lp-button-secondary {
+  color: #1a3d5c;
+  border-color: #b8cadc;
+  background: #edf4fb;
+}
+
+.lp-button-secondary:hover {
+  background: #e2edf8;
+}
+
+.lp-pillars {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.lp-pillars article {
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid #c4d4e5;
+  border-radius: 14px;
+  padding: 0.85rem 0.9rem;
+}
+
+.lp-pillars h2 {
+  font-size: 1.02rem;
+  margin: 0;
+}
+
+.lp-pillars p {
+  margin: 0.48rem 0 0;
+  color: #496683;
+}
+
+@keyframes lp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 900px) {
+  .lp-pillars {
+    grid-template-columns: 1fr;
+  }
+}

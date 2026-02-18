@@ -4,16 +4,24 @@ import {
   View,
 } from '@aws-amplify/ui-react';
 import App from './App';
+import logoOriginal from "./assets/brand/wickops-logo-original.svg";
 
-export default function AppWrapper() {
+type AppWrapperProps = {
+  initialState?: "signIn" | "signUp";
+};
+
+export default function AppWrapper({ initialState = "signIn" }: AppWrapperProps) {
   return (
     <Authenticator
+      initialState={initialState}
       loginMechanisms={['email']}
       components={{
         Header() {
           return (
             <View textAlign="center" marginBottom="1rem">
-              <h1>WickOps Systems</h1>
+              <div className="brand-lockup">
+                <img className="brand-logo" src={logoOriginal} alt="WickOps Systems" />
+              </div>
             </View>
           );
         },

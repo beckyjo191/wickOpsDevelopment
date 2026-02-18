@@ -8,18 +8,16 @@ type InviteEntry = {
 };
 
 interface InviteUsersPageProps {
-  signOut: () => void;
   maxUsers: number;      // total seats allowed
   seatsUsed: number;     // current seats already used
-  userEmail: string;
+  onBackToDashboard: () => void;
   onContinue: (invites: InviteEntry[]) => Promise<void>;
 }
 
 export function InviteUsersPage({
-  signOut,
   maxUsers,
   seatsUsed,
-  userEmail,
+  onBackToDashboard,
   onContinue,
 }: InviteUsersPageProps) {
   const seatsRemaining = maxUsers - seatsUsed;
@@ -67,49 +65,61 @@ export function InviteUsersPage({
   };
 
   return (
-    <div style={{ padding: 32 }}>
-      <h2>Invite Users to Your Organization</h2>
-      <p>
-        Logged in as: <strong>{userEmail}</strong>
-      </p>
-      <p>
-        You can invite up to <strong>{seatsRemaining}</strong> more users based on your subscription plan.
-      </p>
+    <section className="app-content">
+      <div className="app-card">
+        <header className="app-header">
+          <div>
+            <h2 className="app-title">Invite Team Members</h2>
+            <p className="app-subtitle">
+              Add users and assign role-based access for your organization.
+            </p>
+          </div>
+        </header>
 
-      {invites.map((invite, idx) => (
-        <div key={idx} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-          <input
-            type="email"
-            placeholder="Enter email"
-            value={invite.email}
-            onChange={(e) => handleEmailChange(idx, e.target.value)}
-            style={{ padding: 8, width: 300 }}
-          />
-          <select
-            value={invite.role}
-            onChange={(e) => handleRoleChange(idx, e.target.value as InviteRole)}
-            style={{ padding: 8 }}
-          >
-            <option value="VIEWER">Read Only</option>
-            <option value="EDITOR">Read / Write</option>
-            <option value="ADMIN">Admin</option>
-          </select>
+        <div className="status-panel">
+          Available seats: <strong>{Math.max(0, seatsRemaining)}</strong> of <strong>{maxUsers}</strong>.
         </div>
-      ))}
 
-      {invites.length < seatsRemaining && (
-        <button onClick={addEmailField} disabled={loading}>
-          Add another email
-        </button>
-      )}
+        <div className="app-stack spacer-top">
+          {invites.map((invite, idx) => (
+            <div key={idx} className="invite-row">
+              <input
+                className="field"
+                type="email"
+                placeholder="name@organization.com"
+                value={invite.email}
+                onChange={(e) => handleEmailChange(idx, e.target.value)}
+              />
+              <select
+                className="select"
+                value={invite.role}
+                onChange={(e) => handleRoleChange(idx, e.target.value as InviteRole)}
+              >
+                <option value="VIEWER">View Only</option>
+                <option value="EDITOR">Editor</option>
+                <option value="ADMIN">Administrator</option>
+              </select>
+            </div>
+          ))}
+        </div>
 
-      <br /><br />
+        <div className="app-actions">
+          <button className="button button-secondary" onClick={onBackToDashboard}>
+            Back To Dashboard
+          </button>
 
-      <button onClick={handleSubmit} disabled={loading}>
-        Continue
-      </button>
-      <br /><br />
-      <button onClick={signOut}>Sign Out</button>
-    </div>
+          {invites.length < seatsRemaining && (
+            <button className="button button-secondary" onClick={addEmailField} disabled={loading}>
+              Add Another User
+            </button>
+          )}
+
+          <button className="button button-primary" onClick={handleSubmit} disabled={loading}>
+            {loading ? "Sending..." : "Send Invites"}
+          </button>
+
+        </div>
+      </div>
+    </section>
   );
 }

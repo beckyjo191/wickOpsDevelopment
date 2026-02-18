@@ -38,5 +38,6 @@ export const data = defineData({
     acceptedAt: a.datetime(),
   })
   .authorization((allow) => [allow.authenticated()]),
+
   }),
 });

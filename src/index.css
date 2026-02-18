@@ -1,65 +1,46 @@
+:root {
+  --bg-top: #f6f8fb;
+  --bg-bottom: #e5ebf4;
+  --surface: #ffffff;
+  --surface-alt: #f3f6fa;
+  --text: #1a2738;
+  --text-soft: #58708b;
+  --border: #cad6e3;
+  --primary: #0f4c81;
+  --primary-strong: #093459;
+  --danger: #8e2f2f;
+  --shadow: 0 14px 35px rgba(18, 38, 63, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  background: linear-gradient(180deg, rgb(117, 81, 194), rgb(255, 255, 255));
-  display: flex;
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  height: 100vh;
-  width: 100vw;
-  justify-content: center;
-  align-items: center;
+  color: var(--text);
+  font-family: "Source Sans 3", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(15, 76, 129, 0.13) 0%, transparent 38%),
+    radial-gradient(circle at 85% 90%, rgba(36, 83, 122, 0.1) 0%, transparent 42%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
 }
 
-main {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: "Merriweather Sans", "Trebuchet MS", "Gill Sans", sans-serif;
+  color: #13263b;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-  color: white;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-
-ul {
-  padding-inline-start: 0;
-  margin-block-start: 0;
-  margin-block-end: 0;
-  list-style-type: none;
-  display: flex;
-  flex-direction: column;
-  margin: 8px 0;
-  border: 1px solid black;
-  gap: 1px;
-  background-color: black;
-  border-radius: 8px;
-  overflow: auto;
-}
-
-li {
-  background-color: white;
-  padding: 8px;
-}
-
-li:hover {
-  background: #dadbf9;
-}
-
-a {
-  font-weight: 800;
-  text-decoration: none;
+p {
+  margin: 0;
+  line-height: 1.45;
 }

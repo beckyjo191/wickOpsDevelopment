@@ -1,23 +1,43 @@
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  BillingMode,
+  CreateTableCommand,
+  DeleteTableCommand,
+  DescribeTableCommand,
+  DynamoDBClient,
+  KeyType,
+  ProjectionType,
+  ScalarAttributeType,
+} from "@aws-sdk/client-dynamodb";
 import {
   DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
-  ScanCommand,
+  QueryCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+const rawDdb = new DynamoDBClient({});
+const ddb = DynamoDBDocumentClient.from(rawDdb);
 
 const USER_TABLE = process.env.USER_TABLE!;
-const INVENTORY_COLUMN_TABLE = process.env.INVENTORY_COLUMN_TABLE!;
-const INVENTORY_ITEM_TABLE = process.env.INVENTORY_ITEM_TABLE!;
+const SHARED_INVENTORY_COLUMN_TABLE = process.env.INVENTORY_COLUMN_TABLE!;
+const SHARED_INVENTORY_ITEM_TABLE = process.env.INVENTORY_ITEM_TABLE!;
+const ENABLE_PER_ORG_TABLES =
+  String(process.env.ENABLE_PER_ORG_INVENTORY_TABLES ?? "true").trim().toLowerCase() !== "false";
+const INVENTORY_ORG_TABLE_PREFIX =
+  String(process.env.INVENTORY_ORG_TABLE_PREFIX ?? "wickops-inventory").trim() ||
+  "wickops-inventory";
+const INVENTORY_COLUMN_BY_ORG_INDEX = "ByOrganizationSortOrder";
+const INVENTORY_ITEM_BY_ORG_INDEX = "ByOrganizationPosition";
+const INVENTORY_COLUMN_BY_MODULE_INDEX = "ByModuleSortOrder";
+const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
 
 const EDIT_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"]);
 const COLUMN_ADMIN_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate"]);
+const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 type InventoryColumnType = "text" | "number" | "date" | "link" | "boolean";
 
@@ -59,6 +79,20 @@ type AccessContext = {
   canEditInventory: boolean;
   canManageColumns: boolean;
 };
+
+type InventoryStorage = {
+  mode: "shared" | "org";
+  columnTable: string;
+  itemTable: string;
+};
+
+const sharedStorage: InventoryStorage = {
+  mode: "shared",
+  columnTable: SHARED_INVENTORY_COLUMN_TABLE,
+  itemTable: SHARED_INVENTORY_ITEM_TABLE,
+};
+let currentStorage: InventoryStorage = sharedStorage;
+const storageCache = new Map<string, { storage: InventoryStorage; checkedAt: number }>();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -134,20 +168,199 @@ const encodeNextToken = (value: Record<string, unknown> | undefined): string | n
   return Buffer.from(JSON.stringify(value)).toString("base64");
 };
 
+const sleep = async (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const sanitizeOrgIdForTableName = (organizationId: string): string =>
+  organizationId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 36) || "org";
+
+const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items"): string => {
+  const safeOrg = sanitizeOrgIdForTableName(organizationId);
+  const hash = createHash("sha256").update(organizationId).digest("hex").slice(0, 10);
+  return `${INVENTORY_ORG_TABLE_PREFIX}-${safeOrg}-${hash}-${suffix}`;
+};
+
+const describeTable = async (tableName: string) => {
+  try {
+    return await rawDdb.send(new DescribeTableCommand({ TableName: tableName }));
+  } catch (err: any) {
+    if (err?.name === "ResourceNotFoundException") return null;
+    throw err;
+  }
+};
+
+const waitForTableActive = async (tableName: string): Promise<void> => {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const described = await describeTable(tableName);
+    if (described?.Table?.TableStatus === "ACTIVE") return;
+    await sleep(500);
+  }
+  throw new Error(`Timed out waiting for table to become ACTIVE: ${tableName}`);
+};
+
+const createOrgTableIfMissing = async (
+  tableName: string,
+  gsiName: string,
+  gsiSortKey: "sortOrder" | "position",
+): Promise<{ created: boolean }> => {
+  const existing = await describeTable(tableName);
+  if (existing?.Table) {
+    if (existing.Table.TableStatus !== "ACTIVE") {
+      await waitForTableActive(tableName);
+    }
+    return { created: false };
+  }
+
+  await rawDdb.send(
+    new CreateTableCommand({
+      TableName: tableName,
+      BillingMode: BillingMode.PAY_PER_REQUEST,
+      AttributeDefinitions: [
+        { AttributeName: "id", AttributeType: ScalarAttributeType.S },
+        { AttributeName: "module", AttributeType: ScalarAttributeType.S },
+        { AttributeName: gsiSortKey, AttributeType: ScalarAttributeType.N },
+      ],
+      KeySchema: [{ AttributeName: "id", KeyType: KeyType.HASH }],
+      GlobalSecondaryIndexes: [
+        {
+          IndexName: gsiName,
+          KeySchema: [
+            { AttributeName: "module", KeyType: KeyType.HASH },
+            { AttributeName: gsiSortKey, KeyType: KeyType.RANGE },
+          ],
+          Projection: { ProjectionType: ProjectionType.ALL },
+        },
+      ],
+    }),
+  );
+
+  await waitForTableActive(tableName);
+  return { created: true };
+};
+
+const migrateOrgDataFromSharedTables = async (
+  organizationId: string,
+  storage: InventoryStorage,
+): Promise<void> => {
+  let columnStartKey: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: SHARED_INVENTORY_COLUMN_TABLE,
+        IndexName: INVENTORY_COLUMN_BY_ORG_INDEX,
+        KeyConditionExpression: "organizationId = :org",
+        ExpressionAttributeValues: { ":org": organizationId },
+        ExclusiveStartKey: columnStartKey,
+      }),
+    );
+    for (const raw of (page.Items ?? []) as InventoryColumn[]) {
+      if (raw.module !== "inventory") continue;
+      await ddb.send(new PutCommand({ TableName: storage.columnTable, Item: raw }));
+    }
+    columnStartKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (columnStartKey);
+
+  let itemStartKey: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: SHARED_INVENTORY_ITEM_TABLE,
+        IndexName: INVENTORY_ITEM_BY_ORG_INDEX,
+        KeyConditionExpression: "organizationId = :org",
+        ExpressionAttributeValues: { ":org": organizationId },
+        ExclusiveStartKey: itemStartKey,
+      }),
+    );
+    for (const raw of (page.Items ?? []) as InventoryItem[]) {
+      if (raw.module !== "inventory") continue;
+      await ddb.send(new PutCommand({ TableName: storage.itemTable, Item: raw }));
+    }
+    itemStartKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (itemStartKey);
+};
+
+const ensureStorageForOrganization = async (organizationId: string): Promise<InventoryStorage> => {
+  if (!ENABLE_PER_ORG_TABLES) {
+    return sharedStorage;
+  }
+
+  const cached = storageCache.get(organizationId);
+  const now = Date.now();
+  if (cached && now - cached.checkedAt < STORAGE_CACHE_TTL_MS) {
+    return cached.storage;
+  }
+
+  const storage: InventoryStorage = {
+    mode: "org",
+    columnTable: buildOrgScopedTableName(organizationId, "columns"),
+    itemTable: buildOrgScopedTableName(organizationId, "items"),
+  };
+
+  const [columnTableResult, itemTableResult] = await Promise.all([
+    createOrgTableIfMissing(storage.columnTable, INVENTORY_COLUMN_BY_MODULE_INDEX, "sortOrder"),
+    createOrgTableIfMissing(storage.itemTable, INVENTORY_ITEM_BY_MODULE_INDEX, "position"),
+  ]);
+
+  if (columnTableResult.created || itemTableResult.created) {
+    await migrateOrgDataFromSharedTables(organizationId, storage);
+  }
+
+  storageCache.set(organizationId, { storage, checkedAt: now });
+  return storage;
+};
+
+const deleteStorageForOrganization = async (organizationId: string): Promise<void> => {
+  if (!ENABLE_PER_ORG_TABLES) return;
+  const storage = await ensureStorageForOrganization(organizationId);
+  await Promise.all(
+    [storage.columnTable, storage.itemTable].map(async (tableName) => {
+      try {
+        await rawDdb.send(new DeleteTableCommand({ TableName: tableName }));
+      } catch (err: any) {
+        if (err?.name === "ResourceNotFoundException") return;
+        throw err;
+      }
+    }),
+  );
+  storageCache.delete(organizationId);
+};
+
 const listColumns = async (organizationId: string): Promise<InventoryColumn[]> => {
   const out: InventoryColumn[] = [];
   let lastEvaluatedKey: Record<string, unknown> | undefined;
   do {
-    const page = await ddb.send(
-      new ScanCommand({
-        TableName: INVENTORY_COLUMN_TABLE,
-        FilterExpression: "organizationId = :org AND #module = :module",
-        ExpressionAttributeNames: { "#module": "module" },
-        ExpressionAttributeValues: { ":org": organizationId, ":module": "inventory" },
-        ExclusiveStartKey: lastEvaluatedKey,
-      }),
+    const page =
+      currentStorage.mode === "org"
+        ? await ddb.send(
+            new QueryCommand({
+              TableName: currentStorage.columnTable,
+              IndexName: INVENTORY_COLUMN_BY_MODULE_INDEX,
+              KeyConditionExpression: "#module = :module",
+              ExpressionAttributeNames: { "#module": "module" },
+              ExpressionAttributeValues: { ":module": "inventory" },
+              ExclusiveStartKey: lastEvaluatedKey,
+            }),
+          )
+        : await ddb.send(
+            new QueryCommand({
+              TableName: currentStorage.columnTable,
+              IndexName: INVENTORY_COLUMN_BY_ORG_INDEX,
+              KeyConditionExpression: "organizationId = :org",
+              ExpressionAttributeValues: { ":org": organizationId },
+              ExclusiveStartKey: lastEvaluatedKey,
+            }),
+          );
+    out.push(
+      ...((page.Items ?? []) as InventoryColumn[]).filter((item) => item.module === "inventory"),
     );
-    out.push(...((page.Items ?? []) as InventoryColumn[]));
     lastEvaluatedKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (lastEvaluatedKey);
 
@@ -216,7 +429,7 @@ const ensureColumns = async (organizationId: string): Promise<InventoryColumn[]>
   for (const column of defaults) {
     await ddb.send(
       new PutCommand({
-        TableName: INVENTORY_COLUMN_TABLE,
+        TableName: currentStorage.columnTable,
         Item: {
           id: randomUUID(),
           ...column,
@@ -233,17 +446,32 @@ const listItemsPage = async (
   limit: number,
   startKey?: Record<string, unknown>,
 ): Promise<{ items: InventoryItem[]; nextToken: string | null }> => {
-  const page = await ddb.send(
-    new ScanCommand({
-      TableName: INVENTORY_ITEM_TABLE,
-      FilterExpression: "organizationId = :org AND #module = :module",
-      ExpressionAttributeNames: { "#module": "module" },
-      ExpressionAttributeValues: { ":org": organizationId, ":module": "inventory" },
-      ExclusiveStartKey: startKey,
-      Limit: limit,
-    }),
-  );
-  const items = ((page.Items ?? []) as InventoryItem[]).sort(
+  const page =
+    currentStorage.mode === "org"
+      ? await ddb.send(
+          new QueryCommand({
+            TableName: currentStorage.itemTable,
+            IndexName: INVENTORY_ITEM_BY_MODULE_INDEX,
+            KeyConditionExpression: "#module = :module",
+            ExpressionAttributeNames: { "#module": "module" },
+            ExpressionAttributeValues: { ":module": "inventory" },
+            ExclusiveStartKey: startKey,
+            Limit: limit,
+          }),
+        )
+      : await ddb.send(
+          new QueryCommand({
+            TableName: currentStorage.itemTable,
+            IndexName: INVENTORY_ITEM_BY_ORG_INDEX,
+            KeyConditionExpression: "organizationId = :org",
+            ExpressionAttributeValues: { ":org": organizationId },
+            ExclusiveStartKey: startKey,
+            Limit: limit,
+          }),
+        );
+  const items = ((page.Items ?? []) as InventoryItem[])
+    .filter((item) => item.module === "inventory")
+    .sort(
     (a, b) => Number(a.position) - Number(b.position),
   );
   return {
@@ -256,16 +484,30 @@ const listAllItems = async (organizationId: string): Promise<InventoryItem[]> =>
   const out: InventoryItem[] = [];
   let lastEvaluatedKey: Record<string, unknown> | undefined;
   do {
-    const page = await ddb.send(
-      new ScanCommand({
-        TableName: INVENTORY_ITEM_TABLE,
-        FilterExpression: "organizationId = :org AND #module = :module",
-        ExpressionAttributeNames: { "#module": "module" },
-        ExpressionAttributeValues: { ":org": organizationId, ":module": "inventory" },
-        ExclusiveStartKey: lastEvaluatedKey,
-      }),
+    const page =
+      currentStorage.mode === "org"
+        ? await ddb.send(
+            new QueryCommand({
+              TableName: currentStorage.itemTable,
+              IndexName: INVENTORY_ITEM_BY_MODULE_INDEX,
+              KeyConditionExpression: "#module = :module",
+              ExpressionAttributeNames: { "#module": "module" },
+              ExpressionAttributeValues: { ":module": "inventory" },
+              ExclusiveStartKey: lastEvaluatedKey,
+            }),
+          )
+        : await ddb.send(
+            new QueryCommand({
+              TableName: currentStorage.itemTable,
+              IndexName: INVENTORY_ITEM_BY_ORG_INDEX,
+              KeyConditionExpression: "organizationId = :org",
+              ExpressionAttributeValues: { ":org": organizationId },
+              ExclusiveStartKey: lastEvaluatedKey,
+            }),
+          );
+    out.push(
+      ...((page.Items ?? []) as InventoryItem[]).filter((item) => item.module === "inventory"),
     );
-    out.push(...((page.Items ?? []) as InventoryItem[]));
     lastEvaluatedKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (lastEvaluatedKey);
 
@@ -495,38 +737,50 @@ const handleSaveItems = async (access: AccessContext, body: any) => {
     const values = (row?.values ?? {}) as Record<string, unknown>;
     const quantityValidation = validateNonNegativeField(values, "quantity");
     if (!quantityValidation.ok) {
-      return json(400, { error: `Row ${idx + 1}: ${quantityValidation.error}` });
+      const reason = "error" in quantityValidation ? quantityValidation.error : "invalid quantity";
+      return json(400, { error: `Row ${idx + 1}: ${reason}` });
     }
     const minQuantityValidation = validateNonNegativeField(values, "minQuantity");
     if (!minQuantityValidation.ok) {
-      return json(400, { error: `Row ${idx + 1}: ${minQuantityValidation.error}` });
+      const reason = "error" in minQuantityValidation ? minQuantityValidation.error : "invalid minQuantity";
+      return json(400, { error: `Row ${idx + 1}: ${reason}` });
     }
-    await ddb.send(
-      new UpdateCommand({
-        TableName: INVENTORY_ITEM_TABLE,
-        Key: { id: rowId },
-        UpdateExpression:
-          "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, updatedAtCustom = :updatedAtCustom, createdAt = if_not_exists(createdAt, :createdAt)",
-        ExpressionAttributeNames: {
-          "#module": "module",
-          "#position": "position",
-        },
-        ExpressionAttributeValues: {
-          ":org": access.organizationId,
-          ":module": "inventory",
-          ":position": Number(row?.position ?? idx),
-          ":values": JSON.stringify(values),
-          ":updatedAtCustom": new Date().toISOString(),
-          ":createdAt": String(row?.createdAt ?? new Date().toISOString()),
-        },
-      }),
-    );
+    try {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: currentStorage.itemTable,
+          Key: { id: rowId },
+          // Prevent cross-org overwrite if a caller sends an arbitrary existing id.
+          ConditionExpression:
+            "attribute_not_exists(id) OR (organizationId = :org AND #module = :module)",
+          UpdateExpression:
+            "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, updatedAtCustom = :updatedAtCustom, createdAt = if_not_exists(createdAt, :createdAt)",
+          ExpressionAttributeNames: {
+            "#module": "module",
+            "#position": "position",
+          },
+          ExpressionAttributeValues: {
+            ":org": access.organizationId,
+            ":module": "inventory",
+            ":position": Number(row?.position ?? idx),
+            ":values": JSON.stringify(values),
+            ":updatedAtCustom": new Date().toISOString(),
+            ":createdAt": String(row?.createdAt ?? new Date().toISOString()),
+          },
+        }),
+      );
+    } catch (err: any) {
+      if (err?.name === "ConditionalCheckFailedException") {
+        return json(403, { error: `Row ${idx + 1} does not belong to organization` });
+      }
+      throw err;
+    }
   }
 
   for (const deletedId of deletedRowIds) {
     await ddb.send(
       new DeleteCommand({
-        TableName: INVENTORY_ITEM_TABLE,
+        TableName: currentStorage.itemTable,
         Key: { id: deletedId },
         ConditionExpression: "organizationId = :org AND #module = :module",
         ExpressionAttributeNames: {
@@ -564,7 +818,8 @@ const handleCreateColumn = async (access: AccessContext, body: any) => {
     suffix += 1;
   }
 
-  const sortOrder = (columns.at(-1)?.sortOrder ?? 0) + 10;
+  const lastColumn = columns.length > 0 ? columns[columns.length - 1] : undefined;
+  const sortOrder = (lastColumn?.sortOrder ?? 0) + 10;
   const created: InventoryColumn = {
     id: randomUUID(),
     organizationId: access.organizationId,
@@ -580,7 +835,7 @@ const handleCreateColumn = async (access: AccessContext, body: any) => {
     createdAt: new Date().toISOString(),
   };
 
-  await ddb.send(new PutCommand({ TableName: INVENTORY_COLUMN_TABLE, Item: created }));
+  await ddb.send(new PutCommand({ TableName: currentStorage.columnTable, Item: created }));
   return json(200, { column: created });
 };
 
@@ -594,7 +849,7 @@ const handleDeleteColumn = async (access: AccessContext, path: string) => {
   if (!columnId) return json(400, { error: "Column id is required" });
 
   const columnRes = await ddb.send(
-    new GetCommand({ TableName: INVENTORY_COLUMN_TABLE, Key: { id: columnId } }),
+    new GetCommand({ TableName: currentStorage.columnTable, Key: { id: columnId } }),
   );
   const column = columnRes.Item as InventoryColumn | undefined;
   if (!column) return json(404, { error: "Column not found" });
@@ -605,7 +860,7 @@ const handleDeleteColumn = async (access: AccessContext, path: string) => {
     return json(400, { error: "Core columns cannot be deleted" });
   }
 
-  await ddb.send(new DeleteCommand({ TableName: INVENTORY_COLUMN_TABLE, Key: { id: columnId } }));
+  await ddb.send(new DeleteCommand({ TableName: currentStorage.columnTable, Key: { id: columnId } }));
   return json(200, { ok: true });
 };
 
@@ -624,7 +879,7 @@ const handleUpdateColumnVisibility = async (access: AccessContext, path: string,
   }
 
   const columnRes = await ddb.send(
-    new GetCommand({ TableName: INVENTORY_COLUMN_TABLE, Key: { id: columnId } }),
+    new GetCommand({ TableName: currentStorage.columnTable, Key: { id: columnId } }),
   );
   const column = columnRes.Item as InventoryColumn | undefined;
   if (!column) return json(404, { error: "Column not found" });
@@ -634,7 +889,7 @@ const handleUpdateColumnVisibility = async (access: AccessContext, path: string,
 
   await ddb.send(
     new UpdateCommand({
-      TableName: INVENTORY_COLUMN_TABLE,
+      TableName: currentStorage.columnTable,
       Key: { id: columnId },
       UpdateExpression: "SET isVisible = :isVisible",
       ExpressionAttributeValues: {
@@ -661,7 +916,7 @@ const handleUpdateColumnLabel = async (access: AccessContext, path: string, body
   }
 
   const columnRes = await ddb.send(
-    new GetCommand({ TableName: INVENTORY_COLUMN_TABLE, Key: { id: columnId } }),
+    new GetCommand({ TableName: currentStorage.columnTable, Key: { id: columnId } }),
   );
   const column = columnRes.Item as InventoryColumn | undefined;
   if (!column) return json(404, { error: "Column not found" });
@@ -674,7 +929,7 @@ const handleUpdateColumnLabel = async (access: AccessContext, path: string, body
 
   await ddb.send(
     new UpdateCommand({
-      TableName: INVENTORY_COLUMN_TABLE,
+      TableName: currentStorage.columnTable,
       Key: { id: columnId },
       UpdateExpression: "SET #label = :label",
       ExpressionAttributeNames: {
@@ -687,6 +942,25 @@ const handleUpdateColumnLabel = async (access: AccessContext, path: string, body
   );
 
   return json(200, { ok: true, columnId, label });
+};
+
+const handleDeleteOrganizationStorage = async (
+  access: AccessContext,
+  query: Record<string, string | undefined>,
+) => {
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can delete organization storage" });
+  }
+  if (!ENABLE_PER_ORG_TABLES) {
+    return json(400, { error: "Per-organization table mode is disabled" });
+  }
+  if (String(query.confirm ?? "").toUpperCase() !== "DELETE") {
+    return json(400, { error: "Missing confirmation. Use ?confirm=DELETE" });
+  }
+
+  await deleteStorageForOrganization(access.organizationId);
+  currentStorage = sharedStorage;
+  return json(200, { ok: true });
 };
 
 const handleImportCsv = async (access: AccessContext, body: any) => {
@@ -750,7 +1024,8 @@ const handleImportCsv = async (access: AccessContext, body: any) => {
         suffix += 1;
       }
 
-      const sortOrder = (columns.at(-1)?.sortOrder ?? 0) + 10;
+      const lastColumn = columns.length > 0 ? columns[columns.length - 1] : undefined;
+      const sortOrder = (lastColumn?.sortOrder ?? 0) + 10;
       const created: InventoryColumn = {
         id: randomUUID(),
         organizationId: access.organizationId,
@@ -765,7 +1040,7 @@ const handleImportCsv = async (access: AccessContext, body: any) => {
         sortOrder,
         createdAt: new Date().toISOString(),
       };
-      await ddb.send(new PutCommand({ TableName: INVENTORY_COLUMN_TABLE, Item: created }));
+      await ddb.send(new PutCommand({ TableName: currentStorage.columnTable, Item: created }));
 
       columns = [...columns, created].sort((a, b) => a.sortOrder - b.sortOrder);
       byKey.set(created.key, created);
@@ -778,11 +1053,7 @@ const handleImportCsv = async (access: AccessContext, body: any) => {
     mapping.push({ sourceIndex: headerIndex, header, column: mapped });
   }
 
-  if (!mapping.some((entry) => entry.column.key === "itemName")) {
-    return json(400, {
-      error: "CSV must include an Item Name (or Item ID/Name) header for import matching.",
-    });
-  }
+  const hasItemNameMapping = mapping.some((entry) => entry.column.key === "itemName");
 
   const existingItems = await listAllItems(access.organizationId);
   const existingByMatchKey = new Map<string, InventoryItem>();
@@ -822,8 +1093,9 @@ const handleImportCsv = async (access: AccessContext, body: any) => {
       } else if (target.key === "quantity" || target.key === "minQuantity") {
         const parsed = parseNonNegativeNumberOrBlank(cell);
         if (!parsed.ok) {
+          const reason = "error" in parsed ? parsed.error : "must be a number";
           return json(400, {
-            error: `Invalid ${target.label} value '${cell}' for item '${String(values.itemName ?? "").trim() || "unknown"}': ${parsed.error}`,
+            error: `Invalid ${target.label} value '${cell}' for item '${String(values.itemName ?? "").trim() || "unknown"}': ${reason}`,
           });
         }
         values[target.key] = parsed.value;
@@ -832,12 +1104,12 @@ const handleImportCsv = async (access: AccessContext, body: any) => {
       }
     }
 
-    const matchKey = buildImportMatchKey(values);
-    if (!matchKey) {
+    const matchKey = hasItemNameMapping ? buildImportMatchKey(values) : "";
+    if (hasItemNameMapping && !matchKey) {
       skippedCount += 1;
       continue;
     }
-    const existingMatch = existingByMatchKey.get(matchKey);
+    const existingMatch = matchKey ? existingByMatchKey.get(matchKey) : undefined;
     const isUpdate = !!existingMatch;
     const itemId = existingMatch?.id ?? randomUUID();
     const createdAt = existingMatch?.createdAt ?? new Date().toISOString();
@@ -867,12 +1139,14 @@ const handleImportCsv = async (access: AccessContext, body: any) => {
       updatedAtCustom: new Date().toISOString(),
     };
 
-    await ddb.send(new PutCommand({ TableName: INVENTORY_ITEM_TABLE, Item: itemPayload }));
+    await ddb.send(new PutCommand({ TableName: currentStorage.itemTable, Item: itemPayload }));
     if (isUpdate) {
       updatedCount += 1;
     } else {
       createdCount += 1;
-      existingByMatchKey.set(matchKey, itemPayload);
+      if (matchKey) {
+        existingByMatchKey.set(matchKey, itemPayload);
+      }
     }
   }
 
@@ -906,6 +1180,7 @@ export const handler = async (event: any) => {
     }
 
     const access = await getAccessContext(event);
+    currentStorage = await ensureStorageForOrganization(access.organizationId);
 
     if (method === "GET" && path.endsWith("/inventory/bootstrap")) {
       return handleBootstrap(access);
@@ -937,6 +1212,10 @@ export const handler = async (event: any) => {
 
     if (method === "DELETE" && /\/inventory\/columns\/[^/]+$/.test(path)) {
       return handleDeleteColumn(access, path);
+    }
+
+    if (method === "DELETE" && path.endsWith("/inventory/organization-storage")) {
+      return handleDeleteOrganizationStorage(access, query);
     }
 
     return json(404, { error: "Not found" });

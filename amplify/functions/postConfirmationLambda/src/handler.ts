@@ -41,6 +41,16 @@ export const handler: Handler = async (event) => {
 
   const normalizedEmail = email.trim().toLowerCase();
 
+  // Idempotency guard: Cognito can retry PostConfirmation.
+  // If user already exists, avoid re-running org seat/user mutations.
+  const existingUserRes = await ddb.send(
+    new GetCommand({ TableName: USER_TABLE, Key: { id: event.userName } })
+  );
+  if (existingUserRes.Item) {
+    console.log(`postConfirmation replay detected for ${event.userName}; skipping mutations`);
+    return event;
+  }
+
   // If this user has a pending invite, consume it and assign the invited role/org.
   let invite:
     | {
@@ -117,10 +127,7 @@ export const handler: Handler = async (event) => {
           accessSuspended: !isPaidStatus(orgResult.Item.paymentStatus),
           createdAt: new Date().toISOString(),
         },
-        ConditionExpression: "attribute_not_exists(id) OR email = :email",
-        ExpressionAttributeValues: {
-          ":email": normalizedEmail,
-        },
+        ConditionExpression: "attribute_not_exists(id)",
       })
     );
 
@@ -208,10 +215,7 @@ export const handler: Handler = async (event) => {
         accessSuspended: true, // until payment confirmed
         createdAt: new Date().toISOString(),
       },
-      ConditionExpression: "attribute_not_exists(id) OR email = :email",
-      ExpressionAttributeValues: {
-        ":email": normalizedEmail,
-      },
+      ConditionExpression: "attribute_not_exists(id)",
     })
   );
 

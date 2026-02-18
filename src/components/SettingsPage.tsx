@@ -25,6 +25,7 @@ export function SettingsPage({
   canManageInventoryColumns,
   onInviteUsers,
 }: SettingsPageProps) {
+  const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [newColumnName, setNewColumnName] = useState("");
   const [loadingColumns, setLoadingColumns] = useState(false);
@@ -195,6 +196,9 @@ export function SettingsPage({
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading columns...</div> : null}
                 {columns.map((column) => (
+                  (() => {
+                    const isLocked = column.isCore || column.isRequired || nonEditableKeys.has(column.key);
+                    return (
                   <div key={column.id} className="settings-column-row">
                     <div className="settings-column-visibility">
                       <input
@@ -232,7 +236,7 @@ export function SettingsPage({
                       )}
                     </div>
                     <div className="settings-column-actions">
-                      {column.isRequired ? (
+                      {isLocked ? (
                         <span className="settings-core-pill">*Required</span>
                       ) : (
                         <div className="settings-action-wrap">
@@ -250,7 +254,7 @@ export function SettingsPage({
                           <span className="settings-action-tip" role="tooltip">Edit</span>
                         </div>
                       )}
-                      {!column.isCore && !column.isRequired ? (
+                      {!isLocked ? (
                         <div className="settings-action-wrap">
                           <button
                             className="settings-action-icon"
@@ -294,6 +298,8 @@ export function SettingsPage({
                       ) : null}
                     </div>
                   </div>
+                    );
+                  })()
                 ))}
               </div>
             </>

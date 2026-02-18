@@ -1,6 +1,7 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { RemovalPolicy } from "aws-cdk-lib";
+import { RemovalPolicy, Stack } from "aws-cdk-lib";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
+import { PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { createCheckoutSession } from "./functions/createCheckoutSession/resource";
@@ -27,6 +28,11 @@ const inventoryColumnTable = new Table(inventoryStack, "InventoryColumnTable", {
   pointInTimeRecovery: true,
   removalPolicy: RemovalPolicy.RETAIN,
 });
+inventoryColumnTable.addGlobalSecondaryIndex({
+  indexName: "ByOrganizationSortOrder",
+  partitionKey: { name: "organizationId", type: AttributeType.STRING },
+  sortKey: { name: "sortOrder", type: AttributeType.NUMBER },
+});
 
 const inventoryItemTable = new Table(inventoryStack, "InventoryItemTable", {
   partitionKey: { name: "id", type: AttributeType.STRING },
@@ -34,8 +40,14 @@ const inventoryItemTable = new Table(inventoryStack, "InventoryItemTable", {
   pointInTimeRecovery: true,
   removalPolicy: RemovalPolicy.RETAIN,
 });
+inventoryItemTable.addGlobalSecondaryIndex({
+  indexName: "ByOrganizationPosition",
+  partitionKey: { name: "organizationId", type: AttributeType.STRING },
+  sortKey: { name: "position", type: AttributeType.NUMBER },
+});
 
 const inventoryApiLambda = backend.inventoryApi.resources.lambda as any;
+const inventoryOrgTablePrefix = "wickops-inventory";
 
 inventoryApiLambda.addEnvironment(
   "INVENTORY_COLUMN_TABLE",
@@ -45,9 +57,30 @@ inventoryApiLambda.addEnvironment(
   "INVENTORY_ITEM_TABLE",
   inventoryItemTable.tableName,
 );
+inventoryApiLambda.addEnvironment("ENABLE_PER_ORG_INVENTORY_TABLES", "true");
+inventoryApiLambda.addEnvironment("INVENTORY_ORG_TABLE_PREFIX", inventoryOrgTablePrefix);
 
 inventoryColumnTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
 inventoryItemTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
+
+const inventoryApiStack = Stack.of(inventoryApiLambda);
+const inventoryDynamicTableArn = `arn:aws:dynamodb:${inventoryApiStack.region}:${inventoryApiStack.account}:table/${inventoryOrgTablePrefix}-*`;
+inventoryApiLambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: [
+      "dynamodb:CreateTable",
+      "dynamodb:DeleteTable",
+      "dynamodb:DescribeTable",
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:Query",
+      "dynamodb:BatchWriteItem",
+    ],
+    resources: [inventoryDynamicTableArn, `${inventoryDynamicTableArn}/index/*`],
+  }),
+);
 
 const userTable = (backend.data.resources as any)?.tables?.user;
 if (userTable) {

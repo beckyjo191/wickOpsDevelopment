@@ -101,7 +101,11 @@ export default function App() {
 
     checkSubscription();
 
-    if (window.location.pathname === "/success") {
+    const checkoutSuccess =
+      window.location.pathname === "/success" ||
+      new URLSearchParams(window.location.search).get("checkout") === "success";
+
+    if (checkoutSuccess) {
       pollInterval = window.setInterval(checkSubscription, 3000);
       setTimeout(() => {
         if (pollInterval) clearInterval(pollInterval);

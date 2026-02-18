@@ -62,8 +62,8 @@ export const handler = async (event: any) => {
       mode: "subscription",
       customer: stripeCustomerId,
       line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
-      success_url: `${FRONTEND_URL}/success`,
-      cancel_url: `${FRONTEND_URL}/billing`,
+      success_url: `${FRONTEND_URL}/?checkout=success`,
+      cancel_url: `${FRONTEND_URL}/?checkout=cancel`,
       metadata: {
         organizationId: org.id,
         userId: user.id,

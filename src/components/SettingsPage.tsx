@@ -3,6 +3,7 @@ import {
   createInventoryColumn,
   deleteInventoryColumn,
   loadInventoryBootstrap,
+  updateInventoryColumnLabel,
   updateInventoryColumnVisibility,
   type InventoryColumn,
 } from "../lib/inventoryApi";
@@ -29,6 +30,8 @@ export function SettingsPage({
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [savingColumn, setSavingColumn] = useState(false);
   const [pendingDeleteColumnId, setPendingDeleteColumnId] = useState<string | null>(null);
+  const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState("");
 
   useEffect(() => {
     if (!canManageInventoryColumns) return;
@@ -105,6 +108,38 @@ export function SettingsPage({
     }
   };
 
+  const onStartEditColumn = (column: InventoryColumn) => {
+    setEditingColumnId(column.id);
+    setEditingLabel(column.label);
+  };
+
+  const onCancelEditColumn = () => {
+    setEditingColumnId(null);
+    setEditingLabel("");
+  };
+
+  const onSaveEditColumn = async (column: InventoryColumn) => {
+    if (!canManageInventoryColumns) return;
+    const nextLabel = editingLabel.trim();
+    if (!nextLabel) return;
+    if (nextLabel === column.label) {
+      onCancelEditColumn();
+      return;
+    }
+    setSavingColumn(true);
+    try {
+      await updateInventoryColumnLabel(column.id, nextLabel);
+      setColumns((prev) =>
+        prev.map((item) => (item.id === column.id ? { ...item, label: nextLabel } : item)),
+      );
+      onCancelEditColumn();
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to update column label");
+    } finally {
+      setSavingColumn(false);
+    }
+  };
+
   return (
     <section className="app-content">
       <div className="app-card">
@@ -161,22 +196,64 @@ export function SettingsPage({
                 {loadingColumns ? <div>Loading columns...</div> : null}
                 {columns.map((column) => (
                   <div key={column.id} className="settings-column-row">
-                    <label className="settings-column-visibility">
+                    <div className="settings-column-visibility">
                       <input
                         type="checkbox"
                         checked={column.isVisible}
                         onChange={() => onToggleColumnVisibility(column)}
                         disabled={savingColumn}
                       />
-                      <span>{column.label}</span>
-                    </label>
+                      {editingColumnId === column.id ? (
+                        <span className="settings-column-edit">
+                          <input
+                            className="field settings-column-edit-input"
+                            value={editingLabel}
+                            onChange={(event) => setEditingLabel(event.target.value)}
+                            disabled={savingColumn}
+                          />
+                          <button
+                            className="button button-secondary settings-inline-action"
+                            onClick={() => void onSaveEditColumn(column)}
+                            disabled={savingColumn || !editingLabel.trim()}
+                            type="button"
+                          >
+                            Save
+                          </button>
+                          <button
+                            className="button button-ghost settings-inline-action"
+                            onClick={onCancelEditColumn}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <span>{column.label}</span>
+                      )}
+                    </div>
                     <div className="settings-column-actions">
-                      {column.isCore ? (
+                      {column.isRequired ? (
                         <span className="settings-core-pill">*Required</span>
                       ) : (
-                        <div className="settings-delete-wrap">
+                        <div className="settings-action-wrap">
                           <button
-                            className="settings-delete-icon"
+                            className="settings-action-icon"
+                            onClick={() => onStartEditColumn(column)}
+                            disabled={savingColumn}
+                            aria-label="Edit column"
+                            type="button"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
+                            </svg>
+                          </button>
+                          <span className="settings-action-tip" role="tooltip">Edit</span>
+                        </div>
+                      )}
+                      {!column.isCore && !column.isRequired ? (
+                        <div className="settings-action-wrap">
+                          <button
+                            className="settings-action-icon"
                             onClick={() =>
                               setPendingDeleteColumnId((prev) =>
                                 prev === column.id ? null : column.id,
@@ -187,10 +264,10 @@ export function SettingsPage({
                             type="button"
                           >
                             <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v9h-2V9Zm4 0h2v9h-2V9ZM7 9h2v9H7V9Z" />
+                              <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-1 6h2v9H8V9Zm4 0h2v9h-2V9Zm4 0h2v9h-2V9Z" />
                             </svg>
                           </button>
-                          <span className="settings-delete-tip" role="tooltip">Delete</span>
+                          <span className="settings-action-tip" role="tooltip">Delete</span>
                           {pendingDeleteColumnId === column.id ? (
                             <div className="settings-delete-confirm" role="dialog" aria-label="Confirm delete">
                               <p>Are you sure?</p>
@@ -214,7 +291,7 @@ export function SettingsPage({
                             </div>
                           ) : null}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 ))}

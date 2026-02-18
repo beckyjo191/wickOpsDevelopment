@@ -646,6 +646,49 @@ const handleUpdateColumnVisibility = async (access: AccessContext, path: string,
   return json(200, { ok: true, columnId, isVisible });
 };
 
+const handleUpdateColumnLabel = async (access: AccessContext, path: string, body: any) => {
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can manage inventory columns" });
+  }
+
+  const match = path.match(/\/inventory\/columns\/([^/]+)\/label$/);
+  const columnId = match?.[1];
+  if (!columnId) return json(400, { error: "Column id is required" });
+
+  const label = String(body?.label ?? "").trim();
+  if (!label) {
+    return json(400, { error: "Column label is required" });
+  }
+
+  const columnRes = await ddb.send(
+    new GetCommand({ TableName: INVENTORY_COLUMN_TABLE, Key: { id: columnId } }),
+  );
+  const column = columnRes.Item as InventoryColumn | undefined;
+  if (!column) return json(404, { error: "Column not found" });
+  if (normalizeOrgId(column.organizationId) !== access.organizationId) {
+    return json(403, { error: "Column does not belong to organization" });
+  }
+  if (column.isRequired) {
+    return json(400, { error: "Required columns cannot be renamed" });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: INVENTORY_COLUMN_TABLE,
+      Key: { id: columnId },
+      UpdateExpression: "SET #label = :label",
+      ExpressionAttributeNames: {
+        "#label": "label",
+      },
+      ExpressionAttributeValues: {
+        ":label": label,
+      },
+    }),
+  );
+
+  return json(200, { ok: true, columnId, label });
+};
+
 const handleImportCsv = async (access: AccessContext, body: any) => {
   if (!access.canEditInventory) {
     return json(403, { error: "Insufficient permissions" });
@@ -886,6 +929,10 @@ export const handler = async (event: any) => {
 
     if (method === "POST" && /\/inventory\/columns\/[^/]+\/visibility$/.test(path)) {
       return handleUpdateColumnVisibility(access, path, parseBody(event));
+    }
+
+    if (method === "POST" && /\/inventory\/columns\/[^/]+\/label$/.test(path)) {
+      return handleUpdateColumnLabel(access, path, parseBody(event));
     }
 
     if (method === "DELETE" && /\/inventory\/columns\/[^/]+$/.test(path)) {

@@ -20,7 +20,6 @@ const backend = defineBackend({
 });
 
 const inventoryStack = backend.createStack("inventory-storage");
-const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:5173";
 
 const inventoryColumnTable = new Table(inventoryStack, "InventoryColumnTable", {
   partitionKey: { name: "id", type: AttributeType.STRING },
@@ -109,8 +108,3 @@ wireCoreDataTables(backend.stripeWebhook.resources.lambda, {
   user: "write",
   organization: "write",
 });
-
-(backend.createCheckoutSession.resources.lambda as any).addEnvironment(
-  "FRONTEND_URL",
-  frontendUrl,
-);

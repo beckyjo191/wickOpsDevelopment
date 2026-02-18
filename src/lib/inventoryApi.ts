@@ -169,3 +169,18 @@ export const updateInventoryColumnVisibility = async (
     throw new Error((await res.text()) || "Failed to update column visibility");
   }
 };
+
+export const updateInventoryColumnLabel = async (
+  columnId: string,
+  label: string,
+): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/columns/${encodeURIComponent(columnId)}/label`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to update column label");
+  }
+};

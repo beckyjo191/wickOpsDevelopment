@@ -221,6 +221,36 @@ export const extractCsvHeaders = (csvText: string): string[] => {
   return headers.filter((header) => header.length > 0);
 };
 
+const isSpreadsheetFile = (file: File): boolean => {
+  const name = file.name.toLowerCase();
+  return (
+    name.endsWith(".xlsx") ||
+    name.endsWith(".xls") ||
+    file.type.includes("spreadsheetml") ||
+    file.type.includes("ms-excel")
+  );
+};
+
+export const convertImportFileToCsv = async (file: File): Promise<string> => {
+  if (!isSpreadsheetFile(file)) {
+    return await file.text();
+  }
+
+  const XLSX = await import("xlsx");
+  const data = await file.arrayBuffer();
+  const workbook = XLSX.read(data, { type: "array" });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) {
+    throw new Error("Spreadsheet is empty.");
+  }
+  const sheet = workbook.Sheets[firstSheetName];
+  const csvText = XLSX.utils.sheet_to_csv(sheet, { blankrows: false });
+  if (!csvText.trim()) {
+    throw new Error("Spreadsheet does not contain importable data.");
+  }
+  return csvText;
+};
+
 export const createInventoryColumn = async (input: {
   label: string;
 }): Promise<InventoryColumn> => {

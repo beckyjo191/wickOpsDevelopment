@@ -182,6 +182,33 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      const openMenus = Array.from(document.querySelectorAll<HTMLDetailsElement>("details[open]"));
+      for (const menu of openMenus) {
+        if (!target || !menu.contains(target)) {
+          menu.removeAttribute("open");
+        }
+      }
+    };
+
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const openMenus = Array.from(document.querySelectorAll<HTMLDetailsElement>("details[open]"));
+      for (const menu of openMenus) {
+        menu.removeAttribute("open");
+      }
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onEscape);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!(authStatus === "configuring" || (subState.status === "loading" && !subState.loadError))) {
       return;
     }

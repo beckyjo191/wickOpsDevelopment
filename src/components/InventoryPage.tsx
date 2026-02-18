@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
+  convertImportFileToCsv,
   extractCsvHeaders,
   importInventoryCsv,
   isInventoryProvisioningError,
@@ -47,6 +48,10 @@ type CsvImportDialogState = {
   selectedHeaders: string[];
 };
 
+type PasteImportDialogState = {
+  rawText: string;
+};
+
 const createBlankInventoryRow = (
   columns: InventoryColumn[],
   position: number,
@@ -88,6 +93,7 @@ export function InventoryPage({
   const [loadError, setLoadError] = useState<string>("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickRandom(LOADING_LINES));
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
+  const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
   const resizeStateRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   const canEditTable = canEditInventory && activeFilter === "all";
 
@@ -162,6 +168,10 @@ export function InventoryPage({
       [...columns]
         .filter((column) => column.isVisible)
         .sort((a, b) => a.sortOrder - b.sortOrder),
+    [columns],
+  );
+  const allColumns = useMemo(
+    () => [...columns].sort((a, b) => a.sortOrder - b.sortOrder),
     [columns],
   );
   const hasExpirationColumn = columns.some(
@@ -377,17 +387,55 @@ export function InventoryPage({
     });
   }, [rows]);
 
-  const onAddRow = () => {
+  const closeParentDetails = (target: EventTarget | null) => {
+    const element = target as HTMLElement | null;
+    element?.closest("details")?.removeAttribute("open");
+  };
+
+  const onAddRow = (position: "above" | "below", event?: ReactMouseEvent<HTMLElement>) => {
     if (!canEditTable) return;
+    if (event) {
+      closeParentDetails(event.target);
+    }
+    const anchorFromFiltered =
+      filteredRows.find(({ row }) => row.id === selectedRowId)?.row;
+    const anchorRowId = anchorFromFiltered?.id ?? null;
     setRows((prev) => {
-      const created = createBlankInventoryRow(visibleColumns, prev.length);
+      const selectedIndex =
+        anchorRowId ? prev.findIndex((row) => row.id === anchorRowId) : -1;
+      const insertIndex =
+        selectedIndex >= 0
+          ? position === "above"
+            ? selectedIndex
+            : selectedIndex + 1
+          : position === "above"
+            ? 0
+            : prev.length;
+      const created = createBlankInventoryRow(allColumns, insertIndex);
+      const anchorRow = selectedIndex >= 0 ? prev[selectedIndex] : null;
+      if (anchorRow && sortState && sortState.key in created.values) {
+        created.values[sortState.key] = anchorRow.values?.[sortState.key] ?? created.values[sortState.key];
+      }
+      if (anchorRow && locationColumn && effectiveLocationFilter !== "All Locations") {
+        created.values[locationColumn.key] =
+          anchorRow.values?.[locationColumn.key] ?? created.values[locationColumn.key];
+      }
+      if (anchorRow && categoryColumn && effectiveCategoryFilter !== "All Categories") {
+        created.values[categoryColumn.key] =
+          anchorRow.values?.[categoryColumn.key] ?? created.values[categoryColumn.key];
+      }
+      const nextRows = [
+        ...prev.slice(0, insertIndex),
+        created,
+        ...prev.slice(insertIndex),
+      ];
       setSelectedRowId(created.id);
       setDirtyRowIds((ids) => {
         const next = new Set(ids);
         next.add(created.id);
         return next;
       });
-      return [...prev, created];
+      return nextRows;
     });
   };
 
@@ -458,7 +506,7 @@ export function InventoryPage({
     });
     setRows((prev) => {
       if (prev.length <= 1) {
-        const created = createBlankInventoryRow(visibleColumns, 0);
+        const created = createBlankInventoryRow(allColumns, 0);
         setDirtyRowIds((ids) => {
           const next = new Set(ids);
           next.add(created.id);
@@ -469,7 +517,7 @@ export function InventoryPage({
       }
       const nextRows = prev.filter((row) => !idsToDelete.has(row.id));
       if (nextRows.length === 0) {
-        const created = createBlankInventoryRow(visibleColumns, 0);
+        const created = createBlankInventoryRow(allColumns, 0);
         setDirtyRowIds((ids) => {
           const next = new Set(ids);
           next.add(created.id);
@@ -680,13 +728,18 @@ export function InventoryPage({
     importInputRef.current?.click();
   };
 
+  const onOpenPasteImport = () => {
+    if (!canEditInventory || importingCsv) return;
+    setPasteImportDialog({ rawText: "" });
+  };
+
   const onCsvSelected = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.currentTarget.value = "";
     if (!file) return;
     if (!canEditInventory) return;
     try {
-      const csvText = await file.text();
+      const csvText = await convertImportFileToCsv(file);
       const headers = extractCsvHeaders(csvText);
       if (headers.length === 0) {
         throw new Error("Could not detect CSV headers.");
@@ -697,7 +750,7 @@ export function InventoryPage({
         selectedHeaders: [...headers],
       });
     } catch (err: any) {
-      alert(err?.message ?? "Failed to import CSV");
+      alert(err?.message ?? "Failed to import file");
     }
   };
 
@@ -719,6 +772,31 @@ export function InventoryPage({
   const onCancelCsvImport = () => {
     if (importingCsv) return;
     setCsvImportDialog(null);
+  };
+
+  const onCancelPasteImport = () => {
+    if (importingCsv) return;
+    setPasteImportDialog(null);
+  };
+
+  const onConfirmPasteImport = () => {
+    if (!pasteImportDialog) return;
+    const rawText = pasteImportDialog.rawText.trim();
+    if (!rawText) {
+      alert("Paste your CSV or tab-delimited data first.");
+      return;
+    }
+    const headers = extractCsvHeaders(rawText);
+    if (headers.length === 0) {
+      alert("Could not detect headers from pasted data.");
+      return;
+    }
+    setCsvImportDialog({
+      csvText: rawText,
+      headers,
+      selectedHeaders: [...headers],
+    });
+    setPasteImportDialog(null);
   };
 
   const onConfirmCsvImport = async () => {
@@ -816,14 +894,12 @@ export function InventoryPage({
         <header className="app-header">
           <div>
             <h2 className="app-title">Inventory</h2>
-          </div>
-          <div className="app-actions">
             {canEditInventory ? (
-              <>
+              <div className="inventory-header-actions">
                 <input
                   ref={importInputRef}
                   type="file"
-                  accept=".csv,text/csv"
+                  accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                   onChange={(event) => {
                     void onCsvSelected(event);
                   }}
@@ -831,9 +907,25 @@ export function InventoryPage({
                 />
                 {canEditTable ? (
                   <>
-                    <button className="button button-secondary" onClick={onAddRow}>
-                      Add Row
-                    </button>
+                    <details className="inventory-import-menu">
+                      <summary className="inventory-import-trigger">Add Row</summary>
+                      <div className="inventory-import-panel">
+                        <button
+                          type="button"
+                          className="inventory-import-option"
+                          onClick={(event) => onAddRow("above", event)}
+                        >
+                          Add Above Selected
+                        </button>
+                        <button
+                          type="button"
+                          className="inventory-import-option"
+                          onClick={(event) => onAddRow("below", event)}
+                        >
+                          Add Below Selected
+                        </button>
+                      </div>
+                    </details>
                     {rows.length > 1 && selectedRowIds.size > 0 ? (
                       <button className="button button-secondary" onClick={onRemoveSelectedRows}>
                         Delete Selected ({selectedRowIds.size})
@@ -841,13 +933,29 @@ export function InventoryPage({
                     ) : null}
                   </>
                 ) : null}
-                <button
-                  className="button button-secondary"
-                  onClick={onChooseCsvImport}
-                  disabled={importingCsv || saving}
-                >
-                  {importingCsv ? "Importing..." : "Import CSV"}
-                </button>
+                <details className="inventory-import-menu">
+                  <summary className="inventory-import-trigger">
+                    {importingCsv ? "Importing..." : "Import"}
+                  </summary>
+                  <div className="inventory-import-panel">
+                    <button
+                      type="button"
+                      className="inventory-import-option"
+                      onClick={onChooseCsvImport}
+                      disabled={importingCsv || saving}
+                    >
+                      Upload CSV/XLSX
+                    </button>
+                    <button
+                      type="button"
+                      className="inventory-import-option"
+                      onClick={onOpenPasteImport}
+                      disabled={importingCsv || saving}
+                    >
+                      Paste Data
+                    </button>
+                  </div>
+                </details>
                 <button
                   className="button button-primary"
                   onClick={() => void onSave()}
@@ -855,7 +963,7 @@ export function InventoryPage({
                 >
                   {saving ? "Saving..." : "Save Changes"}
                 </button>
-              </>
+              </div>
             ) : null}
           </div>
         </header>
@@ -1082,6 +1190,7 @@ export function InventoryPage({
                       key={`${row.id}-${column.id}`}
                       className={`inventory-col-${column.key}`}
                       style={{ minWidth: getColumnMinWidth(column), width: getAppliedColumnWidth(column) }}
+                      onMouseDown={() => setSelectedRowId(row.id)}
                     >
                       {!canEditTable ? (
                         column.type === "link" ? (
@@ -1173,6 +1282,7 @@ export function InventoryPage({
                         <textarea
                           key={`${row.id}-${column.key}`}
                           defaultValue={String(row.values[column.key] ?? "")}
+                          onFocus={() => setSelectedRowId(row.id)}
                           onBlur={(event) => {
                             onCellChange(rowIndex, column, event.currentTarget.value);
                           }}
@@ -1194,6 +1304,7 @@ export function InventoryPage({
                               ? toDateInputValue(row.values[column.key])
                               : String(row.values[column.key] ?? "")
                           }
+                          onFocus={() => setSelectedRowId(row.id)}
                           onBlur={(event) => onCellChange(rowIndex, column, event.currentTarget.value)}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
@@ -1242,6 +1353,33 @@ export function InventoryPage({
               </button>
               <button className="button button-primary" onClick={() => void onConfirmCsvImport()} disabled={importingCsv}>
                 {importingCsv ? "Importing..." : "Import Selected Columns"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {pasteImportDialog ? (
+        <div className="inventory-import-overlay" role="dialog" aria-modal="true" aria-label="Paste import data">
+          <div className="inventory-import-dialog">
+            <h3 className="inventory-import-title">Paste CSV or tab-delimited data.</h3>
+            <p className="inventory-import-subtitle">
+              Include a header row in the first line.
+            </p>
+            <textarea
+              className="inventory-import-textarea"
+              value={pasteImportDialog.rawText}
+              onChange={(event) =>
+                setPasteImportDialog((prev) => (prev ? { ...prev, rawText: event.target.value } : prev))
+              }
+              placeholder={"itemName,quantity,minQuantity\nWrench,12,4"}
+              rows={10}
+            />
+            <div className="inventory-import-actions">
+              <button className="button button-secondary" onClick={onCancelPasteImport} disabled={importingCsv}>
+                Cancel
+              </button>
+              <button className="button button-primary" onClick={onConfirmPasteImport} disabled={importingCsv}>
+                Continue
               </button>
             </div>
           </div>

@@ -26,11 +26,14 @@ export function SettingsPage({
   onInviteUsers,
 }: SettingsPageProps) {
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
+  const isLockedColumn = (column: InventoryColumn): boolean =>
+    column.isCore || column.isRequired || nonEditableKeys.has(column.key);
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [newColumnName, setNewColumnName] = useState("");
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [savingColumn, setSavingColumn] = useState(false);
   const [pendingDeleteColumnId, setPendingDeleteColumnId] = useState<string | null>(null);
+  const [selectedDeleteColumnIds, setSelectedDeleteColumnIds] = useState<Set<string>>(new Set());
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState("");
 
@@ -62,6 +65,17 @@ export function SettingsPage({
     };
   }, [canManageInventoryColumns]);
 
+  useEffect(() => {
+    setSelectedDeleteColumnIds((prev) => {
+      if (prev.size === 0) return prev;
+      const validIds = new Set(
+        columns.filter((column) => !isLockedColumn(column)).map((column) => column.id),
+      );
+      const next = new Set(Array.from(prev).filter((id) => validIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [columns]);
+
   const onAddColumn = async () => {
     if (!canManageInventoryColumns || !newColumnName.trim()) return;
     setSavingColumn(true);
@@ -87,6 +101,43 @@ export function SettingsPage({
       setPendingDeleteColumnId(null);
     } catch (err: any) {
       alert(err?.message ?? "Failed to remove column");
+    } finally {
+      setSavingColumn(false);
+    }
+  };
+
+  const onToggleDeleteSelectColumn = (column: InventoryColumn) => {
+    if (isLockedColumn(column)) return;
+    setSelectedDeleteColumnIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(column.id)) {
+        next.delete(column.id);
+      } else {
+        next.add(column.id);
+      }
+      return next;
+    });
+  };
+
+  const onDeleteSelectedColumns = async () => {
+    if (!canManageInventoryColumns || selectedDeleteColumnIds.size === 0) return;
+    const count = selectedDeleteColumnIds.size;
+    const confirmed = window.confirm(
+      `Delete ${count} selected ${count === 1 ? "column" : "columns"}?`,
+    );
+    if (!confirmed) return;
+
+    setSavingColumn(true);
+    try {
+      const ids = Array.from(selectedDeleteColumnIds);
+      for (const columnId of ids) {
+        await deleteInventoryColumn(columnId);
+      }
+      setColumns((prev) => prev.filter((item) => !selectedDeleteColumnIds.has(item.id)));
+      setSelectedDeleteColumnIds(new Set());
+      setPendingDeleteColumnId(null);
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to remove selected columns");
     } finally {
       setSavingColumn(false);
     }
@@ -193,11 +244,21 @@ export function SettingsPage({
                   Add Column
                 </button>
               </div>
+              <div className="settings-columns-batch-actions">
+                <button
+                  className="button button-ghost"
+                  onClick={() => void onDeleteSelectedColumns()}
+                  disabled={savingColumn || selectedDeleteColumnIds.size === 0}
+                  type="button"
+                >
+                  Delete Selected ({selectedDeleteColumnIds.size})
+                </button>
+              </div>
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading columns...</div> : null}
                 {columns.map((column) => (
                   (() => {
-                    const isLocked = column.isCore || column.isRequired || nonEditableKeys.has(column.key);
+                    const isLocked = isLockedColumn(column);
                     return (
                   <div key={column.id} className="settings-column-row">
                     <div className="settings-column-visibility">
@@ -236,6 +297,17 @@ export function SettingsPage({
                       )}
                     </div>
                     <div className="settings-column-actions">
+                      {!isLocked ? (
+                        <label className="settings-column-select">
+                          <input
+                            type="checkbox"
+                            checked={selectedDeleteColumnIds.has(column.id)}
+                            onChange={() => onToggleDeleteSelectColumn(column)}
+                            disabled={savingColumn}
+                          />
+                          <span>Select</span>
+                        </label>
+                      ) : null}
                       {isLocked ? (
                         <span className="settings-core-pill">*Required</span>
                       ) : (

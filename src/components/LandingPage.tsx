@@ -19,14 +19,14 @@ export function LandingPage() {
       <main className="lp-main">
         <section className="lp-hero">
           <img className="lp-hero-logo" src={logoOriginal} alt="WickOps Systems" />
-          <p className="lp-kicker">Built for operational teams</p>
-          <h1>WickOps helps departments and small businesses run equipment, users, and workflows in one place.</h1>
+          <p className="lp-kicker">Built for real life operations</p>
+          <h1>WickOps builds organization systems that give you your time back.</h1>
           <p className="lp-sub">
-            From fire departments to field service teams, WickOps gives organizations a simple system to manage access,
-            track inventory, and keep operations moving.
+            Spend less time digging through cabinets, pantry shelves, and supply bins. From homes to field teams,
+            WickOps helps you track what you have, what you need, and what to reorder in a few clicks.
           </p>
           <div className="lp-cta-row">
-            <a className="lp-button lp-button-primary" href="/signup">Create Organization Account</a>
+            <a className="lp-button lp-button-primary" href="/signup">Create Account</a>
             <a className="lp-button lp-button-secondary" href="/app">Go To Existing Account</a>
           </div>
           <p className="lp-signup-note">
@@ -37,17 +37,45 @@ export function LandingPage() {
 
         <section className="lp-pillars" aria-label="Core value">
           <article>
-            <h2>Role-Based Access</h2>
-            <p>Clear permissions for View Only, Editor, and Administrator users.</p>
+            <h2>Less Searching, More Doing</h2>
+            <p>Know what is on hand before anyone opens another cabinet, truck bin, or closet.</p>
           </article>
           <article>
-            <h2>Operational Clarity</h2>
-            <p>Single place for subscriptions, team onboarding, and inventory operations.</p>
+            <h2>Fast Reorder Actions</h2>
+            <p>With a couple of clicks, reorder what matters and keep supplies ready.</p>
           </article>
           <article>
-            <h2>Organization-Ready</h2>
-            <p>Designed for real teams, real workflows, and field-first operations.</p>
+            <h2>Built Around Your Life</h2>
+            <p>At WickOps, you are the priority. We move operational load off your plate.</p>
           </article>
+        </section>
+
+        <section className="lp-use-cases" aria-label="Who uses WickOps">
+          <article>
+            <h2>Home & Family</h2>
+            <p>Parents can track pantry items while kids submit quick forms from a phone or iPad.</p>
+          </article>
+          <article>
+            <h2>Service Businesses</h2>
+            <p>Plumbing and field teams can track parts, job stock, and usage in one place.</p>
+          </article>
+          <article>
+            <h2>Supply-Critical Teams</h2>
+            <p>Manage gear, medical supplies, and operational checklists without spreadsheet chaos.</p>
+          </article>
+        </section>
+
+        <section className="lp-modules" aria-label="Module flexibility">
+          <h2>Use as many modules as you need, or as few as you want.</h2>
+          <div className="lp-module-tags">
+            <span>Inventory & Reorder</span>
+            <span>Gear Tracking</span>
+            <span>Truck Checks</span>
+            <span>Mobile Forms</span>
+            <span>Expense Tracking (MoM / YoY)</span>
+            <span>Custom Workflows</span>
+          </div>
+          <p>Practical systems for busy people.</p>
         </section>
 
       </main>

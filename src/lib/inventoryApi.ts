@@ -84,7 +84,10 @@ export const loadInventoryBootstrap = async (): Promise<{
   };
 };
 
-export const saveInventoryItems = async (rows: InventoryRow[]): Promise<void> => {
+export const saveInventoryItems = async (
+  rows: InventoryRow[],
+  deletedRowIds: string[] = [],
+): Promise<void> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/items/save`, {
     method: "POST",
@@ -96,6 +99,7 @@ export const saveInventoryItems = async (rows: InventoryRow[]): Promise<void> =>
         values: row.values,
         createdAt: row.createdAt,
       })),
+      deletedRowIds,
     }),
   });
 
@@ -104,9 +108,29 @@ export const saveInventoryItems = async (rows: InventoryRow[]): Promise<void> =>
   }
 };
 
+export const importInventoryCsv = async (
+  csvText: string,
+): Promise<{
+  ok: boolean;
+  createdCount: number;
+  updatedCount: number;
+  importedRows: number;
+  createdColumns: Array<{ id: string; key: string; label: string }>;
+}> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/import-csv`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ csvText }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to import CSV");
+  }
+  return await res.json();
+};
+
 export const createInventoryColumn = async (input: {
   label: string;
-  type: "text" | "number" | "date" | "link" | "boolean";
 }): Promise<InventoryColumn> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/columns`, {
@@ -128,5 +152,20 @@ export const deleteInventoryColumn = async (columnId: string): Promise<void> => 
   });
   if (!res.ok) {
     throw new Error((await res.text()) || "Failed to delete column");
+  }
+};
+
+export const updateInventoryColumnVisibility = async (
+  columnId: string,
+  isVisible: boolean,
+): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/columns/${encodeURIComponent(columnId)}/visibility`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isVisible }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to update column visibility");
   }
 };

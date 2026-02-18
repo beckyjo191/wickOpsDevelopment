@@ -1,9 +1,10 @@
+import type { MouseEvent } from "react";
 import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 
 interface AppToolbarProps {
   currentView: "dashboard" | "inventory" | "invite" | "settings";
   userName: string;
-  onGoToDashboard: () => void;
+  onGoToInventory: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
 }
@@ -11,10 +12,15 @@ interface AppToolbarProps {
 export function AppToolbar({
   currentView,
   userName,
-  onGoToDashboard,
+  onGoToInventory,
   onOpenSettings,
   onLogout,
 }: AppToolbarProps) {
+  const closeMenu = (event: MouseEvent<HTMLButtonElement>) => {
+    const details = event.currentTarget.closest("details");
+    details?.removeAttribute("open");
+  };
+
   return (
     <header className="app-toolbar">
       <a className="app-toolbar-logo-link" href="/">
@@ -22,23 +28,43 @@ export function AppToolbar({
         <span className="app-toolbar-brand-text">WickOps Systems</span>
       </a>
 
-      <button
-        className="app-toolbar-dashboard-link"
-        onClick={onGoToDashboard}
-        aria-current={currentView === "dashboard" ? "page" : undefined}
-      >
-        Dashboard
-      </button>
+      <details className="app-module-menu">
+        <summary className="app-module-menu-trigger">Modules</summary>
+        <div className="app-module-menu-panel">
+          <button
+            className="app-module-menu-item"
+            onClick={(event) => {
+              closeMenu(event);
+              onGoToInventory();
+            }}
+            aria-current={currentView === "inventory" ? "page" : undefined}
+          >
+            Inventory
+          </button>
+        </div>
+      </details>
 
       <details className="app-user-menu">
         <summary className="app-user-menu-trigger">
           {userName}
         </summary>
         <div className="app-user-menu-panel">
-          <button className="app-user-menu-item" onClick={onOpenSettings}>
+          <button
+            className="app-user-menu-item"
+            onClick={(event) => {
+              closeMenu(event);
+              onOpenSettings();
+            }}
+          >
             Settings
           </button>
-          <button className="app-user-menu-item app-user-menu-item-danger" onClick={onLogout}>
+          <button
+            className="app-user-menu-item app-user-menu-item-danger"
+            onClick={(event) => {
+              closeMenu(event);
+              onLogout();
+            }}
+          >
             Logout
           </button>
         </div>

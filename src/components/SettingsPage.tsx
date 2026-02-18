@@ -3,27 +3,32 @@ import {
   createInventoryColumn,
   deleteInventoryColumn,
   loadInventoryBootstrap,
+  updateInventoryColumnVisibility,
   type InventoryColumn,
 } from "../lib/inventoryApi";
 
 interface SettingsPageProps {
   canInviteMore: boolean;
+  seatsRemaining: number;
+  seatLimit: number;
+  seatsUsed: number;
   canManageInventoryColumns: boolean;
   onInviteUsers: () => void;
-  onBack: () => void;
 }
 
 export function SettingsPage({
   canInviteMore,
+  seatsRemaining,
+  seatLimit,
+  seatsUsed,
   canManageInventoryColumns,
   onInviteUsers,
-  onBack,
 }: SettingsPageProps) {
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [newColumnName, setNewColumnName] = useState("");
-  const [newColumnType, setNewColumnType] = useState<InventoryColumn["type"]>("text");
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [savingColumn, setSavingColumn] = useState(false);
+  const [pendingDeleteColumnId, setPendingDeleteColumnId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!canManageInventoryColumns) return;
@@ -59,11 +64,9 @@ export function SettingsPage({
     try {
       const created = await createInventoryColumn({
         label: newColumnName.trim(),
-        type: newColumnType,
       });
       setColumns((prev) => [...prev, created].sort((a, b) => a.sortOrder - b.sortOrder));
       setNewColumnName("");
-      setNewColumnType("text");
     } catch (err: any) {
       alert(err?.message ?? "Failed to add column");
     } finally {
@@ -71,14 +74,32 @@ export function SettingsPage({
     }
   };
 
-  const onDeleteColumn = async (column: InventoryColumn) => {
-    if (!canManageInventoryColumns || column.isCore) return;
+  const onDeleteColumn = async (columnId: string) => {
+    if (!canManageInventoryColumns) return;
     setSavingColumn(true);
     try {
-      await deleteInventoryColumn(column.id);
-      setColumns((prev) => prev.filter((item) => item.id !== column.id));
+      await deleteInventoryColumn(columnId);
+      setColumns((prev) => prev.filter((item) => item.id !== columnId));
+      setPendingDeleteColumnId(null);
     } catch (err: any) {
       alert(err?.message ?? "Failed to remove column");
+    } finally {
+      setSavingColumn(false);
+    }
+  };
+
+  const onToggleColumnVisibility = async (column: InventoryColumn) => {
+    if (!canManageInventoryColumns) return;
+    setSavingColumn(true);
+    try {
+      await updateInventoryColumnVisibility(column.id, !column.isVisible);
+      setColumns((prev) =>
+        prev.map((item) =>
+          item.id === column.id ? { ...item, isVisible: !item.isVisible } : item,
+        ),
+      );
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to update column visibility");
     } finally {
       setSavingColumn(false);
     }
@@ -92,34 +113,34 @@ export function SettingsPage({
             <h2 className="app-title">Organization Settings</h2>
             <p className="app-subtitle">Manage account profile, modules, and team access settings.</p>
           </div>
+          <div className="app-actions">
+            <button
+              className="button button-primary"
+              onClick={onInviteUsers}
+              disabled={!canInviteMore}
+            >
+              Invite More Users
+            </button>
+          </div>
         </header>
 
-        <div className="metric-grid">
-          <article className="metric-card">
-            <span className="metric-label">Access Model</span>
-            <strong className="metric-value">Role-Based</strong>
-          </article>
-          <article className="metric-card">
-            <span className="metric-label">User Roles</span>
-            <strong className="metric-value">3 Tiers</strong>
-          </article>
-          <article className="metric-card">
-            <span className="metric-label">Settings Scope</span>
-            <strong className="metric-value">Organization</strong>
-          </article>
+        <div className="status-panel">
+          {canInviteMore
+            ? `You have ${seatsRemaining} invite${seatsRemaining === 1 ? "" : "s"} remaining (${seatsUsed}/${seatLimit} seats used).`
+            : `No invite seats remaining (${seatsUsed}/${seatLimit} seats used).`}
         </div>
 
         <div className="empty-state spacer-top">
           Configuration sections for profile, modules, billing, and notifications will live here.
         </div>
 
-        <div className="settings-section spacer-top">
-          <h3 className="settings-section-title">Inventory Columns</h3>
+        <details className="settings-section spacer-top">
+          <summary className="settings-section-title">Inventory Columns</summary>
           {canManageInventoryColumns ? (
             <>
               <p className="settings-section-copy">
-                Add or remove custom columns. Core inventory columns for expiration and stock are
-                protected.
+                Add or remove custom columns. *Required columns cannot be removed, but can be shown
+                or hidden.
               </p>
               <div className="settings-columns-add">
                 <input
@@ -128,19 +149,6 @@ export function SettingsPage({
                   value={newColumnName}
                   onChange={(event) => setNewColumnName(event.target.value)}
                 />
-                <select
-                  className="select"
-                  value={newColumnType}
-                  onChange={(event) =>
-                    setNewColumnType(event.target.value as InventoryColumn["type"])
-                  }
-                >
-                  <option value="text">Text</option>
-                  <option value="number">Number</option>
-                  <option value="date">Date</option>
-                  <option value="link">Link</option>
-                  <option value="boolean">True/False</option>
-                </select>
                 <button
                   className="button button-secondary"
                   onClick={onAddColumn}
@@ -153,20 +161,61 @@ export function SettingsPage({
                 {loadingColumns ? <div>Loading columns...</div> : null}
                 {columns.map((column) => (
                   <div key={column.id} className="settings-column-row">
-                    <span>
-                      {column.label} <em>({column.type})</em>
-                    </span>
-                    {column.isCore ? (
-                      <span className="settings-core-pill">Core</span>
-                    ) : (
-                      <button
-                        className="button button-ghost"
-                        onClick={() => onDeleteColumn(column)}
+                    <label className="settings-column-visibility">
+                      <input
+                        type="checkbox"
+                        checked={column.isVisible}
+                        onChange={() => onToggleColumnVisibility(column)}
                         disabled={savingColumn}
-                      >
-                        Remove
-                      </button>
-                    )}
+                      />
+                      <span>{column.label}</span>
+                    </label>
+                    <div className="settings-column-actions">
+                      {column.isCore ? (
+                        <span className="settings-core-pill">*Required</span>
+                      ) : (
+                        <div className="settings-delete-wrap">
+                          <button
+                            className="settings-delete-icon"
+                            onClick={() =>
+                              setPendingDeleteColumnId((prev) =>
+                                prev === column.id ? null : column.id,
+                              )
+                            }
+                            disabled={savingColumn}
+                            aria-label="Delete column"
+                            type="button"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v9h-2V9Zm4 0h2v9h-2V9ZM7 9h2v9H7V9Z" />
+                            </svg>
+                          </button>
+                          <span className="settings-delete-tip" role="tooltip">Delete</span>
+                          {pendingDeleteColumnId === column.id ? (
+                            <div className="settings-delete-confirm" role="dialog" aria-label="Confirm delete">
+                              <p>Are you sure?</p>
+                              <div className="settings-delete-confirm-actions">
+                                <button
+                                  className="button button-secondary settings-inline-action"
+                                  onClick={() => setPendingDeleteColumnId(null)}
+                                  type="button"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  className="button button-ghost settings-inline-action"
+                                  onClick={() => void onDeleteColumn(column.id)}
+                                  disabled={savingColumn}
+                                  type="button"
+                                >
+                                  OK
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -176,18 +225,7 @@ export function SettingsPage({
               Only administrators can manage inventory columns.
             </p>
           )}
-        </div>
-
-        <div className="app-actions">
-          {canInviteMore && (
-            <button className="button button-primary" onClick={onInviteUsers}>
-              Invite More Users
-            </button>
-          )}
-          <button className="button button-secondary" onClick={onBack}>
-            Back To Dashboard
-          </button>
-        </div>
+        </details>
       </div>
     </section>
   );

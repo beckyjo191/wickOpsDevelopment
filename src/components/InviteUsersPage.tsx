@@ -10,14 +10,12 @@ type InviteEntry = {
 interface InviteUsersPageProps {
   maxUsers: number;      // total seats allowed
   seatsUsed: number;     // current seats already used
-  onBackToDashboard: () => void;
   onContinue: (invites: InviteEntry[]) => Promise<void>;
 }
 
 export function InviteUsersPage({
   maxUsers,
   seatsUsed,
-  onBackToDashboard,
   onContinue,
 }: InviteUsersPageProps) {
   const seatsRemaining = maxUsers - seatsUsed;
@@ -104,10 +102,6 @@ export function InviteUsersPage({
         </div>
 
         <div className="app-actions">
-          <button className="button button-secondary" onClick={onBackToDashboard}>
-            Back To Dashboard
-          </button>
-
           {invites.length < seatsRemaining && (
             <button className="button button-secondary" onClick={addEmailField} disabled={loading}>
               Add Another User

@@ -11,12 +11,30 @@ import { authFetch } from "./lib/authFetch";
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
 const INVITES_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVITES_API_BASE_URL);
+const VIEW_STORAGE_KEY = "wickops.activeView";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
+type AppView = "dashboard" | "inventory" | "invite" | "settings";
+type BreadcrumbItem = {
+  label: string;
+  onClick?: () => void;
+};
+
+const isAppView = (value: unknown): value is AppView =>
+  value === "dashboard" || value === "inventory" || value === "invite" || value === "settings";
+
+const loadInitialView = (): AppView => {
+  try {
+    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
+    return isAppView(saved) ? saved : "dashboard";
+  } catch {
+    return "dashboard";
+  }
+};
 
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
-  const [view, setView] = useState<"dashboard" | "inventory" | "invite" | "settings">("dashboard");
+  const [view, setView] = useState<AppView>(() => loadInitialView());
 
   const [subState, setSubState] = useState<{
     status: SubscriptionState;
@@ -68,6 +86,7 @@ export default function App() {
         }
       } catch (err) {
         console.error("Subscription check error:", err);
+        setView("dashboard");
         setSubState({
           status: "loading",
           seatLimit: 1,
@@ -93,6 +112,14 @@ export default function App() {
       if (pollInterval) clearInterval(pollInterval);
     };
   }, [authStatus]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, view);
+    } catch {
+      // No-op: storage may be unavailable in private mode or locked environments.
+    }
+  }, [view]);
 
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
     return <div>Loading...</div>;
@@ -134,30 +161,52 @@ export default function App() {
   const canInviteMore = subState.canInviteUsers && seatsRemaining > 0;
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
+  const breadcrumbs: BreadcrumbItem[] =
+    view === "inventory"
+      ? [
+          { label: "Dashboard", onClick: () => setView("dashboard") },
+          { label: "Inventory" },
+        ]
+      : view === "settings"
+        ? [
+            { label: "Dashboard", onClick: () => setView("dashboard") },
+            { label: "Settings" },
+          ]
+        : view === "invite"
+          ? [
+              { label: "Dashboard", onClick: () => setView("dashboard") },
+              { label: "Settings", onClick: () => setView("settings") },
+              { label: "Invite Users" },
+            ]
+          : [{ label: "Dashboard" }];
 
   let content: JSX.Element;
   if (view === "settings") {
     content = (
       <SettingsPage
         canInviteMore={canInviteMore}
+        seatsRemaining={seatsRemaining}
+        seatLimit={subState.seatLimit}
+        seatsUsed={subState.seatsUsed}
         canManageInventoryColumns={canManageInventoryColumns}
         onInviteUsers={() => {
           if (!canInviteMore) return;
           setView("invite");
         }}
-        onBack={() => setView("dashboard")}
       />
     );
   } else if (view === "inventory") {
-    content = <InventoryPage canEditInventory={canEditInventory} />;
+    content = (
+      <InventoryPage
+        canEditInventory={canEditInventory}
+        canManageInventoryColumns={canManageInventoryColumns}
+      />
+    );
   } else if (view === "invite") {
     content = canInviteMore ? (
       <InviteUsersPage
         maxUsers={subState.seatLimit}  // total seats
         seatsUsed={subState.seatsUsed} // seats already used
-        onBackToDashboard={() => {
-          setView("dashboard");
-        }}
         onContinue={async (invites) => {
           if (!INVITES_API_BASE_URL) {
             throw new Error("Missing VITE_INVITES_API_BASE_URL");
@@ -200,10 +249,34 @@ export default function App() {
       <AppToolbar
         currentView={view}
         userName={userName}
-        onGoToDashboard={() => setView("dashboard")}
+        onGoToInventory={() => setView("inventory")}
         onOpenSettings={() => setView("settings")}
         onLogout={signOut}
       />
+      <nav className="app-breadcrumbs" aria-label="Breadcrumb">
+        {breadcrumbs.map((item, index) => (
+          <span key={`${item.label}-${index}`} className="app-breadcrumb-item">
+            {item.onClick ? (
+              <button
+                type="button"
+                className="app-breadcrumb-link"
+                onClick={item.onClick}
+              >
+                {item.label}
+              </button>
+            ) : (
+              <span className="app-breadcrumb-current" aria-current="page">
+                {item.label}
+              </span>
+            )}
+            {index < breadcrumbs.length - 1 ? (
+              <span className="app-breadcrumb-separator" aria-hidden="true">
+                &gt;
+              </span>
+            ) : null}
+          </span>
+        ))}
+      </nav>
       {content}
     </section>
   );

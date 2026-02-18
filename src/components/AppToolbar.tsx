@@ -4,6 +4,7 @@ import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 interface AppToolbarProps {
   currentView: "dashboard" | "inventory" | "invite" | "settings";
   userName: string;
+  orgName?: string;
   onGoToInventory: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
@@ -12,6 +13,7 @@ interface AppToolbarProps {
 export function AppToolbar({
   currentView,
   userName,
+  orgName,
   onGoToInventory,
   onOpenSettings,
   onLogout,
@@ -49,6 +51,11 @@ export function AppToolbar({
           {userName}
         </summary>
         <div className="app-user-menu-panel">
+          {orgName ? (
+            <div className="app-user-menu-org" aria-label="Current organization">
+              {orgName}
+            </div>
+          ) : null}
           <button
             className="app-user-menu-item"
             onClick={(event) => {

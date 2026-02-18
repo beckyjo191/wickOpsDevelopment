@@ -7,8 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview",
-    "migrate:inventory:org-tables": "node scripts/migrate-org-inventory-tables.mjs"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@aws-amplify/auth": "^6.18.0",

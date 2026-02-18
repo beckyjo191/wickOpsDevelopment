@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   importInventoryCsv,
+  isInventoryProvisioningError,
   loadInventoryBootstrap,
   saveInventoryItems,
   updateInventoryColumnVisibility,
@@ -19,6 +20,7 @@ interface InventoryPageProps {
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
 const AUTOSAVE_DELAY_MS = 20000;
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "wickops.inventory.columnWidths:";
+const DEFAULT_PROVISIONING_RETRY_MS = 2000;
 
 const createBlankInventoryRow = (
   columns: InventoryColumn[],
@@ -59,6 +61,7 @@ export function InventoryPage({
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [loadError, setLoadError] = useState<string>("");
+  const [loadingMessage, setLoadingMessage] = useState("Loading inventory...");
   const resizeStateRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
   const canEditTable = canEditInventory && activeFilter === "all";
 
@@ -86,16 +89,28 @@ export function InventoryPage({
     const load = async () => {
       setLoading(true);
       setLoadError("");
+      setLoadingMessage("Loading inventory...");
 
-      try {
-        const bootstrap = await loadInventoryBootstrap();
-        if (cancelled) return;
-        applyBootstrap(bootstrap);
-      } catch (err: any) {
-        if (cancelled) return;
-        setLoadError(err?.message ?? "Failed to load inventory");
-      } finally {
-        if (!cancelled) setLoading(false);
+      while (!cancelled) {
+        try {
+          const bootstrap = await loadInventoryBootstrap();
+          if (cancelled) return;
+          applyBootstrap(bootstrap);
+          setLoading(false);
+          return;
+        } catch (err: any) {
+          if (cancelled) return;
+          if (isInventoryProvisioningError(err)) {
+            setLoadingMessage("Preparing your inventory table...");
+            const retryAfterMs =
+              Number(err.retryAfterMs) > 0 ? Number(err.retryAfterMs) : DEFAULT_PROVISIONING_RETRY_MS;
+            await new Promise((resolve) => window.setTimeout(resolve, retryAfterMs));
+            continue;
+          }
+          setLoadError(err?.message ?? "Failed to load inventory");
+          setLoading(false);
+          return;
+        }
       }
     };
 
@@ -694,7 +709,10 @@ export function InventoryPage({
   if (loading) {
     return (
       <section className="app-content">
-        <div className="app-card app-card--inventory">Loading inventory...</div>
+        <div className="app-card app-card--inventory app-loading-card">
+          <span className="app-spinner" aria-hidden="true" />
+          <span>{loadingMessage}</span>
+        </div>
       </section>
     );
   }

@@ -173,6 +173,15 @@
   z-index: 20;
 }
 
+.app-user-menu-org {
+  padding: 0.35rem 0.6rem 0.45rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #4a6279;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.15rem;
+}
+
 .app-user-menu-item {
   height: 34px;
   border-radius: 2px;
@@ -253,6 +262,27 @@
   box-shadow: none;
   border-color: #aebfd1;
   padding: 1rem;
+}
+
+.app-loading-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.app-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #c1d0de;
+  border-top-color: #205987;
+  border-radius: 999px;
+  animation: app-spinner-rotate 800ms linear infinite;
+}
+
+@keyframes app-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .app-header {

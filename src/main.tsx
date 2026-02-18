@@ -11,7 +11,9 @@ import { LandingPage } from './components/LandingPage';
 Amplify.configure(outputs);
 
 const pathname = window.location.pathname;
-const showLanding = pathname === "/";
+const search = new URLSearchParams(window.location.search);
+const checkoutSuccess = search.get("checkout") === "success";
+const showLanding = pathname === "/" && !checkoutSuccess;
 const authInitialState = pathname === "/signup" ? "signUp" : "signIn";
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

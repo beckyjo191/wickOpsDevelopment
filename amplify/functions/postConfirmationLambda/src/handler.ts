@@ -10,6 +10,7 @@ import {
   CognitoIdentityProviderClient,
   AdminAddUserToGroupCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
+import { randomUUID } from "node:crypto";
 
 const ddb = DynamoDBDocumentClient.from(
   new DynamoDBClient({ region: process.env.AWS_REGION || "us-east-2" })
@@ -162,45 +163,30 @@ export const handler: Handler = async (event) => {
     ? `Personal - ${displayName}`
     : orgNameInput.trim();
 
+  // Never derive org identity from display text; use opaque random IDs to prevent name collisions.
   const organizationId = isPersonal
-    ? `personal_${normalizedEmail.replace(/[^a-zA-Z0-9]/g, "_")}`
-    : organizationName.toLowerCase().replace(/\s+/g, "_");
+    ? `personal_${randomUUID().replace(/-/g, "")}`
+    : `org_${randomUUID().replace(/-/g, "")}`;
 
   const seatLimit = isPersonal ? 1 : 5;
-  let isAdmin = false;
+  const isAdmin = true;
 
-  // Check org exists
-  const orgResult = await ddb.send(
-    new GetCommand({ TableName: ORG_TABLE, Key: { id: organizationId } })
+  await ddb.send(
+    new PutCommand({
+      TableName: ORG_TABLE,
+      Item: {
+        id: organizationId,
+        name: organizationName,
+        type: isPersonal ? "PERSONAL" : "ORG",
+        seatLimit,
+        seatsUsed: 1,
+        plan: "Free",
+        paymentStatus: "Pending",
+        createdAt: new Date().toISOString(),
+      },
+      ConditionExpression: "attribute_not_exists(id)",
+    })
   );
-
-  if (!orgResult.Item) {
-    isAdmin = true;
-    await ddb.send(
-      new PutCommand({
-        TableName: ORG_TABLE,
-        Item: {
-          id: organizationId,
-          name: organizationName,
-          type: isPersonal ? "PERSONAL" : "ORG",
-          seatLimit,
-          seatsUsed: 1,
-          plan: "Free",
-          paymentStatus: "Pending",
-          createdAt: new Date().toISOString(),
-        },
-      })
-    );
-  } else {
-    await ddb.send(
-      new UpdateCommand({
-        TableName: ORG_TABLE,
-        Key: { id: organizationId },
-        UpdateExpression: "SET seatsUsed = seatsUsed + :inc",
-        ExpressionAttributeValues: { ":inc": 1 },
-      })
-    );
-  }
 
   // Create user with Cognito UUID as id
   await ddb.send(
@@ -211,7 +197,7 @@ export const handler: Handler = async (event) => {
         email: normalizedEmail,
         displayName,
         organizationId,
-        role: isAdmin ? "ADMIN" : "MEMBER",
+        role: "ADMIN",
         accessSuspended: true, // until payment confirmed
         createdAt: new Date().toISOString(),
       },

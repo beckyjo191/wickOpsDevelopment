@@ -12,6 +12,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
 const INVITES_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVITES_API_BASE_URL);
 const VIEW_STORAGE_KEY = "wickops.activeView";
+const SUBSCRIPTION_RETRY_MS = 2000;
+const MAX_SUBSCRIPTION_RETRIES = 6;
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 type AppView = "dashboard" | "inventory" | "invite" | "settings";
@@ -38,6 +40,9 @@ export default function App() {
 
   const [subState, setSubState] = useState<{
     status: SubscriptionState;
+    displayName: string;
+    organizationId: string;
+    orgName: string;
     seatLimit: number;
     seatsUsed: number;
     accessSuspended: boolean;
@@ -46,6 +51,9 @@ export default function App() {
     loadError: boolean;
   }>({
     status: "loading",
+    displayName: "",
+    organizationId: "",
+    orgName: "",
     seatLimit: 1,
     seatsUsed: 0,
     accessSuspended: false,
@@ -58,13 +66,31 @@ export default function App() {
     if (authStatus !== "authenticated") return;
 
     let pollInterval: number | undefined;
+    let retryTimeout: number | undefined;
+    let cancelled = false;
+    let consecutiveFailures = 0;
+
+    const checkoutSuccess =
+      window.location.pathname === "/success" ||
+      new URLSearchParams(window.location.search).get("checkout") === "success";
 
     const checkSubscription = async () => {
+      if (cancelled) return;
       try {
         const res = await authFetch(`${API_BASE_URL}/user-subscription`);
+        if (res.status === 202) {
+          consecutiveFailures = 0;
+          setSubState((prev) => ({
+            ...prev,
+            status: "loading",
+            loadError: false,
+          }));
+          return;
+        }
         if (!res.ok) throw new Error("Subscription check failed");
 
         const data = await res.json();
+        consecutiveFailures = 0;
 
         const status =
           data.subscribed && !data.accessSuspended
@@ -73,6 +99,9 @@ export default function App() {
 
         setSubState({
           status,
+          displayName: String(data.displayName ?? ""),
+          organizationId: String(data.organizationId ?? ""),
+          orgName: String(data.orgName ?? ""),
           seatLimit: data.seatLimit ?? 1,
           seatsUsed: data.seatsUsed ?? 0,
           accessSuspended: !!data.accessSuspended,
@@ -86,9 +115,27 @@ export default function App() {
         }
       } catch (err) {
         console.error("Subscription check error:", err);
+        consecutiveFailures += 1;
+        if (checkoutSuccess || consecutiveFailures < MAX_SUBSCRIPTION_RETRIES) {
+          setSubState((prev) => ({
+            ...prev,
+            status: "loading",
+            loadError: false,
+          }));
+          if (!checkoutSuccess) {
+            if (retryTimeout) window.clearTimeout(retryTimeout);
+            retryTimeout = window.setTimeout(() => {
+              void checkSubscription();
+            }, SUBSCRIPTION_RETRY_MS);
+          }
+          return;
+        }
         setView("dashboard");
         setSubState({
           status: "loading",
+          displayName: "",
+          organizationId: "",
+          orgName: "",
           seatLimit: 1,
           seatsUsed: 0,
           accessSuspended: false,
@@ -99,11 +146,7 @@ export default function App() {
       }
     };
 
-    checkSubscription();
-
-    const checkoutSuccess =
-      window.location.pathname === "/success" ||
-      new URLSearchParams(window.location.search).get("checkout") === "success";
+    void checkSubscription();
 
     if (checkoutSuccess) {
       pollInterval = window.setInterval(checkSubscription, 3000);
@@ -113,7 +156,9 @@ export default function App() {
     }
 
     return () => {
+      cancelled = true;
       if (pollInterval) clearInterval(pollInterval);
+      if (retryTimeout) window.clearTimeout(retryTimeout);
     };
   }, [authStatus]);
 
@@ -157,6 +202,7 @@ export default function App() {
 
   const userEmail = user?.attributes?.email ?? user?.signInDetails?.loginId ?? "";
   const userName =
+    subState.displayName.trim() ||
     user?.attributes?.name?.trim() ||
     user?.attributes?.preferred_username?.trim() ||
     userEmail ||
@@ -253,6 +299,7 @@ export default function App() {
       <AppToolbar
         currentView={view}
         userName={userName}
+        orgName={subState.orgName}
         onGoToInventory={() => setView("inventory")}
         onOpenSettings={() => setView("settings")}
         onLogout={signOut}

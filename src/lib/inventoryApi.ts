@@ -23,6 +23,12 @@ type ApiItem = {
   updatedAtCustom: string;
 };
 
+type InventoryProvisioningPayload = {
+  error?: string;
+  code?: string;
+  retryAfterMs?: number;
+};
+
 export type InventoryAccess = {
   userId: string;
   organizationId: string;
@@ -39,6 +45,20 @@ export type InventoryRow = {
   values: Record<string, string | number | boolean | null>;
   createdAt?: string;
 };
+
+export class InventoryProvisioningError extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(message: string, retryAfterMs: number) {
+    super(message);
+    this.name = "InventoryProvisioningError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export const isInventoryProvisioningError = (
+  value: unknown,
+): value is InventoryProvisioningError => value instanceof InventoryProvisioningError;
 
 const requireBaseUrl = () => {
   if (!INVENTORY_API_BASE_URL) {
@@ -65,6 +85,20 @@ export const loadInventoryBootstrap = async (): Promise<{
 }> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/bootstrap`);
+  if (res.status === 202) {
+    let payload: InventoryProvisioningPayload | null = null;
+    try {
+      payload = (await res.json()) as InventoryProvisioningPayload;
+    } catch {
+      payload = null;
+    }
+    if (payload?.code === "INVENTORY_STORAGE_PROVISIONING") {
+      throw new InventoryProvisioningError(
+        payload.error ?? "Inventory storage is still provisioning",
+        Number(payload.retryAfterMs ?? 2000),
+      );
+    }
+  }
   if (!res.ok) {
     throw new Error((await res.text()) || "Failed to load inventory bootstrap");
   }

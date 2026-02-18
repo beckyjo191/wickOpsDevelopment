@@ -47,6 +47,7 @@ inventoryItemTable.addGlobalSecondaryIndex({
 });
 
 const inventoryApiLambda = backend.inventoryApi.resources.lambda as any;
+const userSubscriptionLambda = backend.userSubscriptionCheck.resources.lambda as any;
 const inventoryOrgTablePrefix = "wickops-inventory";
 
 inventoryApiLambda.addEnvironment(
@@ -125,6 +126,19 @@ wireCoreDataTables(backend.userSubscriptionCheck.resources.lambda, {
   organization: "readwrite",
   invite: "readwrite",
 });
+userSubscriptionLambda.addEnvironment(
+  "INVENTORY_ORG_TABLE_PREFIX",
+  inventoryOrgTablePrefix,
+);
+userSubscriptionLambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: [
+      "dynamodb:CreateTable",
+      "dynamodb:DescribeTable",
+    ],
+    resources: [inventoryDynamicTableArn, `${inventoryDynamicTableArn}/index/*`],
+  }),
+);
 
 wireCoreDataTables(backend.sendInvites.resources.lambda, {
   user: "read",

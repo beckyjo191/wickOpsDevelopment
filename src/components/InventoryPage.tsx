@@ -551,9 +551,10 @@ export function InventoryPage({
     );
 
     if (changedRowId) {
+      const resolvedRowId = changedRowId;
       setDirtyRowIds((prev) => {
         const next = new Set(prev);
-        next.add(changedRowId);
+        next.add(resolvedRowId);
         return next;
       });
     }
@@ -1517,13 +1518,9 @@ export function InventoryPage({
                         })()
                       ) : (
                         <input
-                          type={column.type === "number" ? "number" : column.type === "date" ? "date" : "text"}
+                          type={column.type === "number" ? "number" : "text"}
                           min={column.type === "number" ? 0 : undefined}
-                          value={
-                            column.type === "date"
-                              ? toDateInputValue(row.values[column.key])
-                              : String(row.values[column.key] ?? "")
-                          }
+                          value={String(row.values[column.key] ?? "")}
                           onFocus={() => setSelectedRowId(row.id)}
                           onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
                           onKeyDown={(event) => {

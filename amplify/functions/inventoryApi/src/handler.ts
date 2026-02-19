@@ -1147,6 +1147,7 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
       });
     }
   }
+  const allowUpdates = body?.allowUpdates === true;
 
   const mapping: Array<{ sourceIndex: number; header: string; column: InventoryColumn }> = [];
   const createdColumns: InventoryColumn[] = [];
@@ -1311,6 +1312,14 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
     if (!existingMatch && rowFingerprint && existingFingerprintSet.has(rowFingerprint)) {
       skippedCount += 1;
       duplicateSkippedCount += 1;
+      continue;
+    }
+    if (existingMatch && !allowUpdates) {
+      skippedCount += 1;
+      duplicateSkippedCount += 1;
+      if (rowFingerprint) {
+        existingFingerprintSet.add(rowFingerprint);
+      }
       continue;
     }
     const isUpdate = !!existingMatch;

@@ -76,6 +76,19 @@ const createBlankInventoryRow = (
   };
 };
 
+const buildRowsSignature = (rows: InventoryRow[]): string =>
+  JSON.stringify(
+    rows.map((row) => ({
+      id: row.id,
+      position: row.position,
+      values: Object.fromEntries(
+        Object.entries(row.values)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, value]) => [key, value ?? null]),
+      ),
+    })),
+  );
+
 export function InventoryPage({
   canEditInventory,
   canManageInventoryColumns,
@@ -1079,7 +1092,15 @@ export function InventoryPage({
 
     setImportingCsv(true);
     try {
+      const beforeImportSignature = buildRowsSignature(rows);
       const result = await importInventoryCsv(csvImportDialog.csvText, selectedHeaders);
+      const bootstrap = await loadInventoryBootstrap();
+      const afterImportSignature = buildRowsSignature(bootstrap.items);
+
+      if (beforeImportSignature === afterImportSignature) {
+        throw new Error("Import canceled: all selected rows are already in inventory.");
+      }
+
       if (result.createdCount === 0 && result.updatedCount === 0) {
         if (result.duplicateSkippedCount > 0) {
           throw new Error(
@@ -1090,7 +1111,6 @@ export function InventoryPage({
         }
         throw new Error("Import canceled: no new data was imported.");
       }
-      const bootstrap = await loadInventoryBootstrap();
       applyBootstrap(bootstrap);
       setCsvImportDialog(null);
       alert("Import complete.");

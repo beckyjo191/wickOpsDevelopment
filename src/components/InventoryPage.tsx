@@ -21,6 +21,7 @@ interface InventoryPageProps {
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
 const AUTOSAVE_DELAY_MS = 20000;
+const UNDO_HISTORY_LIMIT = 80;
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "wickops.inventory.columnWidths:";
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
 const LOADING_LINES = [
@@ -50,6 +51,14 @@ type CsvImportDialogState = {
 
 type PasteImportDialogState = {
   rawText: string;
+};
+
+type InventorySnapshot = {
+  rows: InventoryRow[];
+  dirtyRowIds: Set<string>;
+  deletedRowIds: Set<string>;
+  selectedRowIds: Set<string>;
+  selectedRowId: string | null;
 };
 
 const createBlankInventoryRow = (
@@ -90,6 +99,8 @@ export function InventoryPage({
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [copiedRowValues, setCopiedRowValues] = useState<Record<string, string | number | boolean | null> | null>(null);
+  const [undoStack, setUndoStack] = useState<InventorySnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<InventorySnapshot[]>([]);
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [editingDateCell, setEditingDateCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [loadError, setLoadError] = useState<string>("");
@@ -97,7 +108,22 @@ export function InventoryPage({
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
   const resizeStateRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
+  const rowsRef = useRef(rows);
+  const dirtyRowIdsRef = useRef(dirtyRowIds);
+  const deletedRowIdsRef = useRef(deletedRowIds);
+  const selectedRowIdsRef = useRef(selectedRowIds);
+  const selectedRowIdRef = useRef(selectedRowId);
+  const restoringSnapshotRef = useRef(false);
+  const editSessionCellRef = useRef<string | null>(null);
   const canEditTable = canEditInventory && activeFilter === "all";
+
+  useEffect(() => {
+    rowsRef.current = rows;
+    dirtyRowIdsRef.current = dirtyRowIds;
+    deletedRowIdsRef.current = deletedRowIds;
+    selectedRowIdsRef.current = selectedRowIds;
+    selectedRowIdRef.current = selectedRowId;
+  }, [rows, dirtyRowIds, deletedRowIds, selectedRowIds, selectedRowId]);
 
   const applyBootstrap = (bootstrap: Awaited<ReturnType<typeof loadInventoryBootstrap>>) => {
     const resolvedColumns = [...bootstrap.columns].sort(
@@ -116,6 +142,68 @@ export function InventoryPage({
     setSelectedRowIds(new Set());
     setSelectedRowId(nextRows[0]?.id ?? null);
     setCopiedRowValues(null);
+    setUndoStack([]);
+    setRedoStack([]);
+    editSessionCellRef.current = null;
+  };
+
+  const snapshotFromRefs = (): InventorySnapshot => ({
+    rows: rowsRef.current.map((row) => ({
+      ...row,
+      values: { ...row.values },
+    })),
+    dirtyRowIds: new Set(dirtyRowIdsRef.current),
+    deletedRowIds: new Set(deletedRowIdsRef.current),
+    selectedRowIds: new Set(selectedRowIdsRef.current),
+    selectedRowId: selectedRowIdRef.current,
+  });
+
+  const applySnapshot = (snapshot: InventorySnapshot) => {
+    restoringSnapshotRef.current = true;
+    setRows(snapshot.rows.map((row) => ({ ...row, values: { ...row.values } })));
+    setDirtyRowIds(new Set(snapshot.dirtyRowIds));
+    setDeletedRowIds(new Set(snapshot.deletedRowIds));
+    setSelectedRowIds(new Set(snapshot.selectedRowIds));
+    setSelectedRowId(snapshot.selectedRowId);
+    setTimeout(() => {
+      restoringSnapshotRef.current = false;
+    }, 0);
+  };
+
+  const pushUndoSnapshot = () => {
+    if (restoringSnapshotRef.current) return;
+    const snapshot = snapshotFromRefs();
+    setUndoStack((prev) => [...prev.slice(-(UNDO_HISTORY_LIMIT - 1)), snapshot]);
+    setRedoStack([]);
+  };
+
+  const undoLastChange = () => {
+    if (undoStack.length === 0) return;
+    const current = snapshotFromRefs();
+    const previous = undoStack[undoStack.length - 1];
+    setUndoStack((prev) => prev.slice(0, -1));
+    setRedoStack((prev) => [...prev.slice(-(UNDO_HISTORY_LIMIT - 1)), current]);
+    applySnapshot(previous);
+  };
+
+  const redoLastChange = () => {
+    if (redoStack.length === 0) return;
+    const current = snapshotFromRefs();
+    const next = redoStack[redoStack.length - 1];
+    setRedoStack((prev) => prev.slice(0, -1));
+    setUndoStack((prev) => [...prev.slice(-(UNDO_HISTORY_LIMIT - 1)), current]);
+    applySnapshot(next);
+  };
+
+  const beginCellEditSession = (rowId: string, columnKey: string) => {
+    const cellKey = `${rowId}:${columnKey}`;
+    if (editSessionCellRef.current === cellKey) return;
+    pushUndoSnapshot();
+    editSessionCellRef.current = cellKey;
+  };
+
+  const endCellEditSession = () => {
+    editSessionCellRef.current = null;
   };
 
   useEffect(() => {
@@ -405,6 +493,7 @@ export function InventoryPage({
 
   const onAddRow = (position: "above" | "below", event?: ReactMouseEvent<HTMLElement>) => {
     if (!canEditTable) return;
+    pushUndoSnapshot();
     if (event) {
       closeParentDetails(event.target);
     }
@@ -507,6 +596,7 @@ export function InventoryPage({
 
   const onPasteToSelectedRow = () => {
     if (!canEditTable || !selectedRowId || !copiedRowValues) return;
+    pushUndoSnapshot();
     let changedRowId: string | null = null;
     setRows((prev) =>
       prev.map((row) => {
@@ -568,6 +658,7 @@ export function InventoryPage({
       `Delete ${count} selected ${count === 1 ? "row" : "rows"}?`,
     );
     if (!confirmed) return;
+    pushUndoSnapshot();
     const idsToDelete = new Set(selectedRowIds);
     const persistedIdsToDelete = rows
       .filter((row) => idsToDelete.has(row.id) && Boolean(row.createdAt))
@@ -794,6 +885,9 @@ export function InventoryPage({
       );
       setDirtyRowIds(new Set());
       setDeletedRowIds(new Set());
+      setUndoStack([]);
+      setRedoStack([]);
+      editSessionCellRef.current = null;
     } catch (err: any) {
       if (!silent) {
         alert(err?.message ?? "Failed to save inventory");
@@ -814,6 +908,12 @@ export function InventoryPage({
         target.tagName.toLowerCase() === "textarea" ||
         target.isContentEditable
       );
+      const key = event.key.toLowerCase();
+
+      if (isEditableTarget && (key === "z" || key === "y")) {
+        return;
+      }
+
       if (isEditableTarget) {
         const active = target as HTMLInputElement | HTMLTextAreaElement;
         const hasSelectionRange =
@@ -826,7 +926,22 @@ export function InventoryPage({
         }
       }
 
-      const key = event.key.toLowerCase();
+      if (key === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redoLastChange();
+        } else {
+          undoLastChange();
+        }
+        return;
+      }
+
+      if (key === "y") {
+        event.preventDefault();
+        redoLastChange();
+        return;
+      }
+
       if (key === "c") {
         if (!selectedRowId) return;
         event.preventDefault();
@@ -844,7 +959,7 @@ export function InventoryPage({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [canEditTable, selectedRowId, copiedRowValues, rows, allColumns]);
+  }, [canEditTable, selectedRowId, copiedRowValues, undoStack, redoStack, rows, allColumns]);
 
   useEffect(() => {
     const trySavePending = () => {
@@ -964,7 +1079,17 @@ export function InventoryPage({
 
     setImportingCsv(true);
     try {
-      await importInventoryCsv(csvImportDialog.csvText, selectedHeaders);
+      const result = await importInventoryCsv(csvImportDialog.csvText, selectedHeaders);
+      if (result.createdCount === 0 && result.updatedCount === 0) {
+        if (result.duplicateSkippedCount > 0) {
+          throw new Error(
+            result.duplicateSkippedCount === 1
+              ? "Import canceled: that row is already in inventory."
+              : `Import canceled: all ${result.duplicateSkippedCount} rows are already in inventory.`,
+          );
+        }
+        throw new Error("Import canceled: no new data was imported.");
+      }
       const bootstrap = await loadInventoryBootstrap();
       applyBootstrap(bootstrap);
       setCsvImportDialog(null);
@@ -1047,7 +1172,7 @@ export function InventoryPage({
                 <input
                   ref={importInputRef}
                   type="file"
-                  accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  accept=".csv,.CSV,.tsv,.TSV,.xlsx,.XLSX,.xls,.XLS,text/csv,text/tab-separated-values,application/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/octet-stream"
                   onChange={(event) => {
                     void onCsvSelected(event);
                   }}
@@ -1391,6 +1516,7 @@ export function InventoryPage({
                                 placeholder="Paste link"
                                 onFocus={() => {
                                   setSelectedRowId(row.id);
+                                  beginCellEditSession(row.id, column.key);
                                   setEditingLinkCell({ rowId: row.id, columnKey: column.key });
                                 }}
                                 onChange={(event) => onCellChange(row.id, column, event.target.value)}
@@ -1400,6 +1526,7 @@ export function InventoryPage({
                                     onCellChange(row.id, column, normalized);
                                   }
                                   setEditingLinkCell(null);
+                                  endCellEditSession();
                                 }}
                                 onPaste={(event) => {
                                   const pasted = event.clipboardData.getData("text");
@@ -1442,8 +1569,12 @@ export function InventoryPage({
                       ) : column.type === "text" ? (
                         <textarea
                           value={String(row.values[column.key] ?? "")}
-                          onFocus={() => setSelectedRowId(row.id)}
+                          onFocus={() => {
+                            setSelectedRowId(row.id);
+                            beginCellEditSession(row.id, column.key);
+                          }}
                           onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
+                          onBlur={endCellEditSession}
                           onKeyDown={(event) => {
                             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                               (event.currentTarget as HTMLTextAreaElement).blur();
@@ -1481,10 +1612,12 @@ export function InventoryPage({
                                 autoFocus={editing}
                                 onFocus={() => {
                                   setSelectedRowId(row.id);
+                                  beginCellEditSession(row.id, column.key);
                                   setEditingDateCell({ rowId: row.id, columnKey: column.key });
                                 }}
                                 onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
                                 onBlur={() => {
+                                  endCellEditSession();
                                   setEditingDateCell((prev) =>
                                     prev?.rowId === row.id && prev?.columnKey === column.key ? null : prev,
                                   );
@@ -1521,8 +1654,12 @@ export function InventoryPage({
                           type={column.type === "number" ? "number" : "text"}
                           min={column.type === "number" ? 0 : undefined}
                           value={String(row.values[column.key] ?? "")}
-                          onFocus={() => setSelectedRowId(row.id)}
+                          onFocus={() => {
+                            setSelectedRowId(row.id);
+                            beginCellEditSession(row.id, column.key);
+                          }}
                           onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
+                          onBlur={endCellEditSession}
                           onKeyDown={(event) => {
                             if (event.key === "Enter") {
                               (event.currentTarget as HTMLInputElement).blur();

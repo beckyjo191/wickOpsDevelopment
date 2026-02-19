@@ -737,6 +737,19 @@ const buildImportRowFingerprint = (
     .join("||");
 };
 
+const areValueRecordsEqual = (
+  left: Record<string, string | number | boolean | null>,
+  right: Record<string, string | number | boolean | null>,
+): boolean => {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if ((left[key] ?? null) !== (right[key] ?? null)) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const detectHeaderRowIndex = (
   rows: string[][],
   byKey: Map<string, InventoryColumn>,
@@ -1303,21 +1316,35 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
     const isUpdate = !!existingMatch;
     const itemId = existingMatch?.id ?? randomUUID();
     const createdAt = existingMatch?.createdAt ?? new Date().toISOString();
+    let existingValues: Record<string, string | number | boolean | null> | null = null;
     let mergedValues = values;
     if (existingMatch?.valuesJson) {
       try {
-        const existingValues = JSON.parse(existingMatch.valuesJson) as Record<string, string | number | boolean | null>;
+        existingValues = JSON.parse(existingMatch.valuesJson) as Record<string, string | number | boolean | null>;
         mergedValues = {
           ...existingValues,
           ...values,
         };
       } catch {
+        existingValues = null;
         mergedValues = values;
       }
     }
     const position = existingMatch
       ? Number(existingMatch.position ?? 0)
       : (maxPosition += 1);
+    if (
+      isUpdate &&
+      existingValues &&
+      areValueRecordsEqual(existingValues, mergedValues)
+    ) {
+      skippedCount += 1;
+      duplicateSkippedCount += 1;
+      if (rowFingerprint) {
+        existingFingerprintSet.add(rowFingerprint);
+      }
+      continue;
+    }
 
     const itemPayload: InventoryItem = {
       id: itemId,
@@ -1341,6 +1368,17 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
         existingFingerprintSet.add(rowFingerprint);
       }
     }
+  }
+
+  if (createdCount === 0 && updatedCount === 0 && duplicateSkippedCount > 0) {
+    return json(409, {
+      error:
+        duplicateSkippedCount === 1
+          ? "Import canceled: that row is already in inventory."
+          : `Import canceled: all ${duplicateSkippedCount} rows are already in inventory.`,
+      duplicateSkippedCount,
+      importedRows: dataRows.length,
+    });
   }
 
   return json(200, {

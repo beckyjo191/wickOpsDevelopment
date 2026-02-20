@@ -145,6 +145,15 @@ wireCoreDataTables(backend.sendInvites.resources.lambda, {
   organization: "read",
   invite: "readwrite",
 });
+const userPool = (backend.auth.resources as any)?.userPool;
+if (userPool) {
+  backend.sendInvites.resources.lambda.addToRolePolicy(
+    new PolicyStatement({
+      actions: ["cognito-idp:AdminCreateUser"],
+      resources: [userPool.userPoolArn],
+    }),
+  );
+}
 
 wireCoreDataTables(backend.createCheckoutSession.resources.lambda, {
   user: "read",

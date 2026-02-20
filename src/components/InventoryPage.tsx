@@ -504,7 +504,7 @@ export function InventoryPage({
     element?.closest("details")?.removeAttribute("open");
   };
 
-  const onAddRow = (position: "above" | "below", event?: ReactMouseEvent<HTMLElement>) => {
+  const onAddRow = (position: "above" | "below" | "top" | "bottom", event?: ReactMouseEvent<HTMLElement>) => {
     if (!canEditTable) return;
     pushUndoSnapshot();
     if (event) {
@@ -516,26 +516,33 @@ export function InventoryPage({
     setRows((prev) => {
       const selectedIndex =
         anchorRowId ? prev.findIndex((row) => row.id === anchorRowId) : -1;
-      const insertIndex =
-        selectedIndex >= 0
-          ? position === "above"
-            ? selectedIndex
-            : selectedIndex + 1
-          : position === "above"
-            ? 0
-            : prev.length;
+      let insertIndex: number;
+      if (position === "top") {
+        insertIndex = 0;
+      } else if (position === "bottom") {
+        insertIndex = prev.length;
+      } else if (selectedIndex >= 0) {
+        insertIndex = position === "above" ? selectedIndex : selectedIndex + 1;
+      } else {
+        insertIndex = position === "above" ? 0 : prev.length;
+      }
       const created = createBlankInventoryRow(allColumns, insertIndex);
-      const anchorRow = selectedIndex >= 0 ? prev[selectedIndex] : null;
+      const anchorRow =
+        position === "above" || position === "below"
+          ? selectedIndex >= 0
+            ? prev[selectedIndex]
+            : null
+          : null;
       if (anchorRow && sortState && sortState.key in created.values) {
         created.values[sortState.key] = anchorRow.values?.[sortState.key] ?? created.values[sortState.key];
       }
-      if (anchorRow && locationColumn && effectiveLocationFilter !== "All Locations") {
+      if (locationColumn && effectiveLocationFilter !== "All Locations") {
         created.values[locationColumn.key] =
-          anchorRow.values?.[locationColumn.key] ?? created.values[locationColumn.key];
+          anchorRow?.values?.[locationColumn.key] ?? effectiveLocationFilter;
       }
-      if (anchorRow && categoryColumn && effectiveCategoryFilter !== "All Categories") {
+      if (categoryColumn && effectiveCategoryFilter !== "All Categories") {
         created.values[categoryColumn.key] =
-          anchorRow.values?.[categoryColumn.key] ?? created.values[categoryColumn.key];
+          anchorRow?.values?.[categoryColumn.key] ?? effectiveCategoryFilter;
       }
       const nextRows = [
         ...prev.slice(0, insertIndex),
@@ -1206,6 +1213,20 @@ export function InventoryPage({
                         <button
                           type="button"
                           className="inventory-import-option"
+                          onClick={(event) => onAddRow("top", event)}
+                        >
+                          Add To Top
+                        </button>
+                        <button
+                          type="button"
+                          className="inventory-import-option"
+                          onClick={(event) => onAddRow("bottom", event)}
+                        >
+                          Add To Bottom
+                        </button>
+                        <button
+                          type="button"
+                          className="inventory-import-option"
                           onClick={(event) => onAddRow("above", event)}
                         >
                           Add Above Selected
@@ -1310,49 +1331,51 @@ export function InventoryPage({
               </button>
             ) : null}
           </div>
-          <div className="inventory-search-wrap">
-            <input
-              className="inventory-search-input"
-              placeholder="Search inventory..."
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-            />
-            {searchTerm ? (
-              <button
-                type="button"
-                className="inventory-search-clear"
-                onClick={() => setSearchTerm("")}
-                aria-label="Clear search"
-                title="Clear search"
-              >
-                ×
-              </button>
-            ) : null}
-          </div>
-          <details className="inventory-columns-menu">
-            <summary className="inventory-columns-trigger">Columns</summary>
-            <div className="inventory-columns-panel">
-              {columns
-                .slice()
-                .sort((a, b) => a.sortOrder - b.sortOrder)
-                .map((column) => {
-                  const checked = column.isVisible;
-                  return (
-                    <label key={column.id} className="inventory-columns-item">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => {
-                          void onToggleQuickColumn(column);
-                        }}
-                        disabled={!canManageInventoryColumns}
-                      />
-                      <span>{column.label}</span>
-                    </label>
-                  );
-                })}
+          <div className="inventory-filter-right">
+            <div className="inventory-search-wrap">
+              <input
+                className="inventory-search-input"
+                placeholder="Search inventory..."
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+              />
+              {searchTerm ? (
+                <button
+                  type="button"
+                  className="inventory-search-clear"
+                  onClick={() => setSearchTerm("")}
+                  aria-label="Clear search"
+                  title="Clear search"
+                >
+                  ×
+                </button>
+              ) : null}
             </div>
-          </details>
+            <details className="inventory-columns-menu">
+              <summary className="inventory-columns-trigger">Columns</summary>
+              <div className="inventory-columns-panel">
+                {columns
+                  .slice()
+                  .sort((a, b) => a.sortOrder - b.sortOrder)
+                  .map((column) => {
+                    const checked = column.isVisible;
+                    return (
+                      <label key={column.id} className="inventory-columns-item">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            void onToggleQuickColumn(column);
+                          }}
+                          disabled={!canManageInventoryColumns}
+                        />
+                        <span>{column.label}</span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </details>
+          </div>
         </div>
 
         <div className="inventory-table-wrap">

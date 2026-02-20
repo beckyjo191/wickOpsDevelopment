@@ -6,6 +6,7 @@ import { InventoryPage } from "./components/InventoryPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { DashboardPage } from "./components/DashboardPage";
 import { AppToolbar } from "./components/AppToolbar";
+import { InventoryUsagePage } from "./components/InventoryUsagePage";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -13,11 +14,18 @@ import {
   saveThemePreference,
   type ThemePreference,
 } from "./lib/themePreference";
+import {
+  DEFAULT_USAGE_FORM_PREFERENCES,
+  loadUsageFormPreferences,
+  saveUsageFormPreferences,
+  type UsageFormPreferences,
+} from "./lib/usageFormPreferences";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
 const INVITES_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVITES_API_BASE_URL);
 const VIEW_STORAGE_KEY = "wickops.activeView";
+const USAGE_FORM_PREFERENCES_STORAGE_KEY = "wickops.usageFormPreferences";
 const SUBSCRIPTION_RETRY_MS = 2000;
 const MAX_SUBSCRIPTION_RETRIES = 6;
 const APP_LOADING_LINES = [
@@ -32,29 +40,44 @@ const pickRandom = (items: string[]): string =>
   items[Math.floor(Math.random() * items.length)] ?? "Loading...";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
-type AppView = "dashboard" | "inventory" | "invite" | "settings";
+type AppView = "dashboard" | "inventory" | "usage" | "invite" | "settings";
+type AppModuleKey = "inventory" | "usage";
 type BreadcrumbItem = {
   label: string;
   onClick?: () => void;
 };
 
 const isAppView = (value: unknown): value is AppView =>
-  value === "dashboard" || value === "inventory" || value === "invite" || value === "settings";
-
-const loadInitialView = (): AppView => {
-  try {
-    const saved = window.localStorage.getItem(VIEW_STORAGE_KEY);
-    return isAppView(saved) ? saved : "dashboard";
-  } catch {
-    return "dashboard";
-  }
+  value === "dashboard" ||
+  value === "inventory" ||
+  value === "usage" ||
+  value === "invite" ||
+  value === "settings";
+const toAllowedModules = (value: unknown): AppModuleKey[] => {
+  if (!Array.isArray(value)) return ["inventory", "usage"];
+  const out = Array.from(
+    new Set(
+      value
+        .map((item) => String(item ?? "").trim().toLowerCase())
+        .filter((item): item is AppModuleKey => item === "inventory" || item === "usage"),
+    ),
+  );
+  return out.length > 0 ? out : ["inventory", "usage"];
 };
 
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
-  const [view, setView] = useState<AppView>(() => loadInitialView());
+  const [view, setView] = useState<AppView>("dashboard");
   const [loadingLine, setLoadingLine] = useState(() => pickRandom(APP_LOADING_LINES));
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
+  const [usageFormPreferences, setUsageFormPreferences] = useState<UsageFormPreferences>(
+    DEFAULT_USAGE_FORM_PREFERENCES,
+  );
+  const userViewScope =
+    String(user?.attributes?.sub ?? "") ||
+    String(user?.username ?? "") ||
+    String(user?.signInDetails?.loginId ?? "");
+  const scopedViewStorageKey = userViewScope ? `${VIEW_STORAGE_KEY}.${userViewScope}` : VIEW_STORAGE_KEY;
 
   const [subState, setSubState] = useState<{
     status: SubscriptionState;
@@ -66,6 +89,7 @@ export default function App() {
     accessSuspended: boolean;
     canInviteUsers: boolean;
     role: string;
+    allowedModules: AppModuleKey[];
     loadError: boolean;
   }>({
     status: "loading",
@@ -77,8 +101,11 @@ export default function App() {
     accessSuspended: false,
     canInviteUsers: false,
     role: "",
+    allowedModules: ["inventory", "usage"],
     loadError: false,
   });
+  const usagePreferencesScope = `${subState.organizationId || "personal"}.${userViewScope || "anonymous"}`;
+  const scopedUsagePreferencesStorageKey = `${USAGE_FORM_PREFERENCES_STORAGE_KEY}.${usagePreferencesScope}`;
 
   useEffect(() => {
     if (authStatus !== "authenticated") return;
@@ -125,6 +152,7 @@ export default function App() {
           accessSuspended: !!data.accessSuspended,
           canInviteUsers: !!data.canInviteUsers,
           role: String(data.role ?? "").toUpperCase(),
+          allowedModules: toAllowedModules(data.allowedModules),
           loadError: false,
         });
 
@@ -159,6 +187,7 @@ export default function App() {
           accessSuspended: false,
           canInviteUsers: false,
           role: "",
+          allowedModules: ["inventory", "usage"],
           loadError: true,
         });
       }
@@ -181,12 +210,26 @@ export default function App() {
   }, [authStatus]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated" || !userViewScope) {
+      setView("dashboard");
+      return;
+    }
     try {
-      window.localStorage.setItem(VIEW_STORAGE_KEY, view);
+      const saved = window.localStorage.getItem(scopedViewStorageKey);
+      setView(isAppView(saved) ? saved : "dashboard");
+    } catch {
+      setView("dashboard");
+    }
+  }, [authStatus, scopedViewStorageKey, userViewScope]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || !userViewScope) return;
+    try {
+      window.localStorage.setItem(scopedViewStorageKey, view);
     } catch {
       // No-op: storage may be unavailable in private mode or locked environments.
     }
-  }, [view]);
+  }, [authStatus, scopedViewStorageKey, userViewScope, view]);
 
   useEffect(() => {
     applyThemePreference(themePreference);
@@ -194,9 +237,27 @@ export default function App() {
   }, [themePreference]);
 
   useEffect(() => {
+    setUsageFormPreferences(loadUsageFormPreferences(scopedUsagePreferencesStorageKey));
+  }, [scopedUsagePreferencesStorageKey]);
+
+  useEffect(() => {
+    saveUsageFormPreferences(scopedUsagePreferencesStorageKey, usageFormPreferences);
+  }, [scopedUsagePreferencesStorageKey, usageFormPreferences]);
+
+  useEffect(() => {
+    const detailsMenuSelector = [
+      "details.app-module-menu[open]",
+      "details.app-user-menu[open]",
+      "details.inventory-import-menu[open]",
+      "details.inventory-columns-menu[open]",
+      "details.inventory-location-menu[open]",
+    ].join(", ");
+
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
-      const openMenus = Array.from(document.querySelectorAll<HTMLDetailsElement>("details[open]"));
+      const openMenus = Array.from(
+        document.querySelectorAll<HTMLDetailsElement>(detailsMenuSelector),
+      );
       for (const menu of openMenus) {
         if (!target || !menu.contains(target)) {
           menu.removeAttribute("open");
@@ -206,7 +267,9 @@ export default function App() {
 
     const onEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      const openMenus = Array.from(document.querySelectorAll<HTMLDetailsElement>("details[open]"));
+      const openMenus = Array.from(
+        document.querySelectorAll<HTMLDetailsElement>(detailsMenuSelector),
+      );
       for (const menu of openMenus) {
         menu.removeAttribute("open");
       }
@@ -229,6 +292,16 @@ export default function App() {
     }, 2200);
     return () => window.clearInterval(interval);
   }, [authStatus, subState.status, subState.loadError]);
+
+  useEffect(() => {
+    if (view === "inventory" && !subState.allowedModules.includes("inventory")) {
+      setView("dashboard");
+      return;
+    }
+    if (view === "usage" && !subState.allowedModules.includes("usage")) {
+      setView("dashboard");
+    }
+  }, [view, subState.allowedModules]);
 
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
     return <div>{loadingLine}</div>;
@@ -269,14 +342,22 @@ export default function App() {
     "User";
   const seatsRemaining = subState.seatLimit - subState.seatsUsed;
   const canInviteMore = subState.canInviteUsers && seatsRemaining > 0;
+  const canAccessInventory = subState.allowedModules.includes("inventory");
+  const canAccessUsage = subState.allowedModules.includes("usage");
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
+  const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const breadcrumbs: BreadcrumbItem[] =
     view === "inventory"
       ? [
           { label: "Dashboard", onClick: () => setView("dashboard") },
           { label: "Inventory" },
         ]
+      : view === "usage"
+        ? [
+            { label: "Dashboard", onClick: () => setView("dashboard") },
+            { label: "Usage Form" },
+          ]
       : view === "settings"
         ? [
             { label: "Dashboard", onClick: () => setView("dashboard") },
@@ -301,6 +382,13 @@ export default function App() {
         canManageInventoryColumns={canManageInventoryColumns}
         themePreference={themePreference}
         onThemePreferenceChange={setThemePreference}
+        usageFormPreferences={usageFormPreferences}
+        onUsageFormPreferencesChange={setUsageFormPreferences}
+        onCurrentUserAllowedModulesChange={(allowedModules) =>
+          setSubState((prev) => ({ ...prev, allowedModules }))
+        }
+        canManageModuleAccess={canManageModuleAccess}
+        currentUserId={String(user?.attributes?.sub ?? "")}
         onInviteUsers={() => {
           if (!canInviteMore) return;
           setView("invite");
@@ -308,10 +396,28 @@ export default function App() {
       />
     );
   } else if (view === "inventory") {
-    content = (
+    content = canAccessInventory ? (
       <InventoryPage
         canEditInventory={canEditInventory}
         canManageInventoryColumns={canManageInventoryColumns}
+      />
+    ) : (
+      <DashboardPage
+        canAccessInventory={canAccessInventory}
+        canAccessUsage={canAccessUsage}
+        onGoToInventory={() => setView("inventory")}
+        onGoToUsage={() => setView("usage")}
+      />
+    );
+  } else if (view === "usage") {
+    content = canAccessUsage ? (
+      <InventoryUsagePage usageFormPreferences={usageFormPreferences} />
+    ) : (
+      <DashboardPage
+        canAccessInventory={canAccessInventory}
+        canAccessUsage={canAccessUsage}
+        onGoToInventory={() => setView("inventory")}
+        onGoToUsage={() => setView("usage")}
       />
     );
   } else if (view === "invite") {
@@ -345,13 +451,19 @@ export default function App() {
       />
     ) : (
       <DashboardPage
+        canAccessInventory={canAccessInventory}
+        canAccessUsage={canAccessUsage}
         onGoToInventory={() => setView("inventory")}
+        onGoToUsage={() => setView("usage")}
       />
     );
   } else {
     content = (
       <DashboardPage
+        canAccessInventory={canAccessInventory}
+        canAccessUsage={canAccessUsage}
         onGoToInventory={() => setView("inventory")}
+        onGoToUsage={() => setView("usage")}
       />
     );
   }
@@ -362,7 +474,10 @@ export default function App() {
         currentView={view}
         userName={userName}
         orgName={subState.orgName}
+        canAccessInventory={canAccessInventory}
+        canAccessUsage={canAccessUsage}
         onGoToInventory={() => setView("inventory")}
+        onGoToUsage={() => setView("usage")}
         onOpenSettings={() => setView("settings")}
         onLogout={signOut}
       />

@@ -33,6 +33,8 @@ const INVENTORY_COLUMN_BY_MODULE_INDEX = "ByModuleSortOrder";
 const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
 const PROVISIONING_RETRY_AFTER_MS = 2000;
 const INVITE_ALLOWED_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
+const MODULE_KEYS = ["inventory", "usage"] as const;
+type ModuleKey = (typeof MODULE_KEYS)[number];
 const normalizeEmail = (value: unknown): string =>
   String(value ?? "").trim().toLowerCase();
 const isPaidStatus = (value: unknown): boolean => {
@@ -88,6 +90,22 @@ const countPendingInvites = async (organizationId: string): Promise<number> => {
 
 const normalizeRole = (value: unknown): string => String(value ?? "").trim().toUpperCase();
 const normalizeOrgId = (value: unknown): string => String(value ?? "").trim().toLowerCase();
+const normalizeModuleKey = (value: unknown): ModuleKey | null => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "inventory" || normalized === "usage") return normalized;
+  return null;
+};
+const getAllowedModules = (value: unknown): ModuleKey[] => {
+  if (!Array.isArray(value)) return [...MODULE_KEYS];
+  const out = Array.from(
+    new Set(
+      value
+        .map((item) => normalizeModuleKey(item))
+        .filter((item): item is ModuleKey => !!item),
+    ),
+  );
+  return out.length > 0 ? out : [...MODULE_KEYS];
+};
 
 const incrementOrgSeatsUsed = async (organizationId: string): Promise<void> => {
   await ddb.send(
@@ -441,6 +459,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
           displayName: email.split("@")[0],
           organizationId: inviteOrganizationId,
           role,
+          allowedModules: ["inventory", "usage"],
           accessSuspended: !isPaidStatus(orgResForInvite.Item.paymentStatus),
           createdAt: new Date().toISOString(),
         };
@@ -543,6 +562,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
     const subscribed = isPaidStatus(paymentStatus);
     const normalizedRole = normalizeRole(user.role);
     const canInviteUsers = INVITE_ALLOWED_ROLES.has(normalizedRole);
+    const allowedModules = getAllowedModules(user.allowedModules);
 
     if (subscribed) {
       await ensureInventoryTablesForOrganization(String(user.organizationId));
@@ -576,6 +596,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
         paymentStatus: org.paymentStatus ?? "Free",
         role: normalizedRole,
         canInviteUsers,
+        allowedModules,
       }),
     };
   } catch (err) {

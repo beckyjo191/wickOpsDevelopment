@@ -542,6 +542,28 @@
   gap: 0.55rem;
 }
 
+.settings-columns-toolbar {
+  margin-top: 0.55rem;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.settings-columns-toolbar-search {
+  flex: 1 1 360px;
+  min-width: 220px;
+  max-width: 100%;
+}
+
+.settings-columns-add-inline {
+  flex: 0 0 auto;
+  min-width: 300px;
+}
+
+.settings-columns-add-inline .field {
+  min-width: 180px;
+}
+
 .settings-columns-batch-actions {
   margin-top: 0.55rem;
   display: flex;
@@ -819,17 +841,26 @@
 .inventory-filter-bar {
   display: flex;
   flex-wrap: wrap;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 0.65rem;
   margin-bottom: 0.75rem;
 }
 
+.inventory-filter-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  min-width: 240px;
+}
+
 .inventory-search-wrap {
   position: relative;
   min-width: 220px;
-  max-width: 320px;
-  width: 100%;
+  width: 320px;
+  max-width: min(320px, 100%);
 }
 
 .inventory-header-actions {
@@ -1035,6 +1066,187 @@
   box-shadow: 0 0 0 2px var(--focus-ring-soft);
 }
 
+.usage-form-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.usage-form-section {
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.6rem;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.usage-location-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  column-gap: 0.5rem;
+  row-gap: 0.25rem;
+  margin-bottom: 0.6rem;
+}
+
+.usage-location-label {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.usage-location-select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-heading);
+  padding: 0 0.5rem;
+  font-size: 0.8rem;
+}
+
+.usage-location-select:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.usage-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.8fr) minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: 0.55rem;
+  padding: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface-alt);
+  align-items: end;
+  overflow: hidden;
+}
+
+.usage-form-row > * {
+  min-width: 0;
+}
+
+.usage-form-row label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+}
+
+.usage-form-row select,
+.usage-form-row input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-heading);
+  padding: 0 0.5rem;
+  font-size: 0.8rem;
+}
+
+.usage-item-search-wrap {
+  position: relative;
+}
+
+.usage-item-search-input {
+  padding-right: 1.7rem !important;
+}
+
+.usage-item-search-clear {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 0.86rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.usage-item-search-clear:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-heading);
+}
+
+.usage-note-add {
+  width: 100%;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.usage-note-edit-wrap input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.usage-form-row input[type="number"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] .usage-form-row input[type="number"] {
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .usage-form-row input[type="number"] {
+    color-scheme: dark;
+  }
+}
+
+.usage-form-row select:focus,
+.usage-form-row input:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.usage-form-meta {
+  display: grid;
+  gap: 0.3rem;
+  justify-items: end;
+  color: var(--text-soft);
+  font-size: 0.76rem;
+}
+
+.usage-section-actions {
+  margin-top: 0.45rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.usage-section-divider {
+  margin: 0.8rem 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.usage-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  gap: 0.55rem;
+  justify-content: flex-end;
+}
+
+.usage-feedback {
+  margin: 0.6rem 0 0;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}
+
 .inventory-table {
   width: max-content;
   min-width: 100%;
@@ -1212,14 +1424,30 @@
   width: 42px;
   min-width: 42px;
   max-width: 42px;
+  padding: 0.32rem 0.3rem !important;
   text-align: center !important;
-  padding-left: 0.3rem !important;
-  padding-right: 0.3rem !important;
+  vertical-align: middle;
+  position: relative;
+}
+
+.inventory-table th.inventory-select-cell,
+.inventory-table td.inventory-select-cell {
+  line-height: normal;
+}
+
+.inventory-table th.inventory-select-cell > .inventory-select-checkbox,
+.inventory-table td.inventory-select-cell > .inventory-select-checkbox {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
 }
 
 .inventory-select-checkbox {
   width: 14px;
   height: 14px;
+  box-sizing: border-box;
   cursor: pointer;
 }
 
@@ -1227,7 +1455,7 @@
   cursor: not-allowed;
 }
 
-.inventory-table td input {
+.inventory-table td input:not([type="checkbox"]) {
   width: 100%;
   box-sizing: border-box;
   padding: 0.32rem 0.4rem;
@@ -1261,7 +1489,7 @@
   word-break: normal;
 }
 
-.inventory-table td input:focus {
+.inventory-table td input:not([type="checkbox"]):focus {
   outline: none;
   border-color: var(--focus);
   box-shadow: 0 0 0 2px var(--focus-ring-soft);
@@ -1273,7 +1501,7 @@
   box-shadow: 0 0 0 2px var(--focus-ring-soft);
 }
 
-.inventory-table td input:disabled {
+.inventory-table td input:not([type="checkbox"]):disabled {
   opacity: 1;
   color: var(--text-heading);
   -webkit-text-fill-color: var(--text-heading);
@@ -1445,6 +1673,27 @@
     grid-template-columns: 1fr;
   }
 
+  .settings-columns-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
+  }
+
+  .settings-columns-toolbar-search {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .settings-columns-add-inline {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .settings-columns-add-inline .field {
+    min-width: 0;
+  }
+
   .inventory-table th,
   .inventory-table td {
     padding: 0.42rem 0.45rem;
@@ -1460,6 +1709,18 @@
     align-items: stretch;
   }
 
+  .inventory-filter-right {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .inventory-search-wrap {
+    width: 100%;
+    max-width: 100%;
+  }
+
   .inventory-search-input {
     max-width: 100%;
   }
@@ -1467,6 +1728,32 @@
   .inventory-columns-panel {
     right: auto;
     left: 0;
+  }
+
+  .usage-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-location-wrap {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .usage-location-select {
+    width: 100%;
+  }
+
+  .usage-form-meta {
+    justify-items: start;
+  }
+
+  .usage-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .usage-section-actions {
+    justify-content: flex-start;
   }
 }
 
@@ -1479,6 +1766,117 @@
   --amplify-components-authenticator-router-border-width: 1px;
   --amplify-components-authenticator-router-border-color: var(--border);
   --amplify-components-authenticator-router-background-color: var(--surface);
+  --amplify-components-text-color: var(--text);
+  --amplify-components-label-color: var(--text-soft);
+  --amplify-components-fieldcontrol-color: var(--text-heading);
+  --amplify-components-fieldcontrol-border-color: var(--border);
+  --amplify-components-fieldcontrol-background-color: var(--surface);
+  --amplify-components-fieldcontrol-focus-border-color: var(--focus);
+  --amplify-components-fieldcontrol-focus-box-shadow: 0 0 0 2px var(--focus-ring-soft);
+  --amplify-components-fieldcontrol-placeholder-color: var(--text-soft);
   --amplify-components-button-primary-background-color: var(--primary);
   --amplify-components-button-primary-hover-background-color: var(--primary-hover);
+}
+
+[data-amplify-authenticator] .amplify-input,
+[data-amplify-authenticator] input[type="email"],
+[data-amplify-authenticator] input[type="text"],
+[data-amplify-authenticator] input[type="password"] {
+  color: var(--text-heading);
+  -webkit-text-fill-color: var(--text-heading);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+[data-amplify-authenticator] .amplify-input::placeholder,
+[data-amplify-authenticator] input[type="email"]::placeholder,
+[data-amplify-authenticator] input[type="text"]::placeholder,
+[data-amplify-authenticator] input[type="password"]::placeholder {
+  color: var(--text-soft);
+  -webkit-text-fill-color: var(--text-soft);
+}
+
+[data-amplify-authenticator] input:-webkit-autofill,
+[data-amplify-authenticator] input:-webkit-autofill:hover,
+[data-amplify-authenticator] input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text-heading);
+  -webkit-box-shadow: 0 0 0 1000px var(--surface) inset;
+  box-shadow: 0 0 0 1000px var(--surface) inset;
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+[data-amplify-authenticator] .amplify-field-group__outer-end,
+[data-amplify-authenticator] .amplify-field__show-password {
+  background: var(--surface);
+  color: var(--text-soft);
+  border-color: var(--border);
+}
+
+[data-amplify-authenticator] .amplify-field__show-password:hover {
+  color: var(--text-heading);
+  background: var(--surface-alt);
+}
+
+[data-amplify-authenticator] .amplify-icon {
+  color: currentColor;
+}
+
+[data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
+[data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
+[data-amplify-authenticator] input::-webkit-caps-lock-indicator {
+  opacity: 0.82;
+  filter: none;
+}
+
+/* Hide Safari native field accessory icons on auth inputs; they ignore theme tokens
+   and can render as dark blocks against either light or dark surfaces. */
+[data-amplify-authenticator] input[type="email"]::-webkit-contacts-auto-fill-button,
+[data-amplify-authenticator] input[type="text"]::-webkit-contacts-auto-fill-button,
+[data-amplify-authenticator] input[name="custom:organizationName"]::-webkit-contacts-auto-fill-button,
+[data-amplify-authenticator] input[type="email"]::-webkit-credentials-auto-fill-button,
+[data-amplify-authenticator] input[type="text"]::-webkit-credentials-auto-fill-button,
+[data-amplify-authenticator] input[type="password"]::-webkit-credentials-auto-fill-button {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+:root[data-theme="light"] [data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
+:root[data-theme="light"] [data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
+:root[data-theme="light"] [data-amplify-authenticator] input::-webkit-caps-lock-indicator {
+  opacity: 0.72;
+  filter: none;
+}
+
+:root[data-theme="dark"] [data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
+:root[data-theme="dark"] [data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
+:root[data-theme="dark"] [data-amplify-authenticator] input::-webkit-caps-lock-indicator {
+  opacity: 0.95;
+  filter: invert(1) brightness(1.1) contrast(0.95);
+}
+
+:root[data-theme="dark"] [data-amplify-authenticator] input,
+:root[data-theme="dark"] [data-amplify-authenticator] .amplify-input {
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] [data-amplify-authenticator] input,
+:root[data-theme="light"] [data-amplify-authenticator] .amplify-input {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) [data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
+  :root:not([data-theme]) [data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
+  :root:not([data-theme]) [data-amplify-authenticator] input::-webkit-caps-lock-indicator {
+    opacity: 0.95;
+    filter: invert(1) brightness(1.1) contrast(0.95);
+  }
+
+  :root:not([data-theme]) [data-amplify-authenticator] input,
+  :root:not([data-theme]) [data-amplify-authenticator] .amplify-input {
+    color-scheme: dark;
+  }
 }

@@ -14,6 +14,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { createHash, randomUUID } from "node:crypto";
@@ -41,15 +42,19 @@ const COLUMN_ADMIN_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate"]);
 const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROVISIONING_RETRY_AFTER_MS = 2000;
+const MODULE_KEYS = ["inventory", "usage"] as const;
+type ModuleKey = (typeof MODULE_KEYS)[number];
 
 type InventoryColumnType = "text" | "number" | "date" | "link" | "boolean";
 
 type UserRecord = {
   id: string;
   email?: string;
+  displayName?: string;
   organizationId?: string;
   role?: string;
   accessSuspended?: boolean;
+  allowedModules?: unknown;
 };
 
 type InventoryColumn = {
@@ -81,6 +86,7 @@ type AccessContext = {
   userId: string;
   organizationId: string;
   role: string;
+  allowedModules: ModuleKey[];
   canEditInventory: boolean;
   canManageColumns: boolean;
 };
@@ -137,6 +143,34 @@ const toKey = (label: string) =>
 
 const normalizeLooseKey = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const normalizeModuleKey = (value: unknown): ModuleKey | null => {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "inventory" || normalized === "usage") return normalized;
+  return null;
+};
+
+const getAllowedModules = (value: unknown): ModuleKey[] => {
+  if (!Array.isArray(value)) {
+    return [...MODULE_KEYS];
+  }
+  const out = Array.from(
+    new Set(
+      value
+        .map((item) => normalizeModuleKey(item))
+        .filter((item): item is ModuleKey => !!item),
+    ),
+  );
+  return out.length > 0 ? out : [...MODULE_KEYS];
+};
+
+const hasModuleAccess = (
+  access: AccessContext,
+  required: ModuleKey | ModuleKey[],
+): boolean => {
+  const requiredModules = Array.isArray(required) ? required : [required];
+  return requiredModules.some((moduleKey) => access.allowedModules.includes(moduleKey));
+};
 
 const HEADER_ALIASES: Record<string, string> = {
   itemname: "itemName",
@@ -811,9 +845,108 @@ const getAccessContext = async (event: any): Promise<AccessContext> => {
     userId,
     organizationId: normalizeOrgId(user.organizationId),
     role,
+    allowedModules: getAllowedModules(user.allowedModules),
     canEditInventory: EDIT_ROLES.has(role),
     canManageColumns: COLUMN_ADMIN_ROLES.has(role),
   };
+};
+
+const handleListModuleAccessUsers = async (access: AccessContext) => {
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can manage module access" });
+  }
+
+  const users: Array<{
+    userId: string;
+    email: string;
+    displayName: string;
+    role: string;
+    allowedModules: ModuleKey[];
+  }> = [];
+
+  let lastEvaluatedKey: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb.send(
+      new ScanCommand({
+        TableName: USER_TABLE,
+        FilterExpression: "organizationId = :org",
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+        },
+        ExclusiveStartKey: lastEvaluatedKey,
+      }),
+    );
+    for (const item of page.Items ?? []) {
+      const user = item as UserRecord;
+      users.push({
+        userId: String(user.id ?? ""),
+        email: normalizeEmail(user.email),
+        displayName: String(user.displayName ?? ""),
+        role: normalizeRole(user.role),
+        allowedModules: getAllowedModules(user.allowedModules),
+      });
+    }
+    lastEvaluatedKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastEvaluatedKey);
+
+  users.sort((a, b) => {
+    const aName = a.displayName.trim() || a.email || a.userId;
+    const bName = b.displayName.trim() || b.email || b.userId;
+    return aName.localeCompare(bName);
+  });
+
+  return json(200, {
+    modules: MODULE_KEYS,
+    users,
+  });
+};
+
+const handleUpdateUserModuleAccess = async (
+  access: AccessContext,
+  path: string,
+  body: any,
+) => {
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can manage module access" });
+  }
+
+  const match = path.match(/\/inventory\/module-access\/users\/([^/]+)$/);
+  const targetUserId = String(match?.[1] ?? "").trim();
+  if (!targetUserId) {
+    return json(400, { error: "User id is required" });
+  }
+
+  const requestedAllowedModules = Array.isArray(body?.allowedModules)
+    ? Array.from(
+        new Set(
+          body.allowedModules
+            .map((item: unknown) => normalizeModuleKey(item))
+            .filter((item: ModuleKey | null): item is ModuleKey => !!item),
+        ),
+      )
+    : null;
+  if (!requestedAllowedModules) {
+    return json(400, { error: "allowedModules must be an array." });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: USER_TABLE,
+      Key: { id: targetUserId },
+      ConditionExpression: "organizationId = :org",
+      UpdateExpression: "SET allowedModules = :allowedModules",
+      ExpressionAttributeValues: {
+        ":org": access.organizationId,
+        ":allowedModules": requestedAllowedModules,
+      },
+    }),
+  );
+
+  return json(200, {
+    ok: true,
+    userId: targetUserId,
+    allowedModules: requestedAllowedModules,
+  });
 };
 
 const handleBootstrap = async (storage: InventoryStorage, access: AccessContext) => {
@@ -914,6 +1047,112 @@ const handleSaveItems = async (storage: InventoryStorage, access: AccessContext,
   }
 
   return json(200, { ok: true });
+};
+
+const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContext, body: any) => {
+  const entries = Array.isArray(body?.entries) ? body.entries : [];
+  if (entries.length === 0) {
+    return json(400, { error: "At least one usage entry is required." });
+  }
+
+  const usageByItemId = new Map<string, { quantityUsed: number; location?: string }>();
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    const itemId = String(entry?.itemId ?? "").trim();
+    if (!itemId) {
+      return json(400, { error: `Entry ${i + 1}: itemId is required.` });
+    }
+    const quantityUsed = Number(entry?.quantityUsed);
+    if (!Number.isFinite(quantityUsed) || quantityUsed <= 0) {
+      return json(400, { error: "Used quantity must be greater than 0." });
+    }
+    const location = String(entry?.location ?? "").trim();
+    const existing = usageByItemId.get(itemId);
+    if (!existing) {
+      usageByItemId.set(itemId, {
+        quantityUsed,
+        location: location || undefined,
+      });
+      continue;
+    }
+
+    if (existing.location && location && existing.location !== location) {
+      return json(400, { error: `Entry ${i + 1}: conflicting locations for the same item.` });
+    }
+
+    existing.quantityUsed += quantityUsed;
+    if (!existing.location && location) existing.location = location;
+    usageByItemId.set(itemId, existing);
+  }
+
+  const items = await listAllItems(storage, access.organizationId);
+  const byId = new Map(items.map((item) => [String(item.id), item]));
+  let updatedCount = 0;
+
+  let itemCounter = 0;
+  for (const [itemId, entry] of usageByItemId) {
+    itemCounter += 1;
+    const item = byId.get(itemId);
+    if (!item) {
+      return json(404, { error: `Entry ${itemCounter}: item not found.` });
+    }
+
+    let values: Record<string, string | number | boolean | null> = {};
+    try {
+      values = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, string | number | boolean | null>;
+    } catch {
+      values = {};
+    }
+    const itemLocation = String(values.location ?? "").trim();
+    if (entry.location && itemLocation && entry.location !== itemLocation) {
+      return json(400, { error: `Entry ${itemCounter}: location does not match inventory.` });
+    }
+
+    const currentQuantityRaw = values.quantity;
+    const currentQuantity = Number(currentQuantityRaw ?? 0);
+    if (!Number.isFinite(currentQuantity) || currentQuantity < 0) {
+      return json(400, { error: `Entry ${itemCounter}: current quantity is invalid.` });
+    }
+    if (entry.quantityUsed > currentQuantity) {
+      return json(400, {
+        error: `Entry ${itemCounter}: usage (${entry.quantityUsed}) exceeds available quantity (${currentQuantity}).`,
+      });
+    }
+
+    const nextQuantity = currentQuantity - entry.quantityUsed;
+    const nextValues = {
+      ...values,
+      quantity: nextQuantity,
+    };
+
+    try {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: storage.itemTable,
+          Key: { id: item.id },
+          ConditionExpression: "organizationId = :org AND #module = :module",
+          UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
+          ExpressionAttributeNames: {
+            "#module": "module",
+          },
+          ExpressionAttributeValues: {
+            ":org": access.organizationId,
+            ":module": "inventory",
+            ":values": JSON.stringify(nextValues),
+            ":updatedAtCustom": new Date().toISOString(),
+          },
+        }),
+      );
+      updatedCount += 1;
+    } catch (err: any) {
+      if (err?.name === "ConditionalCheckFailedException") {
+        return json(403, { error: `Entry ${itemCounter}: item does not belong to organization.` });
+      }
+      throw err;
+    }
+  }
+
+  return json(200, { ok: true, updatedCount });
 };
 
 const handleCreateColumn = async (storage: InventoryStorage, access: AccessContext, body: any) => {
@@ -1421,41 +1660,84 @@ export const handler = async (event: any) => {
     }
 
     const access = await getAccessContext(event);
+
+    if (method === "GET" && path.endsWith("/inventory/module-access/users")) {
+      return handleListModuleAccessUsers(access);
+    }
+
+    if (method === "POST" && /\/inventory\/module-access\/users\/[^/]+$/.test(path)) {
+      return handleUpdateUserModuleAccess(access, path, parseBody(event));
+    }
+
     const storage = await ensureStorageForOrganization(access.organizationId);
 
     if (method === "GET" && path.endsWith("/inventory/bootstrap")) {
+      if (!hasModuleAccess(access, ["inventory", "usage"])) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleBootstrap(storage, access);
     }
 
     if (method === "GET" && path.endsWith("/inventory/items")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleListItems(storage, access, query);
     }
 
     if (method === "POST" && path.endsWith("/inventory/items/save")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleSaveItems(storage, access, parseBody(event));
     }
 
+    if (method === "POST" && path.endsWith("/inventory/usage/submit")) {
+      if (!hasModuleAccess(access, "usage")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleSubmitUsage(storage, access, parseBody(event));
+    }
+
     if (method === "POST" && path.endsWith("/inventory/import-csv")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleImportCsv(storage, access, parseBody(event));
     }
 
     if (method === "POST" && path.endsWith("/inventory/columns")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleCreateColumn(storage, access, parseBody(event));
     }
 
     if (method === "POST" && /\/inventory\/columns\/[^/]+\/visibility$/.test(path)) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleUpdateColumnVisibility(storage, access, path, parseBody(event));
     }
 
     if (method === "POST" && /\/inventory\/columns\/[^/]+\/label$/.test(path)) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleUpdateColumnLabel(storage, access, path, parseBody(event));
     }
 
     if (method === "DELETE" && /\/inventory\/columns\/[^/]+$/.test(path)) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleDeleteColumn(storage, access, path);
     }
 
     if (method === "DELETE" && path.endsWith("/inventory/organization-storage")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
       return handleDeleteOrganizationStorage(access, query);
     }
 

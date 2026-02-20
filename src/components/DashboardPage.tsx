@@ -1,8 +1,16 @@
 interface DashboardPageProps {
+  canAccessInventory: boolean;
+  canAccessUsage: boolean;
   onGoToInventory: () => void;
+  onGoToUsage: () => void;
 }
 
-export function DashboardPage({ onGoToInventory }: DashboardPageProps) {
+export function DashboardPage({
+  canAccessInventory,
+  canAccessUsage,
+  onGoToInventory,
+  onGoToUsage,
+}: DashboardPageProps) {
   return (
     <section className="app-content">
       <div className="app-card">
@@ -14,9 +22,19 @@ export function DashboardPage({ onGoToInventory }: DashboardPageProps) {
         </header>
 
         <div className="app-actions">
-          <button className="button button-primary" onClick={onGoToInventory}>
-            Inventory
-          </button>
+          {canAccessInventory ? (
+            <button className="button button-primary" onClick={onGoToInventory}>
+              Inventory
+            </button>
+          ) : null}
+          {canAccessUsage ? (
+            <button className="button button-secondary" onClick={onGoToUsage}>
+              Usage Form
+            </button>
+          ) : null}
+          {!canAccessInventory && !canAccessUsage ? (
+            <p className="app-subtitle">No modules are enabled for your account.</p>
+          ) : null}
         </div>
       </div>
     </section>

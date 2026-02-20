@@ -125,6 +125,7 @@ export const handler: Handler = async (event) => {
           displayName,
           organizationId: inviteOrganizationId,
           role: invitedRole,
+          allowedModules: ["inventory", "usage"],
           accessSuspended: !isPaidStatus(orgResult.Item.paymentStatus),
           createdAt: new Date().toISOString(),
         },
@@ -198,6 +199,7 @@ export const handler: Handler = async (event) => {
         displayName,
         organizationId,
         role: "ADMIN",
+        allowedModules: ["inventory", "usage"],
         accessSuspended: true, // until payment confirmed
         createdAt: new Date().toISOString(),
       },

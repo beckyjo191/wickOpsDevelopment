@@ -33,17 +33,35 @@ export type InventoryAccess = {
   userId: string;
   organizationId: string;
   role: string;
+  allowedModules?: string[];
   canEditInventory: boolean;
   canManageColumns: boolean;
 };
 
+export type AppModuleKey = "inventory" | "usage";
+
 export type InventoryColumn = ApiColumn;
+
+export type ModuleAccessUser = {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  allowedModules: AppModuleKey[];
+};
 
 export type InventoryRow = {
   id: string;
   position: number;
   values: Record<string, string | number | boolean | null>;
   createdAt?: string;
+};
+
+export type InventoryUsageEntryInput = {
+  itemId: string;
+  quantityUsed: number;
+  notes?: string;
+  location?: string;
 };
 
 export class InventoryProvisioningError extends Error {
@@ -153,6 +171,28 @@ export const saveInventoryItems = async (
   if (!res.ok) {
     throw new Error((await res.text()) || "Failed to save inventory");
   }
+};
+
+export const submitInventoryUsage = async (
+  entries: InventoryUsageEntryInput[],
+): Promise<{
+  ok: boolean;
+  updatedCount: number;
+}> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/usage/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ entries }),
+  });
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Usage submission failed."));
+  }
+  const data = await res.json();
+  return {
+    ok: !!data?.ok,
+    updatedCount: Number(data?.updatedCount ?? 0),
+  };
 };
 
 export const importInventoryCsv = async (
@@ -319,5 +359,36 @@ export const updateInventoryColumnLabel = async (
   });
   if (!res.ok) {
     throw new Error((await res.text()) || "Failed to update column label");
+  }
+};
+
+export const listModuleAccessUsers = async (): Promise<{
+  modules: AppModuleKey[];
+  users: ModuleAccessUser[];
+}> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/module-access/users`);
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to load module access users");
+  }
+  const data = await res.json();
+  return {
+    modules: (Array.isArray(data.modules) ? data.modules : []) as AppModuleKey[],
+    users: (Array.isArray(data.users) ? data.users : []) as ModuleAccessUser[],
+  };
+};
+
+export const updateUserModuleAccess = async (
+  userId: string,
+  allowedModules: AppModuleKey[],
+): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/module-access/users/${encodeURIComponent(userId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ allowedModules }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to update module access");
   }
 };

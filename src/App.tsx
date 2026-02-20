@@ -67,6 +67,7 @@ const toAllowedModules = (value: unknown): AppModuleKey[] => {
 
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
+  const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [view, setView] = useState<AppView>("dashboard");
   const [loadingLine, setLoadingLine] = useState(() => pickRandom(APP_LOADING_LINES));
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
@@ -245,6 +246,17 @@ export default function App() {
   }, [scopedUsagePreferencesStorageKey, usageFormPreferences]);
 
   useEffect(() => {
+    if (authStatus !== "authenticated") {
+      setCurrentUserEmail("");
+      return;
+    }
+    const derived = String(user?.attributes?.email ?? user?.signInDetails?.loginId ?? "");
+    if (derived) {
+      setCurrentUserEmail(derived);
+    }
+  }, [authStatus, user?.attributes?.email, user?.signInDetails?.loginId]);
+
+  useEffect(() => {
     const detailsMenuSelector = [
       "details.app-module-menu[open]",
       "details.app-user-menu[open]",
@@ -329,11 +341,13 @@ export default function App() {
 
   if (authStatus !== "authenticated" || !user) return null;
 
+  const derivedUserEmail = String(user?.attributes?.email ?? user?.signInDetails?.loginId ?? "");
+
   if (subState.status === "unsubscribed" || subState.accessSuspended) {
     return <SubscriptionPage />;
   }
 
-  const userEmail = user?.attributes?.email ?? user?.signInDetails?.loginId ?? "";
+  const userEmail = currentUserEmail || derivedUserEmail;
   const userName =
     subState.displayName.trim() ||
     user?.attributes?.name?.trim() ||
@@ -375,6 +389,8 @@ export default function App() {
   if (view === "settings") {
     content = (
       <SettingsPage
+        currentDisplayName={subState.displayName}
+        currentUserEmail={String(userEmail)}
         canInviteMore={canInviteMore}
         seatsRemaining={seatsRemaining}
         seatLimit={subState.seatLimit}
@@ -387,6 +403,10 @@ export default function App() {
         onCurrentUserAllowedModulesChange={(allowedModules) =>
           setSubState((prev) => ({ ...prev, allowedModules }))
         }
+        onCurrentUserDisplayNameChange={(displayName) =>
+          setSubState((prev) => ({ ...prev, displayName }))
+        }
+        onCurrentUserEmailChange={(email) => setCurrentUserEmail(email)}
         canManageModuleAccess={canManageModuleAccess}
         currentUserId={String(user?.attributes?.sub ?? "")}
         onInviteUsers={() => {

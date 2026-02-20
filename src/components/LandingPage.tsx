@@ -19,7 +19,7 @@ export function LandingPage() {
       <main className="lp-main">
         <section className="lp-hero">
           <img className="lp-hero-logo" src={logoOriginal} alt="WickOps Systems" />
-          <p className="lp-kicker">Built for real life operations</p>
+          <p className="lp-kicker">Practical systems for busy people.</p>
           <h1>WickOps builds organization systems that give you your time back.</h1>
           <p className="lp-sub">
             Spend less time digging through cabinets, pantry shelves, and supply bins. From homes to field teams,
@@ -75,7 +75,7 @@ export function LandingPage() {
             <span>Expense Tracking (MoM / YoY)</span>
             <span>Custom Workflows</span>
           </div>
-          <p>Practical systems for busy people.</p>
+          <p>Built for real life operations.</p>
         </section>
 
       </main>

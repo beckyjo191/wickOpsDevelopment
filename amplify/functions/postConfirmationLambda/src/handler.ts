@@ -58,6 +58,7 @@ export const handler: Handler = async (event) => {
         organizationId?: string;
         role?: string;
         status?: string;
+        displayName?: string;
       }
     | undefined;
   try {
@@ -69,6 +70,7 @@ export const handler: Handler = async (event) => {
           organizationId?: string;
           role?: string;
           status?: string;
+          displayName?: string;
         }
       | undefined;
   } catch (err) {
@@ -122,7 +124,7 @@ export const handler: Handler = async (event) => {
         Item: {
           id: event.userName,
           email: normalizedEmail,
-          displayName,
+          displayName: String(invite.displayName ?? "").trim() || displayName,
           organizationId: inviteOrganizationId,
           role: invitedRole,
           allowedModules: ["inventory", "usage"],

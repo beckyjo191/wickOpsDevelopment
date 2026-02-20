@@ -21,6 +21,7 @@ const INVITE_ALLOWED_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 type InviteRole = "ADMIN" | "EDITOR" | "VIEWER";
 
 type InviteInput = {
+  name: string;
   email: string;
   role: InviteRole;
 };
@@ -85,19 +86,22 @@ export const handler = async (event: any) => {
       : event.body ?? "";
     const body: InviteRequest = rawBody ? JSON.parse(rawBody) : {};
 
-    const normalizedInviteMap = new Map<string, InviteRole>();
+    const normalizedInviteMap = new Map<string, { name: string; role: InviteRole }>();
     if (Array.isArray(body.invites)) {
       for (const invite of body.invites) {
+        const name = String(invite?.name ?? "").trim();
         const email = String(invite?.email ?? "").trim().toLowerCase();
         const role = String(invite?.role ?? "VIEWER").toUpperCase() as InviteRole;
         if (!email) continue;
+        if (!name) continue;
         if (role !== "ADMIN" && role !== "EDITOR" && role !== "VIEWER") continue;
-        normalizedInviteMap.set(email, role);
+        normalizedInviteMap.set(email, { name, role });
       }
     }
-    const invites = Array.from(normalizedInviteMap.entries()).map(([email, role]) => ({
+    const invites = Array.from(normalizedInviteMap.entries()).map(([email, value]) => ({
+      name: value.name,
       email,
-      role,
+      role: value.role,
     }));
 
     if (invites.length === 0) {
@@ -148,11 +152,11 @@ export const handler = async (event: any) => {
       };
     }
 
-    const invited: { email: string; role: InviteRole }[] = [];
+    const invited: { name: string; email: string; role: InviteRole }[] = [];
     const failed: { email: string; error: string }[] = [];
 
     for (const invite of invites) {
-      const { email, role } = invite;
+      const { name, email, role } = invite;
       try {
         await cognito.send(
           new AdminCreateUserCommand({
@@ -160,6 +164,7 @@ export const handler = async (event: any) => {
             Username: email,
             DesiredDeliveryMediums: ["EMAIL"],
             UserAttributes: [
+              { Name: "name", Value: name },
               { Name: "email", Value: email },
               { Name: "email_verified", Value: "true" },
               { Name: "custom:organizationName", Value: String(org.name ?? "") },
@@ -173,6 +178,7 @@ export const handler = async (event: any) => {
             Item: {
               id: email,
               email,
+              displayName: name,
               organizationId: orgId,
               role,
               status: "PENDING",
@@ -183,7 +189,7 @@ export const handler = async (event: any) => {
           })
         );
 
-        invited.push({ email, role });
+        invited.push({ name, email, role });
       } catch (error: any) {
         console.error("Invite failed", { email, error });
         failed.push({

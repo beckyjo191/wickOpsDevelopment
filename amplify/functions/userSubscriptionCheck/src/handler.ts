@@ -239,6 +239,7 @@ const ensureInventoryTablesForOrganization = async (organizationId: string): Pro
 type InviteRecord = {
   id?: string;
   email?: string;
+  displayName?: string;
   status?: string;
   organizationId?: string;
   acceptedUserId?: string;
@@ -395,11 +396,17 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
     if (user && email) {
       const persistedEmail = normalizeEmail(user.email);
       if (persistedEmail && persistedEmail !== email) {
-        console.error("Identity mismatch for user", { userId, claimEmail: email, persistedEmail });
-        return {
-          statusCode: 403,
-          body: JSON.stringify({ error: "Identity mismatch" }),
-        };
+        await ddb.send(
+          new UpdateCommand({
+            TableName: USER_TABLE,
+            Key: { id: userId },
+            UpdateExpression: "SET email = :email",
+            ExpressionAttributeValues: {
+              ":email": email,
+            },
+          }),
+        );
+        user.email = email;
       }
     }
 
@@ -419,6 +426,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
               organizationId?: string;
               role?: string;
               status?: string;
+              displayName?: string;
             }
           | undefined;
 
@@ -456,7 +464,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
         user = {
           id: userId,
           email,
-          displayName: email.split("@")[0],
+          displayName: String(normalizedInvite?.displayName ?? "").trim() || email.split("@")[0],
           organizationId: inviteOrganizationId,
           role,
           allowedModules: ["inventory", "usage"],

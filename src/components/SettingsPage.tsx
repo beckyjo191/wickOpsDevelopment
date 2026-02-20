@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import {
+  confirmUserAttribute,
+  fetchAuthSession,
+  updateUserAttributes,
+} from "aws-amplify/auth";
+import {
   createInventoryColumn,
   deleteInventoryColumn,
   listModuleAccessUsers,
   loadInventoryBootstrap,
   type ModuleAccessUser,
   type AppModuleKey,
+  syncCurrentUserEmail,
   updateUserModuleAccess,
+  updateCurrentUserDisplayName,
   updateInventoryColumnLabel,
   updateInventoryColumnVisibility,
   type InventoryColumn,
@@ -25,6 +32,8 @@ const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
 };
 
 interface SettingsPageProps {
+  currentDisplayName: string;
+  currentUserEmail: string;
   canInviteMore: boolean;
   seatsRemaining: number;
   seatLimit: number;
@@ -37,10 +46,14 @@ interface SettingsPageProps {
   usageFormPreferences: UsageFormPreferences;
   onUsageFormPreferencesChange: (preferences: UsageFormPreferences) => void;
   onCurrentUserAllowedModulesChange: (allowedModules: AppModuleKey[]) => void;
+  onCurrentUserDisplayNameChange: (displayName: string) => void;
+  onCurrentUserEmailChange: (email: string) => void;
   onInviteUsers: () => void;
 }
 
 export function SettingsPage({
+  currentDisplayName,
+  currentUserEmail,
   canInviteMore,
   seatsRemaining,
   seatLimit,
@@ -53,8 +66,11 @@ export function SettingsPage({
   usageFormPreferences,
   onUsageFormPreferencesChange,
   onCurrentUserAllowedModulesChange,
+  onCurrentUserDisplayNameChange,
+  onCurrentUserEmailChange,
   onInviteUsers,
 }: SettingsPageProps) {
+  const normalizeEmail = (value: string): string => value.trim().toLowerCase();
   const normalizeLooseKey = (value: string): string =>
     value.toLowerCase().replace(/[^a-z0-9]/g, "");
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
@@ -69,6 +85,15 @@ export function SettingsPage({
   const [pendingDeleteColumnId, setPendingDeleteColumnId] = useState<string | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState("");
+  const [displayNameInput, setDisplayNameInput] = useState(currentDisplayName);
+  const [editingDisplayName, setEditingDisplayName] = useState(false);
+  const [savingDisplayName, setSavingDisplayName] = useState(false);
+  const [emailInput, setEmailInput] = useState(currentUserEmail);
+  const [editingEmail, setEditingEmail] = useState(false);
+  const [pendingEmailVerification, setPendingEmailVerification] = useState(false);
+  const [emailVerificationCode, setEmailVerificationCode] = useState("");
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [moduleAccessUsers, setModuleAccessUsers] = useState<ModuleAccessUser[]>([]);
   const [moduleAccessKeys, setModuleAccessKeys] = useState<AppModuleKey[]>(["inventory", "usage"]);
   const [loadingModuleAccess, setLoadingModuleAccess] = useState(false);
@@ -103,6 +128,18 @@ export function SettingsPage({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    setDisplayNameInput(currentDisplayName);
+    setEditingDisplayName(false);
+  }, [currentDisplayName]);
+
+  useEffect(() => {
+    setEmailInput(currentUserEmail);
+    setEditingEmail(false);
+    setPendingEmailVerification(false);
+    setEmailVerificationCode("");
+  }, [currentUserEmail]);
 
   useEffect(() => {
     if (!canManageModuleAccess) return;
@@ -316,6 +353,10 @@ export function SettingsPage({
     } else {
       next.delete(moduleKey);
     }
+    if (targetUserId === currentUserId && next.size === 0) {
+      alert("You must keep access to at least one module.");
+      return;
+    }
     const nextAllowedModules = Array.from(next) as AppModuleKey[];
 
     setModuleAccessUsers((prev) =>
@@ -339,6 +380,106 @@ export function SettingsPage({
       alert(err?.message ?? "Failed to update module access");
     } finally {
       setSavingModuleAccessUserId(null);
+    }
+  };
+
+  const onSaveDisplayName = async () => {
+    const nextDisplayName = displayNameInput.trim();
+    if (!nextDisplayName) {
+      alert("Name is required.");
+      return;
+    }
+    if (nextDisplayName === currentDisplayName.trim()) return;
+    setSavingDisplayName(true);
+    try {
+      await updateCurrentUserDisplayName(nextDisplayName);
+      onCurrentUserDisplayNameChange(nextDisplayName);
+      setEditingDisplayName(false);
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to update your name");
+    } finally {
+      setSavingDisplayName(false);
+    }
+  };
+
+  const onCancelDisplayNameEdit = () => {
+    setDisplayNameInput(currentDisplayName);
+    setEditingDisplayName(false);
+  };
+
+  const isValidEmail = (value: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+  const onStartEmailEdit = () => {
+    setEmailInput(currentUserEmail);
+    setPendingEmailVerification(false);
+    setEmailVerificationCode("");
+    setEditingEmail(true);
+  };
+
+  const onCancelEmailEdit = () => {
+    setEmailInput(currentUserEmail);
+    setPendingEmailVerification(false);
+    setEmailVerificationCode("");
+    setEditingEmail(false);
+  };
+
+  const onSendEmailVerification = async () => {
+    const nextEmail = normalizeEmail(emailInput);
+    if (!isValidEmail(nextEmail)) {
+      alert("Please enter a valid email address.");
+      return;
+    }
+    if (nextEmail === normalizeEmail(currentUserEmail)) {
+      onCancelEmailEdit();
+      return;
+    }
+
+    setSavingEmail(true);
+    try {
+      const output = await updateUserAttributes({
+        userAttributes: {
+          email: nextEmail,
+        },
+      });
+      const emailNextStep = output.email?.nextStep?.updateAttributeStep;
+      if (emailNextStep === "DONE") {
+        const sync = await syncCurrentUserEmail();
+        onCurrentUserEmailChange(sync.email);
+        setEditingEmail(false);
+        setPendingEmailVerification(false);
+        setEmailVerificationCode("");
+        return;
+      }
+      setPendingEmailVerification(true);
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to start email update.");
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
+  const onConfirmEmailVerification = async () => {
+    const code = emailVerificationCode.trim();
+    if (!code) {
+      alert("Enter the verification code.");
+      return;
+    }
+    setVerifyingEmail(true);
+    try {
+      await confirmUserAttribute({
+        userAttributeKey: "email",
+        confirmationCode: code,
+      });
+      await fetchAuthSession({ forceRefresh: true });
+      const sync = await syncCurrentUserEmail();
+      onCurrentUserEmailChange(sync.email);
+      setEditingEmail(false);
+      setPendingEmailVerification(false);
+      setEmailVerificationCode("");
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to verify email code.");
+    } finally {
+      setVerifyingEmail(false);
     }
   };
 
@@ -388,6 +529,125 @@ export function SettingsPage({
             ? `You have ${seatsRemaining} invite${seatsRemaining === 1 ? "" : "s"} remaining (${seatsUsed}/${seatLimit} seats used).`
             : `No invite seats remaining (${seatsUsed}/${seatLimit} seats used).`}
         </div>
+
+        <details
+          className="settings-section spacer-top"
+          open
+        >
+          <summary className="settings-section-title">Profile</summary>
+          <p className="settings-section-copy">
+            Update your display name.
+          </p>
+          <div className="settings-columns-add settings-columns-add-inline">
+            <input
+              className={`field settings-profile-field${!editingDisplayName ? " settings-profile-field-locked" : ""}`}
+              type="text"
+              placeholder="Your name"
+              value={displayNameInput}
+              onChange={(event) => setDisplayNameInput(event.target.value)}
+              disabled={!editingDisplayName || savingDisplayName}
+            />
+            {!editingDisplayName ? (
+              <div className="settings-action-wrap">
+                <button
+                  className="settings-action-icon"
+                  onClick={() => setEditingDisplayName(true)}
+                  aria-label="Edit name"
+                  type="button"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
+                  </svg>
+                </button>
+                <span className="settings-action-tip" role="tooltip">Edit</span>
+              </div>
+            ) : (
+              <span className="settings-column-edit">
+                <button
+                  className="button button-secondary settings-inline-action"
+                  type="button"
+                  onClick={() => void onSaveDisplayName()}
+                  disabled={savingDisplayName || !displayNameInput.trim()}
+                >
+                  {savingDisplayName ? "Saving..." : "Save"}
+                </button>
+                <button
+                  className="button button-ghost settings-inline-action"
+                  type="button"
+                  onClick={onCancelDisplayNameEdit}
+                  disabled={savingDisplayName}
+                >
+                  Cancel
+                </button>
+              </span>
+            )}
+          </div>
+
+          <div className="settings-columns-add settings-columns-add-inline spacer-top">
+            <input
+              className={`field settings-profile-field${!editingEmail ? " settings-profile-field-locked" : ""}`}
+              type="email"
+              placeholder="your@email.com"
+              value={emailInput}
+              onChange={(event) => setEmailInput(event.target.value)}
+              disabled={!editingEmail || savingEmail || verifyingEmail}
+            />
+            {!editingEmail ? (
+              <div className="settings-action-wrap">
+                <button
+                  className="settings-action-icon"
+                  onClick={onStartEmailEdit}
+                  aria-label="Edit email"
+                  type="button"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
+                  </svg>
+                </button>
+                <span className="settings-action-tip" role="tooltip">Edit</span>
+              </div>
+            ) : (
+              <span className="settings-column-edit">
+                <button
+                  className="button button-secondary settings-inline-action"
+                  type="button"
+                  onClick={() => void onSendEmailVerification()}
+                  disabled={savingEmail || verifyingEmail || !normalizeEmail(emailInput)}
+                >
+                  {savingEmail ? "Sending..." : "Verify"}
+                </button>
+                <button
+                  className="button button-ghost settings-inline-action"
+                  type="button"
+                  onClick={onCancelEmailEdit}
+                  disabled={savingEmail || verifyingEmail}
+                >
+                  Cancel
+                </button>
+              </span>
+            )}
+          </div>
+          {editingEmail && pendingEmailVerification ? (
+            <div className="settings-columns-add settings-columns-add-inline spacer-top">
+              <input
+                className="field settings-profile-field"
+                type="text"
+                placeholder="Verification code"
+                value={emailVerificationCode}
+                onChange={(event) => setEmailVerificationCode(event.target.value)}
+                disabled={verifyingEmail}
+              />
+              <button
+                className="button button-secondary settings-inline-action"
+                type="button"
+                onClick={() => void onConfirmEmailVerification()}
+                disabled={verifyingEmail || !emailVerificationCode.trim()}
+              >
+                {verifyingEmail ? "Confirming..." : "Confirm"}
+              </button>
+            </div>
+          ) : null}
+        </details>
 
         <details
           className="settings-section spacer-top"
@@ -455,19 +715,33 @@ export function SettingsPage({
                     {user.userId === currentUserId ? <span className="settings-core-pill">You</span> : null}
                   </div>
                   <div className="settings-column-actions">
-                    {moduleAccessKeys.map((moduleKey) => (
-                      <label className="settings-column-select" key={`${user.userId}-${moduleKey}`}>
+                    {moduleAccessKeys.map((moduleKey) => {
+                      const normalizedCurrentEmail = normalizeEmail(currentUserEmail);
+                      const normalizedUserEmail = normalizeEmail(user.email);
+                      const normalizedUserIdAsEmail = normalizeEmail(user.userId);
+                      const isSelf =
+                        user.userId === currentUserId ||
+                        (!!normalizedCurrentEmail &&
+                          (normalizedUserEmail === normalizedCurrentEmail ||
+                            normalizedUserIdAsEmail === normalizedCurrentEmail));
+                      const isChecked = user.allowedModules.includes(moduleKey);
+                      return (
+                      <label
+                        className={`settings-column-select${isSelf ? " settings-column-select-disabled" : ""}`}
+                        key={`${user.userId}-${moduleKey}`}
+                      >
                         <input
                           type="checkbox"
-                          checked={user.allowedModules.includes(moduleKey)}
-                          disabled={savingModuleAccessUserId === user.userId}
+                          checked={isChecked}
+                          disabled={savingModuleAccessUserId === user.userId || isSelf}
                           onChange={(event) =>
                             void onToggleUserModule(user.userId, moduleKey, event.target.checked)
                           }
                         />
                         <span>{moduleKey === "usage" ? "Usage" : "Inventory"}</span>
                       </label>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -486,7 +760,7 @@ export function SettingsPage({
         >
           <summary className="settings-section-title">Usage Form Fields</summary>
           <p className="settings-section-copy">
-            Admins control which inventory columns are allowed on the Usage Form.
+            Admins control which fields are allowed on the Usage Form.
           </p>
           <div className="inventory-search-wrap">
             <input

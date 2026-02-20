@@ -1,5 +1,8 @@
 import { defineBackend } from "@aws-amplify/backend";
 import { RemovalPolicy, Stack } from "aws-cdk-lib";
+import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
+import { CorsHttpMethod, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { auth } from "./auth/resource";
@@ -18,6 +21,116 @@ const backend = defineBackend({
   userSubscriptionCheck,
   sendInvites,
   inventoryApi,
+});
+
+const deploymentEnv = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
+  .trim()
+  .toLowerCase();
+const corsAllowedOrigins =
+  deploymentEnv === "prod" || deploymentEnv === "production"
+    ? ["https://systems.wickops.com"]
+    : ["http://localhost:5173"];
+const corsAllowedHeaders = ["Authorization", "Content-Type"];
+const browserCorsMethods = [
+  CorsHttpMethod.GET,
+  CorsHttpMethod.POST,
+  CorsHttpMethod.DELETE,
+  CorsHttpMethod.OPTIONS,
+];
+const createAuthenticatedHttpApi = (stackName: string, id: string) =>
+  new HttpApi(backend.createStack(stackName), id, {
+    corsPreflight: {
+      allowOrigins: corsAllowedOrigins,
+      allowHeaders: corsAllowedHeaders,
+      allowMethods: browserCorsMethods,
+    },
+  });
+
+const inventoryHttpApi = createAuthenticatedHttpApi("inventory-api-gateway", "InventoryHttpApi");
+const coreHttpApi = createAuthenticatedHttpApi("core-api-gateway", "CoreHttpApi");
+const invitesHttpApi = createAuthenticatedHttpApi("invites-api-gateway", "InvitesHttpApi");
+const billingWebhookHttpApi = new HttpApi(
+  backend.createStack("billing-webhook-api-gateway"),
+  "BillingWebhookHttpApi",
+);
+
+const createUserPoolAuthorizer = (id: string) =>
+  new HttpUserPoolAuthorizer(id, backend.auth.resources.userPool, {
+    userPoolClients: [backend.auth.resources.userPoolClient],
+  });
+const inventoryAuthorizer = createUserPoolAuthorizer("InventoryUserPoolAuthorizer");
+const coreAuthorizer = createUserPoolAuthorizer("CoreUserPoolAuthorizer");
+const invitesAuthorizer = createUserPoolAuthorizer("InvitesUserPoolAuthorizer");
+
+const inventoryLambdaIntegration = new HttpLambdaIntegration(
+  "InventoryLambdaIntegration",
+  backend.inventoryApi.resources.lambda,
+);
+const userSubscriptionIntegration = new HttpLambdaIntegration(
+  "UserSubscriptionIntegration",
+  backend.userSubscriptionCheck.resources.lambda,
+);
+const createCheckoutSessionIntegration = new HttpLambdaIntegration(
+  "CreateCheckoutSessionIntegration",
+  backend.createCheckoutSession.resources.lambda,
+);
+const sendInvitesIntegration = new HttpLambdaIntegration(
+  "SendInvitesIntegration",
+  backend.sendInvites.resources.lambda,
+);
+const stripeWebhookIntegration = new HttpLambdaIntegration(
+  "StripeWebhookIntegration",
+  backend.stripeWebhook.resources.lambda,
+);
+
+const addInventoryRoute = (path: string, methods: HttpMethod[]) => {
+  inventoryHttpApi.addRoutes({
+    path,
+    methods,
+    integration: inventoryLambdaIntegration,
+    authorizer: inventoryAuthorizer,
+  });
+};
+
+addInventoryRoute("/inventory/module-access/users", [HttpMethod.GET]);
+addInventoryRoute("/inventory/module-access/users/{userId}", [HttpMethod.POST]);
+addInventoryRoute("/inventory/profile/display-name", [HttpMethod.POST]);
+addInventoryRoute("/inventory/profile/email/sync", [HttpMethod.POST]);
+addInventoryRoute("/inventory/bootstrap", [HttpMethod.GET]);
+addInventoryRoute("/inventory/items", [HttpMethod.GET]);
+addInventoryRoute("/inventory/items/save", [HttpMethod.POST]);
+addInventoryRoute("/inventory/usage/submit", [HttpMethod.POST]);
+addInventoryRoute("/inventory/import-csv", [HttpMethod.POST]);
+addInventoryRoute("/inventory/columns", [HttpMethod.POST]);
+addInventoryRoute("/inventory/columns/{columnId}/visibility", [HttpMethod.POST]);
+addInventoryRoute("/inventory/columns/{columnId}/label", [HttpMethod.POST]);
+addInventoryRoute("/inventory/columns/{columnId}", [HttpMethod.DELETE]);
+addInventoryRoute("/inventory/organization-storage", [HttpMethod.DELETE]);
+
+coreHttpApi.addRoutes({
+  path: "/user-subscription",
+  methods: [HttpMethod.GET],
+  integration: userSubscriptionIntegration,
+  authorizer: coreAuthorizer,
+});
+coreHttpApi.addRoutes({
+  path: "/create-checkout-session",
+  methods: [HttpMethod.POST],
+  integration: createCheckoutSessionIntegration,
+  authorizer: coreAuthorizer,
+});
+
+invitesHttpApi.addRoutes({
+  path: "/send-invites",
+  methods: [HttpMethod.POST],
+  integration: sendInvitesIntegration,
+  authorizer: invitesAuthorizer,
+});
+
+billingWebhookHttpApi.addRoutes({
+  path: "/stripe-webhook",
+  methods: [HttpMethod.POST],
+  integration: stripeWebhookIntegration,
 });
 
 const inventoryStack = backend.createStack("inventory-storage");

@@ -3,6 +3,7 @@ import { useState } from "react";
 type InviteRole = "ADMIN" | "EDITOR" | "VIEWER";
 
 type InviteEntry = {
+  name: string;
   email: string;
   role: InviteRole;
 };
@@ -20,14 +21,20 @@ export function InviteUsersPage({
 }: InviteUsersPageProps) {
   const seatsRemaining = maxUsers - seatsUsed;
   const [invites, setInvites] = useState<InviteEntry[]>([
-    { email: "", role: "VIEWER" },
+    { name: "", email: "", role: "VIEWER" },
   ]);
   const [loading, setLoading] = useState(false);
 
   const addEmailField = () => {
     if (invites.length < seatsRemaining) {
-      setInvites([...invites, { email: "", role: "VIEWER" }]);
+      setInvites([...invites, { name: "", email: "", role: "VIEWER" }]);
     }
+  };
+
+  const handleNameChange = (idx: number, value: string) => {
+    const next = [...invites];
+    next[idx] = { ...next[idx], name: value };
+    setInvites(next);
   };
 
   const handleEmailChange = (idx: number, value: string) => {
@@ -47,11 +54,15 @@ export function InviteUsersPage({
     try {
       const validInvites = invites
         .map((invite) => ({
+          name: invite.name.trim(),
           email: invite.email.trim().toLowerCase(),
           role: invite.role,
         }))
         .filter((invite) => invite.email.length > 0);
       if (!validInvites.length) return alert("Please enter at least one email");
+      if (validInvites.some((invite) => invite.name.length === 0)) {
+        return alert("Please enter a name for each invited user");
+      }
 
       await onContinue(validInvites);
     } catch (err) {
@@ -81,6 +92,13 @@ export function InviteUsersPage({
         <div className="app-stack spacer-top">
           {invites.map((invite, idx) => (
             <div key={idx} className="invite-row">
+              <input
+                className="field"
+                type="text"
+                placeholder="Full name"
+                value={invite.name}
+                onChange={(e) => handleNameChange(idx, e.target.value)}
+              />
               <input
                 className="field"
                 type="email"

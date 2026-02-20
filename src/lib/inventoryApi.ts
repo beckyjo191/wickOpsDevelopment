@@ -392,3 +392,29 @@ export const updateUserModuleAccess = async (
     throw new Error((await res.text()) || "Failed to update module access");
   }
 };
+
+export const updateCurrentUserDisplayName = async (displayName: string): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/profile/display-name`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ displayName }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to update display name");
+  }
+};
+
+export const syncCurrentUserEmail = async (): Promise<{ email: string }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/profile/email/sync`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to sync email");
+  }
+  const data = await res.json();
+  return {
+    email: String(data?.email ?? ""),
+  };
+};

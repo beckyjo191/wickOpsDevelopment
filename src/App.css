@@ -378,7 +378,7 @@
 
 .invite-row {
   display: grid;
-  grid-template-columns: 1fr 190px;
+  grid-template-columns: 1fr 1fr 190px;
   gap: 0.6rem;
 }
 
@@ -564,6 +564,19 @@
   min-width: 180px;
 }
 
+.settings-profile-field {
+  width: 260px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-profile-field-locked {
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
 .settings-columns-batch-actions {
   margin-top: 0.55rem;
   display: flex;
@@ -606,6 +619,17 @@
   width: 14px;
   height: 14px;
   margin: 0;
+}
+
+.settings-column-select-disabled {
+  opacity: 0.45;
+  filter: grayscale(0.4);
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.settings-column-select-disabled input[type="checkbox"] {
+  cursor: not-allowed;
 }
 
 .settings-column-visibility {
@@ -1821,42 +1845,6 @@
   color: currentColor;
 }
 
-[data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
-[data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
-[data-amplify-authenticator] input::-webkit-caps-lock-indicator {
-  opacity: 0.82;
-  filter: none;
-}
-
-/* Hide Safari native field accessory icons on auth inputs; they ignore theme tokens
-   and can render as dark blocks against either light or dark surfaces. */
-[data-amplify-authenticator] input[type="email"]::-webkit-contacts-auto-fill-button,
-[data-amplify-authenticator] input[type="text"]::-webkit-contacts-auto-fill-button,
-[data-amplify-authenticator] input[name="custom:organizationName"]::-webkit-contacts-auto-fill-button,
-[data-amplify-authenticator] input[type="email"]::-webkit-credentials-auto-fill-button,
-[data-amplify-authenticator] input[type="text"]::-webkit-credentials-auto-fill-button,
-[data-amplify-authenticator] input[type="password"]::-webkit-credentials-auto-fill-button {
-  display: none !important;
-  visibility: hidden !important;
-  pointer-events: none;
-  width: 0;
-  height: 0;
-}
-
-:root[data-theme="light"] [data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
-:root[data-theme="light"] [data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
-:root[data-theme="light"] [data-amplify-authenticator] input::-webkit-caps-lock-indicator {
-  opacity: 0.72;
-  filter: none;
-}
-
-:root[data-theme="dark"] [data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
-:root[data-theme="dark"] [data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
-:root[data-theme="dark"] [data-amplify-authenticator] input::-webkit-caps-lock-indicator {
-  opacity: 0.95;
-  filter: invert(1) brightness(1.1) contrast(0.95);
-}
-
 :root[data-theme="dark"] [data-amplify-authenticator] input,
 :root[data-theme="dark"] [data-amplify-authenticator] .amplify-input {
   color-scheme: dark;
@@ -1868,13 +1856,6 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) [data-amplify-authenticator] input::-webkit-contacts-auto-fill-button,
-  :root:not([data-theme]) [data-amplify-authenticator] input::-webkit-credentials-auto-fill-button,
-  :root:not([data-theme]) [data-amplify-authenticator] input::-webkit-caps-lock-indicator {
-    opacity: 0.95;
-    filter: invert(1) brightness(1.1) contrast(0.95);
-  }
-
   :root:not([data-theme]) [data-amplify-authenticator] input,
   :root:not([data-theme]) [data-amplify-authenticator] .amplify-input {
     color-scheme: dark;

@@ -44,6 +44,14 @@ const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROVISIONING_RETRY_AFTER_MS = 2000;
 const MODULE_KEYS = ["inventory", "usage"] as const;
 type ModuleKey = (typeof MODULE_KEYS)[number];
+const DEPLOYMENT_ENV = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
+  .trim()
+  .toLowerCase();
+const CORS_ALLOW_ORIGIN =
+  DEPLOYMENT_ENV === "prod" || DEPLOYMENT_ENV === "production"
+    ? "https://systems.wickops.com"
+    : "http://localhost:5173";
+const CORS_ALLOW_HEADERS = "Authorization,Content-Type";
 
 type InventoryColumnType = "text" | "number" | "date" | "link" | "boolean";
 
@@ -84,6 +92,7 @@ type InventoryItem = {
 
 type AccessContext = {
   userId: string;
+  email: string;
   organizationId: string;
   role: string;
   allowedModules: ModuleKey[];
@@ -99,9 +108,10 @@ type InventoryStorage = {
 const storageCache = new Map<string, { storage: InventoryStorage; checkedAt: number }>();
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type,Authorization",
+  "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+  "Access-Control-Allow-Headers": CORS_ALLOW_HEADERS,
   "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+  Vary: "Origin",
 };
 
 const json = (statusCode: number, body: unknown) => ({
@@ -833,7 +843,19 @@ const getAccessContext = async (event: any): Promise<AccessContext> => {
   if (claimEmail) {
     const persistedEmail = normalizeEmail(user.email);
     if (persistedEmail && persistedEmail !== claimEmail) {
-      throw new Error("Identity mismatch");
+      await ddb.send(
+        new UpdateCommand({
+          TableName: USER_TABLE,
+          Key: { id: userId },
+          ConditionExpression: "organizationId = :org",
+          UpdateExpression: "SET email = :email",
+          ExpressionAttributeValues: {
+            ":org": normalizeOrgId(user.organizationId),
+            ":email": claimEmail,
+          },
+        }),
+      );
+      user.email = claimEmail;
     }
   }
   if (user.accessSuspended) {
@@ -843,6 +865,7 @@ const getAccessContext = async (event: any): Promise<AccessContext> => {
   const role = normalizeRole(user.role);
   return {
     userId,
+    email: claimEmail,
     organizationId: normalizeOrgId(user.organizationId),
     role,
     allowedModules: getAllowedModules(user.allowedModules),
@@ -928,6 +951,23 @@ const handleUpdateUserModuleAccess = async (
   if (!requestedAllowedModules) {
     return json(400, { error: "allowedModules must be an array." });
   }
+  if (targetUserId === access.userId) {
+    return json(400, { error: "You cannot change your own module access." });
+  }
+
+  const targetRes = await ddb.send(
+    new GetCommand({
+      TableName: USER_TABLE,
+      Key: { id: targetUserId },
+    }),
+  );
+  const targetUser = targetRes.Item as UserRecord | undefined;
+  if (!targetUser || normalizeOrgId(targetUser.organizationId) !== normalizeOrgId(access.organizationId)) {
+    return json(404, { error: "User not found" });
+  }
+  if (access.email && normalizeEmail(targetUser.email) === access.email) {
+    return json(400, { error: "You cannot change your own module access." });
+  }
 
   await ddb.send(
     new UpdateCommand({
@@ -946,6 +986,58 @@ const handleUpdateUserModuleAccess = async (
     ok: true,
     userId: targetUserId,
     allowedModules: requestedAllowedModules,
+  });
+};
+
+const handleUpdateCurrentUserDisplayName = async (access: AccessContext, body: any) => {
+  const displayName = String(body?.displayName ?? "").trim();
+  if (!displayName) {
+    return json(400, { error: "displayName is required." });
+  }
+  if (displayName.length > 120) {
+    return json(400, { error: "displayName is too long." });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: USER_TABLE,
+      Key: { id: access.userId },
+      ConditionExpression: "organizationId = :org",
+      UpdateExpression: "SET displayName = :displayName",
+      ExpressionAttributeValues: {
+        ":org": access.organizationId,
+        ":displayName": displayName,
+      },
+    }),
+  );
+
+  return json(200, {
+    ok: true,
+    displayName,
+  });
+};
+
+const handleSyncCurrentUserEmail = async (access: AccessContext) => {
+  if (!access.email) {
+    return json(400, { error: "Email claim is required." });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: USER_TABLE,
+      Key: { id: access.userId },
+      ConditionExpression: "organizationId = :org",
+      UpdateExpression: "SET email = :email",
+      ExpressionAttributeValues: {
+        ":org": access.organizationId,
+        ":email": access.email,
+      },
+    }),
+  );
+
+  return json(200, {
+    ok: true,
+    email: access.email,
   });
 };
 
@@ -1667,6 +1759,14 @@ export const handler = async (event: any) => {
 
     if (method === "POST" && /\/inventory\/module-access\/users\/[^/]+$/.test(path)) {
       return handleUpdateUserModuleAccess(access, path, parseBody(event));
+    }
+
+    if (method === "POST" && path.endsWith("/inventory/profile/display-name")) {
+      return handleUpdateCurrentUserDisplayName(access, parseBody(event));
+    }
+
+    if (method === "POST" && path.endsWith("/inventory/profile/email/sync")) {
+      return handleSyncCurrentUserEmail(access);
     }
 
     const storage = await ensureStorageForOrganization(access.organizationId);

@@ -842,6 +842,7 @@
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 2px;
+  background: var(--surface);
   padding: 0.55rem;
   font-size: 0.82rem;
   color: var(--text-heading);
@@ -1829,6 +1830,7 @@
   transition: background-color 9999s ease-in-out 0s;
 }
 
+[data-amplify-authenticator] .amplify-field-group__outer-start,
 [data-amplify-authenticator] .amplify-field-group__outer-end,
 [data-amplify-authenticator] .amplify-field__show-password {
   background: var(--surface);
@@ -1860,4 +1862,54 @@
   :root:not([data-theme]) [data-amplify-authenticator] .amplify-input {
     color-scheme: dark;
   }
+}
+
+/* Screen headings (Change Your Password, Confirm Email, Sign In, etc.) */
+[data-amplify-authenticator] .amplify-heading {
+  color: var(--text-heading);
+}
+
+/* Tab navigation (Sign In / Create Account switcher) */
+[data-amplify-authenticator] .amplify-tabs {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+[data-amplify-authenticator] .amplify-tabs-item {
+  color: var(--text-soft);
+  border-color: var(--border);
+  background: transparent;
+}
+
+[data-amplify-authenticator] .amplify-tabs-item[data-state="active"] {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+[data-amplify-authenticator] .amplify-tabs-item:hover {
+  color: var(--text-heading);
+  background: var(--surface-hover);
+}
+
+/* Link buttons (Forgot password?, Back to Sign In, Resend code) */
+[data-amplify-authenticator] .amplify-button--link {
+  color: var(--link);
+  background: transparent;
+}
+
+[data-amplify-authenticator] .amplify-button--link:hover {
+  color: var(--primary);
+  background: var(--surface-hover);
+}
+
+/* Body copy / descriptive text in auth forms */
+[data-amplify-authenticator] .amplify-text {
+  color: var(--text);
+}
+
+/* Error and info alert messages */
+[data-amplify-authenticator] .amplify-alert--error {
+  background: var(--danger-surface);
+  color: var(--danger);
+  border-color: var(--danger-border);
 }

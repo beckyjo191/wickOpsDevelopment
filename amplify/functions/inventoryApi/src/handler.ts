@@ -1033,20 +1033,20 @@ const handleUpdateUserModuleAccess = async (
     return json(400, { error: "User id is required" });
   }
 
-  const rawModules = Array.isArray(body?.allowedModules)
-    ? Array.from(
+  const rawModules: ModuleKey[] | null = Array.isArray(body?.allowedModules)
+    ? (Array.from(
         new Set(
           body.allowedModules
             .map((item: unknown) => normalizeModuleKey(item))
             .filter((item: ModuleKey | null): item is ModuleKey => !!item),
         ),
-      )
+      ) as ModuleKey[])
     : null;
   if (!rawModules) {
     return json(400, { error: "allowedModules must be an array." });
   }
   // Clamp to org-enabled modules — admins cannot grant modules the org hasn't activated
-  const requestedAllowedModules = rawModules.filter((key: ModuleKey) =>
+  const requestedAllowedModules = rawModules.filter((key) =>
     access.orgEnabledModules.includes(key),
   );
   if (requestedAllowedModules.length === 0) {

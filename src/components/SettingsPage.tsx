@@ -5,6 +5,7 @@ import {
   updateUserAttributes,
 } from "aws-amplify/auth";
 import {
+  createBillingPortalSession,
   createInventoryColumn,
   deleteInventoryColumn,
   listModuleAccessUsers,
@@ -12,20 +13,23 @@ import {
   type ModuleAccessUser,
   type AppModuleKey,
   syncCurrentUserEmail,
+  updateOrgModules,
   updateUserModuleAccess,
   updateCurrentUserDisplayName,
   updateInventoryColumnLabel,
   updateInventoryColumnVisibility,
   type InventoryColumn,
 } from "../lib/inventoryApi";
+import { MODULE_REGISTRY } from "../lib/moduleRegistry";
 import type { ThemePreference } from "../lib/themePreference";
 import type { UsageFormPreferences } from "../lib/usageFormPreferences";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "usageFormFields" | "inventoryColumns";
+type DisclosureKey = "appearance" | "orgModules" | "userModuleAccess" | "usageFormFields" | "inventoryColumns";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
+  orgModules: true,
   userModuleAccess: true,
   usageFormFields: true,
   inventoryColumns: false,
@@ -40,6 +44,10 @@ interface SettingsPageProps {
   seatsUsed: number;
   canManageInventoryColumns: boolean;
   canManageModuleAccess: boolean;
+  canManageOrgModules: boolean;
+  orgAvailableModules: AppModuleKey[];
+  orgEnabledModules: AppModuleKey[];
+  onOrgEnabledModulesChange: (modules: AppModuleKey[]) => void;
   currentUserId: string;
   themePreference: ThemePreference;
   onThemePreferenceChange: (preference: ThemePreference) => void;
@@ -60,6 +68,10 @@ export function SettingsPage({
   seatsUsed,
   canManageInventoryColumns,
   canManageModuleAccess,
+  canManageOrgModules,
+  orgAvailableModules,
+  orgEnabledModules,
+  onOrgEnabledModulesChange,
   currentUserId,
   themePreference,
   onThemePreferenceChange,
@@ -98,6 +110,9 @@ export function SettingsPage({
   const [moduleAccessKeys, setModuleAccessKeys] = useState<AppModuleKey[]>(["inventory", "usage"]);
   const [loadingModuleAccess, setLoadingModuleAccess] = useState(false);
   const [savingModuleAccessUserId, setSavingModuleAccessUserId] = useState<string | null>(null);
+  const [orgModulesError, setOrgModulesError] = useState<string | null>(null);
+  const [orgModulesSaving, setOrgModulesSaving] = useState(false);
+  const [portalLoading, setPortalLoading] = useState(false);
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
   const [loadedDisclosureKey, setLoadedDisclosureKey] = useState<string>("");
   const disclosureStorageKey = `${SETTINGS_DISCLOSURES_STORAGE_KEY}.${currentUserId || "anonymous"}`;
@@ -177,6 +192,10 @@ export function SettingsPage({
       const parsed = JSON.parse(raw) as Partial<DisclosureState>;
       setDisclosures({
         appearance: typeof parsed.appearance === "boolean" ? parsed.appearance : DEFAULT_DISCLOSURE_STATE.appearance,
+        orgModules:
+          typeof parsed.orgModules === "boolean"
+            ? parsed.orgModules
+            : DEFAULT_DISCLOSURE_STATE.orgModules,
         userModuleAccess:
           typeof parsed.userModuleAccess === "boolean"
             ? parsed.userModuleAccess
@@ -530,6 +549,33 @@ export function SettingsPage({
             : `No invite seats remaining (${seatsUsed}/${seatLimit} seats used).`}
         </div>
 
+        {canManageOrgModules ? (
+          <div className="settings-section spacer-top">
+            <h3 className="settings-section-title">Subscription</h3>
+            <p className="settings-section-copy">
+              Add seats, change your plan, or update payment info via the billing portal.
+            </p>
+            <button
+              className="button button-secondary"
+              type="button"
+              disabled={portalLoading}
+              onClick={() => {
+                setPortalLoading(true);
+                createBillingPortalSession()
+                  .then((url) => {
+                    window.location.href = url;
+                  })
+                  .catch((err: any) => {
+                    alert(err?.message ?? "Could not open billing portal. Please try again.");
+                    setPortalLoading(false);
+                  });
+              }}
+            >
+              {portalLoading ? "Opening…" : "Manage Subscription"}
+            </button>
+          </div>
+        ) : null}
+
         <details
           className="settings-section spacer-top"
           open
@@ -691,6 +737,63 @@ export function SettingsPage({
             </label>
           </div>
         </details>
+
+        {canManageOrgModules && orgAvailableModules.length > 0 ? (
+          <details
+            className="settings-section spacer-top"
+            open={disclosures.orgModules}
+            onToggle={(event) => onDisclosureToggle("orgModules", event.currentTarget.open)}
+          >
+            <summary className="settings-section-title">Organization Modules</summary>
+            <p className="settings-section-copy">
+              Enable or disable modules for all users in your organization.
+            </p>
+            {orgModulesError ? (
+              <p className="settings-section-copy" style={{ color: "var(--color-danger, #c0392b)" }}>
+                {orgModulesError}
+              </p>
+            ) : null}
+            <div className="settings-columns-list">
+              {MODULE_REGISTRY.filter((m) => orgAvailableModules.includes(m.key)).map((m) => {
+                const checked = orgEnabledModules.includes(m.key);
+                return (
+                  <label className="settings-column-row" key={`org-module-${m.key}`}>
+                    <span className="settings-column-visibility">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={orgModulesSaving}
+                        onChange={async () => {
+                          const next = checked
+                            ? orgEnabledModules.filter((k) => k !== m.key)
+                            : [...orgEnabledModules, m.key];
+                          if (next.length === 0) {
+                            setOrgModulesError("At least one module must remain enabled.");
+                            return;
+                          }
+                          setOrgModulesError(null);
+                          setOrgModulesSaving(true);
+                          onOrgEnabledModulesChange(next);
+                          try {
+                            const saved = await updateOrgModules(next);
+                            onOrgEnabledModulesChange(saved);
+                          } catch (err: any) {
+                            onOrgEnabledModulesChange(orgEnabledModules);
+                            setOrgModulesError(err?.message ?? "Failed to save. Please try again.");
+                          } finally {
+                            setOrgModulesSaving(false);
+                          }
+                        }}
+                      />
+                      <span>{m.name}</span>
+                    </span>
+                    <span className="settings-core-pill">{m.description}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </details>
+        ) : null}
 
         <details
           className="settings-section spacer-top"

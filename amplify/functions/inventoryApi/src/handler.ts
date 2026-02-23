@@ -23,6 +23,7 @@ const rawDdb = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(rawDdb);
 
 const USER_TABLE = process.env.USER_TABLE!;
+const ORG_TABLE = process.env.ORG_TABLE!;
 const DEFAULT_INVENTORY_COLUMN_TABLE = process.env.INVENTORY_COLUMN_TABLE!;
 const DEFAULT_INVENTORY_ITEM_TABLE = process.env.INVENTORY_ITEM_TABLE!;
 const ENABLE_PER_ORG_TABLES =
@@ -42,8 +43,47 @@ const COLUMN_ADMIN_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate"]);
 const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROVISIONING_RETRY_AFTER_MS = 2000;
-const MODULE_KEYS = ["inventory", "usage"] as const;
-type ModuleKey = (typeof MODULE_KEYS)[number];
+const ALL_MODULE_KEYS = ["inventory", "usage"] as const;
+type ModuleKey = (typeof ALL_MODULE_KEYS)[number];
+
+// Plan → module mapping. Unrecognized plan = no modules (no fallback to all).
+const PLAN_MODULE_MAP: Record<string, ModuleKey[]> = {
+  Personal:     ["inventory", "usage"],
+  Department:   ["inventory", "usage"],
+  Organization: ["inventory", "usage"],
+};
+const getAvailableModulesForPlan = (plan: string): ModuleKey[] =>
+  PLAN_MODULE_MAP[plan] ?? [];
+
+// Normalize a raw DDB value into a valid subset of allValid.
+// null/absent → allValid (backward-compat: existing orgs without enabledModules get full access).
+const normalizeModuleSubset = (value: unknown, allValid: ModuleKey[]): ModuleKey[] => {
+  if (!Array.isArray(value)) return [...allValid];
+  const s = new Set(allValid);
+  const out = [
+    ...new Set(
+      value
+        .map((i) => String(i ?? "").trim().toLowerCase())
+        .filter((i): i is ModuleKey => s.has(i as ModuleKey)),
+    ),
+  ];
+  return out.length > 0 ? out : [...allValid];
+};
+
+// Intersect user's stored allowedModules against the org-enabled superset.
+// null/absent user value → grant full superset.
+const getUserAllowedModules = (value: unknown, superset: ModuleKey[]): ModuleKey[] => {
+  if (!Array.isArray(value)) return [...superset];
+  const s = new Set(superset);
+  const out = [
+    ...new Set(
+      value
+        .map((i) => String(i ?? "").trim().toLowerCase())
+        .filter((i): i is ModuleKey => s.has(i as ModuleKey)),
+    ),
+  ];
+  return out.length > 0 ? out : [...superset];
+};
 const DEPLOYMENT_ENV = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
   .trim()
   .toLowerCase();
@@ -95,6 +135,9 @@ type AccessContext = {
   email: string;
   organizationId: string;
   role: string;
+  /** Modules the org owner has activated (intersection of plan-available + owner-enabled) */
+  orgEnabledModules: ModuleKey[];
+  /** User's personal module subset — already intersected against orgEnabledModules */
   allowedModules: ModuleKey[];
   canEditInventory: boolean;
   canManageColumns: boolean;
@@ -156,22 +199,9 @@ const normalizeLooseKey = (value: string): string =>
 
 const normalizeModuleKey = (value: unknown): ModuleKey | null => {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "inventory" || normalized === "usage") return normalized;
-  return null;
-};
-
-const getAllowedModules = (value: unknown): ModuleKey[] => {
-  if (!Array.isArray(value)) {
-    return [...MODULE_KEYS];
-  }
-  const out = Array.from(
-    new Set(
-      value
-        .map((item) => normalizeModuleKey(item))
-        .filter((item): item is ModuleKey => !!item),
-    ),
-  );
-  return out.length > 0 ? out : [...MODULE_KEYS];
+  return (ALL_MODULE_KEYS as readonly string[]).includes(normalized)
+    ? (normalized as ModuleKey)
+    : null;
 };
 
 const hasModuleAccess = (
@@ -863,15 +893,79 @@ const getAccessContext = async (event: any): Promise<AccessContext> => {
   }
 
   const role = normalizeRole(user.role);
+  const organizationId = normalizeOrgId(user.organizationId);
+
+  // Load org to compute the two-layer module access:
+  //   plan → available pool → org owner's enabled subset → user's personal subset
+  const orgRes = await ddb.send(
+    new GetCommand({ TableName: ORG_TABLE, Key: { id: organizationId } }),
+  );
+  const org = orgRes.Item;
+  const orgAvailable = getAvailableModulesForPlan(String(org?.plan ?? ""));
+  const orgEnabledModules = normalizeModuleSubset(org?.enabledModules, orgAvailable);
+  const allowedModules = getUserAllowedModules(user.allowedModules, orgEnabledModules);
+
   return {
     userId,
     email: claimEmail,
-    organizationId: normalizeOrgId(user.organizationId),
+    organizationId,
     role,
-    allowedModules: getAllowedModules(user.allowedModules),
+    orgEnabledModules,
+    allowedModules,
     canEditInventory: EDIT_ROLES.has(role),
     canManageColumns: COLUMN_ADMIN_ROLES.has(role),
   };
+};
+
+const OWNER_ROLES = new Set(["OWNER", "ACCOUNT_OWNER"]);
+
+/** GET /inventory/org-modules — returns org's plan, available modules, and owner-enabled modules */
+const handleGetOrgModules = async (access: AccessContext) => {
+  const orgRes = await ddb.send(
+    new GetCommand({ TableName: ORG_TABLE, Key: { id: access.organizationId } }),
+  );
+  const org = orgRes.Item;
+  if (!org) return json(404, { error: "Organization not found" });
+
+  const plan = String(org.plan ?? "");
+  const orgAvailableModules = getAvailableModulesForPlan(plan);
+  const orgEnabledModules = normalizeModuleSubset(org.enabledModules, orgAvailableModules);
+
+  return json(200, { plan, orgAvailableModules, orgEnabledModules });
+};
+
+/** POST /inventory/org-modules — owner activates/deactivates modules from the plan pool */
+const handleUpdateOrgModules = async (access: AccessContext, body: any) => {
+  if (!OWNER_ROLES.has(access.role)) {
+    return json(403, { error: "Only organization owners can manage module activation." });
+  }
+
+  const orgRes = await ddb.send(
+    new GetCommand({ TableName: ORG_TABLE, Key: { id: access.organizationId } }),
+  );
+  const org = orgRes.Item;
+  if (!org) return json(404, { error: "Organization not found" });
+
+  const plan = String(org.plan ?? "");
+  const orgAvailableModules = getAvailableModulesForPlan(plan);
+
+  // Validate that requested modules are a subset of the plan's available pool
+  const requested = normalizeModuleSubset(body?.enabledModules, orgAvailableModules);
+  const safeEnabled = requested.filter((key) => orgAvailableModules.includes(key));
+  if (safeEnabled.length === 0) {
+    return json(400, { error: "At least one module must remain enabled." });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: ORG_TABLE,
+      Key: { id: access.organizationId },
+      UpdateExpression: "SET enabledModules = :modules",
+      ExpressionAttributeValues: { ":modules": safeEnabled },
+    }),
+  );
+
+  return json(200, { ok: true, orgEnabledModules: safeEnabled });
 };
 
 const handleListModuleAccessUsers = async (access: AccessContext) => {
@@ -906,7 +1000,7 @@ const handleListModuleAccessUsers = async (access: AccessContext) => {
         email: normalizeEmail(user.email),
         displayName: String(user.displayName ?? ""),
         role: normalizeRole(user.role),
-        allowedModules: getAllowedModules(user.allowedModules),
+        allowedModules: getUserAllowedModules(user.allowedModules, access.orgEnabledModules),
       });
     }
     lastEvaluatedKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
@@ -919,7 +1013,7 @@ const handleListModuleAccessUsers = async (access: AccessContext) => {
   });
 
   return json(200, {
-    modules: MODULE_KEYS,
+    modules: access.orgEnabledModules,
     users,
   });
 };
@@ -939,7 +1033,7 @@ const handleUpdateUserModuleAccess = async (
     return json(400, { error: "User id is required" });
   }
 
-  const requestedAllowedModules = Array.isArray(body?.allowedModules)
+  const rawModules = Array.isArray(body?.allowedModules)
     ? Array.from(
         new Set(
           body.allowedModules
@@ -948,8 +1042,15 @@ const handleUpdateUserModuleAccess = async (
         ),
       )
     : null;
-  if (!requestedAllowedModules) {
+  if (!rawModules) {
     return json(400, { error: "allowedModules must be an array." });
+  }
+  // Clamp to org-enabled modules — admins cannot grant modules the org hasn't activated
+  const requestedAllowedModules = rawModules.filter((key) =>
+    access.orgEnabledModules.includes(key),
+  );
+  if (requestedAllowedModules.length === 0) {
+    return json(400, { error: "At least one org-enabled module must be included." });
   }
   if (targetUserId === access.userId) {
     return json(400, { error: "You cannot change your own module access." });
@@ -1752,6 +1853,14 @@ export const handler = async (event: any) => {
     }
 
     const access = await getAccessContext(event);
+
+    if (method === "GET" && path.endsWith("/inventory/org-modules")) {
+      return handleGetOrgModules(access);
+    }
+
+    if (method === "POST" && path.endsWith("/inventory/org-modules")) {
+      return handleUpdateOrgModules(access, parseBody(event));
+    }
 
     if (method === "GET" && path.endsWith("/inventory/module-access/users")) {
       return handleListModuleAccessUsers(access);

@@ -20,6 +20,7 @@ import {
   saveUsageFormPreferences,
   type UsageFormPreferences,
 } from "./lib/usageFormPreferences";
+import { normalizeModuleKeys, type AppModuleKey } from "./lib/moduleRegistry";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
@@ -41,7 +42,6 @@ const pickRandom = (items: string[]): string =>
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 type AppView = "dashboard" | "inventory" | "usage" | "invite" | "settings";
-type AppModuleKey = "inventory" | "usage";
 type BreadcrumbItem = {
   label: string;
   onClick?: () => void;
@@ -53,17 +53,6 @@ const isAppView = (value: unknown): value is AppView =>
   value === "usage" ||
   value === "invite" ||
   value === "settings";
-const toAllowedModules = (value: unknown): AppModuleKey[] => {
-  if (!Array.isArray(value)) return ["inventory", "usage"];
-  const out = Array.from(
-    new Set(
-      value
-        .map((item) => String(item ?? "").trim().toLowerCase())
-        .filter((item): item is AppModuleKey => item === "inventory" || item === "usage"),
-    ),
-  );
-  return out.length > 0 ? out : ["inventory", "usage"];
-};
 
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
@@ -91,6 +80,8 @@ export default function App() {
     canInviteUsers: boolean;
     role: string;
     allowedModules: AppModuleKey[];
+    orgAvailableModules: AppModuleKey[];
+    orgEnabledModules: AppModuleKey[];
     loadError: boolean;
   }>({
     status: "loading",
@@ -103,6 +94,8 @@ export default function App() {
     canInviteUsers: false,
     role: "",
     allowedModules: ["inventory", "usage"],
+    orgAvailableModules: [],
+    orgEnabledModules: [],
     loadError: false,
   });
   const usagePreferencesScope = `${subState.organizationId || "personal"}.${userViewScope || "anonymous"}`;
@@ -153,7 +146,9 @@ export default function App() {
           accessSuspended: !!data.accessSuspended,
           canInviteUsers: !!data.canInviteUsers,
           role: String(data.role ?? "").toUpperCase(),
-          allowedModules: toAllowedModules(data.allowedModules),
+          allowedModules: normalizeModuleKeys(data.allowedModules),
+          orgAvailableModules: normalizeModuleKeys(data.orgAvailableModules),
+          orgEnabledModules: normalizeModuleKeys(data.orgEnabledModules),
           loadError: false,
         });
 
@@ -189,6 +184,8 @@ export default function App() {
           canInviteUsers: false,
           role: "",
           allowedModules: ["inventory", "usage"],
+          orgAvailableModules: [],
+          orgEnabledModules: [],
           loadError: true,
         });
       }
@@ -361,6 +358,7 @@ export default function App() {
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
+  const canManageOrgModules = ["OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const breadcrumbs: BreadcrumbItem[] =
     view === "inventory"
       ? [
@@ -408,6 +406,12 @@ export default function App() {
         }
         onCurrentUserEmailChange={(email) => setCurrentUserEmail(email)}
         canManageModuleAccess={canManageModuleAccess}
+        canManageOrgModules={canManageOrgModules}
+        orgAvailableModules={subState.orgAvailableModules}
+        orgEnabledModules={subState.orgEnabledModules}
+        onOrgEnabledModulesChange={(orgEnabledModules) =>
+          setSubState((prev) => ({ ...prev, orgEnabledModules }))
+        }
         currentUserId={String(user?.attributes?.sub ?? "")}
         onInviteUsers={() => {
           if (!canInviteMore) return;
@@ -423,10 +427,8 @@ export default function App() {
       />
     ) : (
       <DashboardPage
-        canAccessInventory={canAccessInventory}
-        canAccessUsage={canAccessUsage}
-        onGoToInventory={() => setView("inventory")}
-        onGoToUsage={() => setView("usage")}
+        accessibleModules={subState.allowedModules}
+        onNavigateToModule={(key) => setView(key as AppView)}
       />
     );
   } else if (view === "usage") {
@@ -434,10 +436,8 @@ export default function App() {
       <InventoryUsagePage usageFormPreferences={usageFormPreferences} />
     ) : (
       <DashboardPage
-        canAccessInventory={canAccessInventory}
-        canAccessUsage={canAccessUsage}
-        onGoToInventory={() => setView("inventory")}
-        onGoToUsage={() => setView("usage")}
+        accessibleModules={subState.allowedModules}
+        onNavigateToModule={(key) => setView(key as AppView)}
       />
     );
   } else if (view === "invite") {
@@ -471,19 +471,15 @@ export default function App() {
       />
     ) : (
       <DashboardPage
-        canAccessInventory={canAccessInventory}
-        canAccessUsage={canAccessUsage}
-        onGoToInventory={() => setView("inventory")}
-        onGoToUsage={() => setView("usage")}
+        accessibleModules={subState.allowedModules}
+        onNavigateToModule={(key) => setView(key as AppView)}
       />
     );
   } else {
     content = (
       <DashboardPage
-        canAccessInventory={canAccessInventory}
-        canAccessUsage={canAccessUsage}
-        onGoToInventory={() => setView("inventory")}
-        onGoToUsage={() => setView("usage")}
+        accessibleModules={subState.allowedModules}
+        onNavigateToModule={(key) => setView(key as AppView)}
       />
     );
   }
@@ -494,10 +490,8 @@ export default function App() {
         currentView={view}
         userName={userName}
         orgName={subState.orgName}
-        canAccessInventory={canAccessInventory}
-        canAccessUsage={canAccessUsage}
-        onGoToInventory={() => setView("inventory")}
-        onGoToUsage={() => setView("usage")}
+        accessibleModules={subState.allowedModules}
+        onNavigateToModule={(key) => setView(key as AppView)}
         onOpenSettings={() => setView("settings")}
         onLogout={signOut}
       />

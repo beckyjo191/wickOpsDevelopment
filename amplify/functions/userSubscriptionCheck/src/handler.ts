@@ -33,8 +33,46 @@ const INVENTORY_COLUMN_BY_MODULE_INDEX = "ByModuleSortOrder";
 const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
 const PROVISIONING_RETRY_AFTER_MS = 2000;
 const INVITE_ALLOWED_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
-const MODULE_KEYS = ["inventory", "usage"] as const;
-type ModuleKey = (typeof MODULE_KEYS)[number];
+const ALL_MODULE_KEYS = ["inventory", "usage"] as const;
+type ModuleKey = (typeof ALL_MODULE_KEYS)[number];
+
+// Plan → module mapping. Unrecognized plan = no modules (no fallback to all).
+const PLAN_MODULE_MAP: Record<string, ModuleKey[]> = {
+  Personal:     ["inventory", "usage"],
+  Department:   ["inventory", "usage"],
+  Organization: ["inventory", "usage"],
+};
+const getAvailableModulesForPlan = (plan: string): ModuleKey[] =>
+  PLAN_MODULE_MAP[plan] ?? [];
+
+// Normalize a raw DDB value into a valid subset of allValid.
+// null/absent → allValid (backward-compat: existing orgs without enabledModules get full access).
+const normalizeModuleSubset = (value: unknown, allValid: ModuleKey[]): ModuleKey[] => {
+  if (!Array.isArray(value)) return [...allValid];
+  const s = new Set(allValid);
+  const out = [
+    ...new Set(
+      value
+        .map((i) => String(i ?? "").trim().toLowerCase())
+        .filter((i): i is ModuleKey => s.has(i as ModuleKey)),
+    ),
+  ];
+  return out.length > 0 ? out : [...allValid];
+};
+
+// Intersect user's stored allowedModules against the org-enabled superset.
+const getUserAllowedModules = (value: unknown, superset: ModuleKey[]): ModuleKey[] => {
+  if (!Array.isArray(value)) return [...superset];
+  const s = new Set(superset);
+  const out = [
+    ...new Set(
+      value
+        .map((i) => String(i ?? "").trim().toLowerCase())
+        .filter((i): i is ModuleKey => s.has(i as ModuleKey)),
+    ),
+  ];
+  return out.length > 0 ? out : [...superset];
+};
 const normalizeEmail = (value: unknown): string =>
   String(value ?? "").trim().toLowerCase();
 const isPaidStatus = (value: unknown): boolean => {
@@ -92,19 +130,9 @@ const normalizeRole = (value: unknown): string => String(value ?? "").trim().toU
 const normalizeOrgId = (value: unknown): string => String(value ?? "").trim().toLowerCase();
 const normalizeModuleKey = (value: unknown): ModuleKey | null => {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "inventory" || normalized === "usage") return normalized;
-  return null;
-};
-const getAllowedModules = (value: unknown): ModuleKey[] => {
-  if (!Array.isArray(value)) return [...MODULE_KEYS];
-  const out = Array.from(
-    new Set(
-      value
-        .map((item) => normalizeModuleKey(item))
-        .filter((item): item is ModuleKey => !!item),
-    ),
-  );
-  return out.length > 0 ? out : [...MODULE_KEYS];
+  return (ALL_MODULE_KEYS as readonly string[]).includes(normalized)
+    ? (normalized as ModuleKey)
+    : null;
 };
 
 const incrementOrgSeatsUsed = async (organizationId: string): Promise<void> => {
@@ -566,11 +594,15 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
       : Number(org.seatsUsed ?? 0);
 
     const paymentStatus = String(org.paymentStatus ?? "").toLowerCase();
-    const plan = String(org.plan ?? "Free");
+    const plan = String(org.plan ?? "");
     const subscribed = isPaidStatus(paymentStatus);
     const normalizedRole = normalizeRole(user.role);
     const canInviteUsers = INVITE_ALLOWED_ROLES.has(normalizedRole);
-    const allowedModules = getAllowedModules(user.allowedModules);
+
+    // Three-layer module access: plan → org owner → user
+    const orgAvailableModules = getAvailableModulesForPlan(plan);
+    const orgEnabledModules = normalizeModuleSubset(org.enabledModules, orgAvailableModules);
+    const allowedModules = getUserAllowedModules(user.allowedModules, orgEnabledModules);
 
     if (subscribed) {
       await ensureInventoryTablesForOrganization(String(user.organizationId));
@@ -604,6 +636,8 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
         paymentStatus: org.paymentStatus ?? "Free",
         role: normalizedRole,
         canInviteUsers,
+        orgAvailableModules,
+        orgEnabledModules,
         allowedModules,
       }),
     };

@@ -1,14 +1,13 @@
 import type { MouseEvent } from "react";
 import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
+import { MODULE_REGISTRY, type AppModuleKey } from "../lib/moduleRegistry";
 
 interface AppToolbarProps {
   currentView: "dashboard" | "inventory" | "usage" | "invite" | "settings";
   userName: string;
   orgName?: string;
-  canAccessInventory: boolean;
-  canAccessUsage: boolean;
-  onGoToInventory: () => void;
-  onGoToUsage: () => void;
+  accessibleModules: AppModuleKey[];
+  onNavigateToModule: (key: AppModuleKey) => void;
   onOpenSettings: () => void;
   onLogout: () => void;
 }
@@ -17,10 +16,8 @@ export function AppToolbar({
   currentView,
   userName,
   orgName,
-  canAccessInventory,
-  canAccessUsage,
-  onGoToInventory,
-  onGoToUsage,
+  accessibleModules,
+  onNavigateToModule,
   onOpenSettings,
   onLogout,
 }: AppToolbarProps) {
@@ -36,34 +33,23 @@ export function AppToolbar({
         <span className="app-toolbar-brand-text">WickOps Systems</span>
       </a>
 
-      {canAccessInventory || canAccessUsage ? (
+      {accessibleModules.length > 0 ? (
         <details className="app-module-menu">
           <summary className="app-module-menu-trigger">Modules</summary>
           <div className="app-module-menu-panel">
-            {canAccessInventory ? (
+            {MODULE_REGISTRY.filter((m) => accessibleModules.includes(m.key)).map((m) => (
               <button
+                key={m.key}
                 className="app-module-menu-item"
                 onClick={(event) => {
                   closeMenu(event);
-                  onGoToInventory();
+                  onNavigateToModule(m.key);
                 }}
-                aria-current={currentView === "inventory" ? "page" : undefined}
+                aria-current={currentView === m.key ? "page" : undefined}
               >
-                Inventory
+                {m.name}
               </button>
-            ) : null}
-            {canAccessUsage ? (
-              <button
-                className="app-module-menu-item"
-                onClick={(event) => {
-                  closeMenu(event);
-                  onGoToUsage();
-                }}
-                aria-current={currentView === "usage" ? "page" : undefined}
-              >
-                Usage Form
-              </button>
-            ) : null}
+            ))}
           </div>
         </details>
       ) : null}

@@ -11,6 +11,9 @@ export const data = defineData({
     plan: a.string().required(),
     paymentStatus: a.string().required(), // Paid | Unpaid
     createdAt: a.datetime().required(),
+    // Modules the org owner has activated from their plan's available pool.
+    // null/absent = all plan-available modules enabled (backward-compat default).
+    enabledModules: a.string().array(),
   })
   .authorization((allow) => [allow.authenticated()]),
 

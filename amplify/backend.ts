@@ -12,6 +12,7 @@ import { stripeWebhook } from "./functions/stripeWebhook/resource";
 import { userSubscriptionCheck } from "./functions/userSubscriptionCheck/resource";
 import { sendInvites } from "./functions/sendInvites/resource";
 import { inventoryApi } from "./functions/inventoryApi/resource";
+import { createBillingPortalSession } from "./functions/createBillingPortalSession/resource";
 
 const backend = defineBackend({
   auth,
@@ -21,6 +22,7 @@ const backend = defineBackend({
   userSubscriptionCheck,
   sendInvites,
   inventoryApi,
+  createBillingPortalSession,
 });
 
 const deploymentEnv = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
@@ -82,6 +84,10 @@ const stripeWebhookIntegration = new HttpLambdaIntegration(
   "StripeWebhookIntegration",
   backend.stripeWebhook.resources.lambda,
 );
+const createBillingPortalSessionIntegration = new HttpLambdaIntegration(
+  "CreateBillingPortalSessionIntegration",
+  backend.createBillingPortalSession.resources.lambda,
+);
 
 const addInventoryRoute = (path: string, methods: HttpMethod[]) => {
   inventoryHttpApi.addRoutes({
@@ -92,6 +98,7 @@ const addInventoryRoute = (path: string, methods: HttpMethod[]) => {
   });
 };
 
+addInventoryRoute("/inventory/org-modules", [HttpMethod.GET, HttpMethod.POST]);
 addInventoryRoute("/inventory/module-access/users", [HttpMethod.GET]);
 addInventoryRoute("/inventory/module-access/users/{userId}", [HttpMethod.POST]);
 addInventoryRoute("/inventory/profile/display-name", [HttpMethod.POST]);
@@ -117,6 +124,12 @@ coreHttpApi.addRoutes({
   path: "/create-checkout-session",
   methods: [HttpMethod.POST],
   integration: createCheckoutSessionIntegration,
+  authorizer: coreAuthorizer,
+});
+coreHttpApi.addRoutes({
+  path: "/create-portal-session",
+  methods: [HttpMethod.POST],
+  integration: createBillingPortalSessionIntegration,
   authorizer: coreAuthorizer,
 });
 
@@ -202,6 +215,13 @@ if (userTable) {
   userTable.grantReadData(backend.inventoryApi.resources.lambda);
 }
 
+// inventoryApi needs read-write on the org table for getAccessContext (two-layer module
+// access) and the new org-module management endpoints.
+if (organizationTable) {
+  inventoryApiLambda.addEnvironment("ORG_TABLE", organizationTable.tableName);
+  organizationTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
+}
+
 const organizationTable = (backend.data.resources as any)?.tables?.organization;
 const inviteTable = (backend.data.resources as any)?.tables?.invite;
 
@@ -273,7 +293,35 @@ wireCoreDataTables(backend.createCheckoutSession.resources.lambda, {
   organization: "readwrite",
 });
 
+wireCoreDataTables(backend.createBillingPortalSession.resources.lambda, {
+  user: "read",
+  organization: "read",
+});
+
 wireCoreDataTables(backend.stripeWebhook.resources.lambda, {
   user: "write",
   organization: "write",
 });
+
+// Forward Stripe price IDs (monthly + yearly for each plan) to the Lambdas that need them.
+// These are set in the build environment and are safe to embed (price IDs are public).
+const PRICE_ENV_KEYS = [
+  "STRIPE_PRICE_PERSONAL_MONTHLY",
+  "STRIPE_PRICE_PERSONAL_YEARLY",
+  "STRIPE_PRICE_DEPARTMENT_MONTHLY",
+  "STRIPE_PRICE_DEPARTMENT_YEARLY",
+  "STRIPE_PRICE_ORGANIZATION_MONTHLY",
+  "STRIPE_PRICE_ORGANIZATION_YEARLY",
+] as const;
+
+for (const key of PRICE_ENV_KEYS) {
+  const val = process.env[key] ?? "";
+  (backend.stripeWebhook.resources.lambda as any).addEnvironment(key, val);
+  (backend.createCheckoutSession.resources.lambda as any).addEnvironment(key, val);
+}
+
+// Seat add-on price (users buy via Stripe Customer Portal to add seats beyond the base plan)
+(backend.stripeWebhook.resources.lambda as any).addEnvironment(
+  "STRIPE_PRICE_SEAT_ADDON",
+  process.env.STRIPE_PRICE_SEAT_ADDON ?? "",
+);

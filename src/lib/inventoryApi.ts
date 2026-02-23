@@ -1,7 +1,9 @@
 import { authFetch } from "./authFetch";
+export type { AppModuleKey } from "./moduleRegistry";
 
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
 const INVENTORY_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVENTORY_API_BASE_URL);
+const CORE_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
 type ApiColumn = {
   id: string;
@@ -38,7 +40,8 @@ export type InventoryAccess = {
   canManageColumns: boolean;
 };
 
-export type AppModuleKey = "inventory" | "usage";
+// AppModuleKey is now the canonical type from moduleRegistry.
+// The re-export above keeps this file as the import point for existing consumers.
 
 export type InventoryColumn = ApiColumn;
 
@@ -417,4 +420,70 @@ export const syncCurrentUserEmail = async (): Promise<{ email: string }> => {
   return {
     email: String(data?.email ?? ""),
   };
+};
+
+// ─── Org Module Management ────────────────────────────────────────────────────
+
+export type OrgModulesState = {
+  plan: string;
+  orgAvailableModules: AppModuleKey[];
+  orgEnabledModules: AppModuleKey[];
+};
+
+/** Fetch the org's plan and module activation state */
+export const getOrgModules = async (): Promise<OrgModulesState> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/org-modules`);
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to load org modules");
+  }
+  const data = await res.json();
+  return {
+    plan: String(data.plan ?? ""),
+    orgAvailableModules: (Array.isArray(data.orgAvailableModules)
+      ? data.orgAvailableModules
+      : []) as AppModuleKey[],
+    orgEnabledModules: (Array.isArray(data.orgEnabledModules)
+      ? data.orgEnabledModules
+      : []) as AppModuleKey[],
+  };
+};
+
+/** Org owner activates/deactivates modules. Returns the new enabled set. */
+export const updateOrgModules = async (
+  enabledModules: AppModuleKey[],
+): Promise<AppModuleKey[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/org-modules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabledModules }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to update org modules");
+  }
+  const data = await res.json();
+  return (Array.isArray(data.orgEnabledModules)
+    ? data.orgEnabledModules
+    : []) as AppModuleKey[];
+};
+
+// ─── Billing Portal ───────────────────────────────────────────────────────────
+
+/**
+ * Create a Stripe Customer Portal session for the logged-in user's org.
+ * Returns the portal URL to redirect to.
+ */
+export const createBillingPortalSession = async (): Promise<string> => {
+  if (!CORE_API_BASE_URL) {
+    throw new Error("Missing VITE_API_BASE_URL");
+  }
+  const res = await authFetch(`${CORE_API_BASE_URL}/create-portal-session`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to open billing portal."));
+  }
+  const data = await res.json();
+  return String(data.url ?? "");
 };

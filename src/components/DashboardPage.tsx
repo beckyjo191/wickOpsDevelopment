@@ -1,15 +1,13 @@
+import { MODULE_REGISTRY, type AppModuleKey } from "../lib/moduleRegistry";
+
 interface DashboardPageProps {
-  canAccessInventory: boolean;
-  canAccessUsage: boolean;
-  onGoToInventory: () => void;
-  onGoToUsage: () => void;
+  accessibleModules: AppModuleKey[];
+  onNavigateToModule: (key: AppModuleKey) => void;
 }
 
 export function DashboardPage({
-  canAccessInventory,
-  canAccessUsage,
-  onGoToInventory,
-  onGoToUsage,
+  accessibleModules,
+  onNavigateToModule,
 }: DashboardPageProps) {
   return (
     <section className="app-content">
@@ -22,17 +20,16 @@ export function DashboardPage({
         </header>
 
         <div className="app-actions">
-          {canAccessInventory ? (
-            <button className="button button-primary" onClick={onGoToInventory}>
-              Inventory
+          {MODULE_REGISTRY.filter((m) => accessibleModules.includes(m.key)).map((m, i) => (
+            <button
+              key={m.key}
+              className={`button ${i === 0 ? "button-primary" : "button-secondary"}`}
+              onClick={() => onNavigateToModule(m.key)}
+            >
+              {m.name}
             </button>
-          ) : null}
-          {canAccessUsage ? (
-            <button className="button button-secondary" onClick={onGoToUsage}>
-              Usage Form
-            </button>
-          ) : null}
-          {!canAccessInventory && !canAccessUsage ? (
+          ))}
+          {accessibleModules.length === 0 ? (
             <p className="app-subtitle">No modules are enabled for your account.</p>
           ) : null}
         </div>

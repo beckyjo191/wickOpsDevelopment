@@ -8,6 +8,31 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const ORG_TABLE = process.env.ORG_TABLE!;
 const USER_TABLE = process.env.USER_TABLE!;
 
+// Map every Stripe price ID (monthly + yearly) to the plan name it represents.
+const PRICE_TO_PLAN: Record<string, string> = Object.fromEntries(
+  (
+    [
+      [process.env.STRIPE_PRICE_PERSONAL_MONTHLY,     "Personal"],
+      [process.env.STRIPE_PRICE_PERSONAL_YEARLY,      "Personal"],
+      [process.env.STRIPE_PRICE_DEPARTMENT_MONTHLY,   "Department"],
+      [process.env.STRIPE_PRICE_DEPARTMENT_YEARLY,    "Department"],
+      [process.env.STRIPE_PRICE_ORGANIZATION_MONTHLY, "Organization"],
+      [process.env.STRIPE_PRICE_ORGANIZATION_YEARLY,  "Organization"],
+    ] as [string | undefined, string][]
+  ).filter(([k]) => k) as [string, string][],
+);
+
+const PLAN_SEAT_LIMITS: Record<string, number> = {
+  Personal:     1,
+  Department:   5,
+  Organization: 15,
+};
+
+// Per-seat add-on price IDs — users purchase these via the Stripe Customer Portal
+const SEAT_ADDON_PRICE_IDS = new Set(
+  [process.env.STRIPE_PRICE_SEAT_ADDON].filter(Boolean) as string[]
+);
+
 export const handler = async (event: any) => {
   const sig =
     event.headers?.["stripe-signature"] ?? event.headers?.["Stripe-Signature"];
@@ -50,6 +75,29 @@ export const handler = async (event: any) => {
       return;
     }
 
+    // Determine plan name + seat limit from all subscription line items.
+    // Base plan items set the plan and base seat count.
+    // Seat add-on items (bought via Customer Portal) add to the seat count.
+    const items = subscription.items?.data ?? [];
+    let plan = "Personal";
+    let baseSeats = 1;
+    let addonSeats = 0;
+
+    for (const item of items) {
+      const itemPriceId = item.price?.id ?? "";
+      if (PRICE_TO_PLAN[itemPriceId]) {
+        plan = PRICE_TO_PLAN[itemPriceId];
+        baseSeats = PLAN_SEAT_LIMITS[plan] ?? 1;
+      } else if (SEAT_ADDON_PRICE_IDS.has(itemPriceId)) {
+        addonSeats += item.quantity ?? 0;
+      }
+    }
+
+    const seatLimit = baseSeats + addonSeats;
+    const stripeCustomerId = typeof subscription.customer === "string"
+      ? subscription.customer
+      : subscription.customer?.id ?? "";
+
     // 1️⃣ Update org
     await ddb.send(
       new UpdateCommand({
@@ -58,15 +106,19 @@ export const handler = async (event: any) => {
         UpdateExpression: `
           SET paymentStatus = :active,
               #plan = :plan,
-              stripeSubscriptionId = :sid
+              seatLimit = :seats,
+              stripeSubscriptionId = :sid,
+              stripeCustomerId = :cid
         `,
         ExpressionAttributeNames: {
           "#plan": "plan",
         },
         ExpressionAttributeValues: {
           ":active": "Active",
-          ":plan": "Pro",
+          ":plan": plan,
+          ":seats": seatLimit,
           ":sid": subscription.id,
+          ":cid": stripeCustomerId,
         },
       })
     );
@@ -106,6 +158,12 @@ export const handler = async (event: any) => {
 
   // Also handle subscription creation directly
   if (stripeEvent.type === "customer.subscription.created") {
+    const subscription = stripeEvent.data.object as Stripe.Subscription;
+    await handleSubscription(subscription);
+  }
+
+  // Handle plan upgrades/downgrades and seat add-on changes via Customer Portal
+  if (stripeEvent.type === "customer.subscription.updated") {
     const subscription = stripeEvent.data.object as Stripe.Subscription;
     await handleSubscription(subscription);
   }

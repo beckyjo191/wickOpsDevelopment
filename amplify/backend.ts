@@ -210,6 +210,9 @@ inventoryApiLambda.addToRolePolicy(
 );
 
 const userTable = (backend.data.resources as any)?.tables?.user;
+const organizationTable = (backend.data.resources as any)?.tables?.organization;
+const inviteTable = (backend.data.resources as any)?.tables?.invite;
+
 if (userTable) {
   inventoryApiLambda.addEnvironment("USER_TABLE", userTable.tableName);
   userTable.grantReadData(backend.inventoryApi.resources.lambda);
@@ -221,9 +224,6 @@ if (organizationTable) {
   inventoryApiLambda.addEnvironment("ORG_TABLE", organizationTable.tableName);
   organizationTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
 }
-
-const organizationTable = (backend.data.resources as any)?.tables?.organization;
-const inviteTable = (backend.data.resources as any)?.tables?.invite;
 
 const wireCoreDataTables = (
   fn: any,

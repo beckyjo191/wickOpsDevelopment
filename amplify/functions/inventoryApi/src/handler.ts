@@ -1046,7 +1046,7 @@ const handleUpdateUserModuleAccess = async (
     return json(400, { error: "allowedModules must be an array." });
   }
   // Clamp to org-enabled modules — admins cannot grant modules the org hasn't activated
-  const requestedAllowedModules = rawModules.filter((key) =>
+  const requestedAllowedModules = rawModules.filter((key: ModuleKey) =>
     access.orgEnabledModules.includes(key),
   );
   if (requestedAllowedModules.length === 0) {

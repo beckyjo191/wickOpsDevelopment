@@ -33,6 +33,13 @@ const INVENTORY_COLUMN_BY_MODULE_INDEX = "ByModuleSortOrder";
 const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
 const PROVISIONING_RETRY_AFTER_MS = 2000;
 const INVITE_ALLOWED_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
+// ── MODULE SYNC NOTE ────────────────────────────────────────────────────────
+// This list must be kept in sync with AppModuleKey in src/lib/moduleRegistry.ts.
+// When a new module goes stable:
+//   1. Add its key to ALL_MODULE_KEYS here (and in inventoryApi/handler.ts)
+//   2. Add it to PLAN_MODULE_MAP for each plan that should unlock it (both handlers)
+//   3. Follow remaining steps documented in src/lib/moduleRegistry.ts
+// ────────────────────────────────────────────────────────────────────────────
 const ALL_MODULE_KEYS = ["inventory", "usage"] as const;
 type ModuleKey = (typeof ALL_MODULE_KEYS)[number];
 

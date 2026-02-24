@@ -676,6 +676,95 @@
   height: 32px;
 }
 
+/* ── Module Marketplace ──────────────────────────────────────────────────── */
+
+.module-marketplace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.module-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: border-color 0.15s;
+  background: var(--surface);
+}
+
+.module-card-enabled {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+}
+
+.module-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.module-card-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.module-card-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text-heading);
+}
+
+.module-card-description {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  flex: 1;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.module-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+}
+
+.module-card-category {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.module-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.module-card-toggle input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.module-card-enabled .module-card-toggle {
+  color: var(--primary);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+
 .settings-action-wrap {
   position: relative;
   display: inline-flex;
@@ -1868,6 +1957,28 @@
 
 .plan-picker-card {
   max-width: 960px;
+}
+
+/* Organization / account name field on subscription page */
+.plan-orgname {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.plan-orgname-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-heading);
+}
+
+.plan-orgname-optional {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.plan-orgname-input {
+  max-width: 420px;
 }
 
 /* Billing period toggle */

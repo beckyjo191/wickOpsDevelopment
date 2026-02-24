@@ -14,6 +14,7 @@ export default function SubscriptionPage() {
   const { signOut } = useAuthenticator() as { signOut: () => void };
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
   const [loadingPlan, setLoadingPlan] = useState<PlanKey | null>(null);
+  const [orgName, setOrgName] = useState("");
 
   const startCheckout = async (planKey: PlanKey) => {
     setLoadingPlan(planKey);
@@ -21,7 +22,7 @@ export default function SubscriptionPage() {
       const res = await authFetch(`${API_BASE_URL}/create-checkout-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planKey, billingPeriod }),
+        body: JSON.stringify({ planKey, billingPeriod, orgName: orgName.trim() }),
       });
 
       if (!res.ok) {
@@ -53,6 +54,23 @@ export default function SubscriptionPage() {
             </p>
           </div>
         </header>
+
+        {/* Organization / account name */}
+        <div className="plan-orgname">
+          <label className="plan-orgname-label" htmlFor="plan-orgname-input">
+            Organization or Account Name <span className="plan-orgname-optional">(optional)</span>
+          </label>
+          <input
+            id="plan-orgname-input"
+            className="field plan-orgname-input"
+            type="text"
+            value={orgName}
+            onChange={(e) => setOrgName(e.target.value)}
+            placeholder="Fire Department, Studio, Personal, etc."
+            maxLength={100}
+            disabled={loadingPlan !== null}
+          />
+        </div>
 
         {/* Billing period toggle */}
         <div className="plan-period-toggle">

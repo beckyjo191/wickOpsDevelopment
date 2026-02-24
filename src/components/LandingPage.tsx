@@ -1,6 +1,7 @@
 import "./LandingPage.css";
 import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 import logoOriginal from "../assets/brand/wickops-logo-original.svg";
+import { PLAN_REGISTRY } from "../lib/planRegistry";
 
 export function LandingPage() {
   return (
@@ -29,10 +30,35 @@ export function LandingPage() {
             <a className="lp-button lp-button-primary" href="/signup">Create Account</a>
             <a className="lp-button lp-button-secondary" href="/app">Go To Existing Account</a>
           </div>
-          <p className="lp-signup-note">
-            Organization sign-up includes up to <strong>5 users</strong>. Other sign-ups are
-            <strong> personal</strong> accounts.
-          </p>
+        </section>
+
+        {/* Pricing overview — driven from PLAN_REGISTRY so it stays in sync */}
+        <section className="lp-pricing" aria-label="Pricing overview">
+          <h2 className="lp-pricing-heading">Simple, transparent pricing</h2>
+          <div className="lp-pricing-grid">
+            {PLAN_REGISTRY.map((plan) => (
+              <article
+                key={plan.key}
+                className={`lp-pricing-card${plan.highlight ? " lp-pricing-card-highlight" : ""}`}
+              >
+                {plan.highlight && (
+                  <div className="lp-pricing-badge">Most Popular</div>
+                )}
+                <div className="lp-pricing-name">{plan.name}</div>
+                <div className="lp-pricing-price">
+                  <span className="lp-pricing-amount">${plan.monthlyPrice}</span>
+                  <span className="lp-pricing-period">/mo</span>
+                </div>
+                <div className="lp-pricing-seats">
+                  {plan.maxUsers === 1 ? "1 user" : `Up to ${plan.maxUsers} users`}
+                </div>
+                <p className="lp-pricing-desc">{plan.description}</p>
+                <a className="lp-button lp-button-secondary lp-pricing-cta" href="/signup">
+                  Get Started
+                </a>
+              </article>
+            ))}
+          </div>
         </section>
 
         <section className="lp-pillars" aria-label="Core value">

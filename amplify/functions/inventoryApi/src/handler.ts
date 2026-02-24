@@ -43,6 +43,14 @@ const COLUMN_ADMIN_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate"]);
 const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROVISIONING_RETRY_AFTER_MS = 2000;
+// ── MODULE SYNC NOTE ────────────────────────────────────────────────────────
+// This list must be kept in sync with AppModuleKey in src/lib/moduleRegistry.ts.
+// When a new module goes stable:
+//   1. Add its key to ALL_MODULE_KEYS here (and in userSubscriptionCheck/handler.ts)
+//   2. Add it to PLAN_MODULE_MAP for each plan that should unlock it (both handlers)
+//   3. Provision any new DynamoDB tables in ensureOrgInventoryTables() if needed
+//   4. Follow remaining steps documented in src/lib/moduleRegistry.ts
+// ────────────────────────────────────────────────────────────────────────────
 const ALL_MODULE_KEYS = ["inventory", "usage"] as const;
 type ModuleKey = (typeof ALL_MODULE_KEYS)[number];
 

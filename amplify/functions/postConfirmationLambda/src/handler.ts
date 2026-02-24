@@ -33,8 +33,6 @@ export const handler: Handler = async (event) => {
     event.request.userAttributes?.name ??
     email;
 
-  const orgNameInput = event.request.userAttributes?.["custom:organizationName"];
-
   const ORG_TABLE = process.env.ORG_TABLE!;
   const USER_TABLE = process.env.USER_TABLE!;
   const INVITE_TABLE = process.env.INVITE_TABLE!;
@@ -161,17 +159,12 @@ export const handler: Handler = async (event) => {
     return event;
   }
 
-  const isPersonal = !orgNameInput || orgNameInput.trim() === "";
-  const organizationName = isPersonal
-    ? `Personal - ${displayName}`
-    : orgNameInput.trim();
-
-  // Never derive org identity from display text; use opaque random IDs to prevent name collisions.
-  const organizationId = isPersonal
-    ? `personal_${randomUUID().replace(/-/g, "")}`
-    : `org_${randomUUID().replace(/-/g, "")}`;
-
-  const seatLimit = isPersonal ? 1 : 5;
+  // Create a placeholder org for every new user. Plan, seatLimit, and org name are
+  // set properly once the user completes checkout:
+  //   - org name is updated by createCheckoutSession before the Stripe redirect
+  //   - plan + seatLimit are set by the stripeWebhook after payment completes
+  const organizationId = `org_${randomUUID().replace(/-/g, "")}`;
+  const organizationName = displayName ? `${displayName}'s Organization` : "My Organization";
   const isAdmin = true;
 
   await ddb.send(
@@ -180,10 +173,9 @@ export const handler: Handler = async (event) => {
       Item: {
         id: organizationId,
         name: organizationName,
-        type: isPersonal ? "PERSONAL" : "ORG",
-        seatLimit,
+        seatLimit: 1,   // placeholder — overwritten by stripeWebhook on checkout completion
         seatsUsed: 1,
-        plan: "",
+        plan: "",       // placeholder — overwritten by stripeWebhook on checkout completion
         paymentStatus: "Pending",
         enabledModules: ["inventory", "usage"],
         createdAt: new Date().toISOString(),
@@ -192,7 +184,10 @@ export const handler: Handler = async (event) => {
     })
   );
 
-  // Create user with Cognito UUID as id
+  // Create user with Cognito UUID as id.
+  // The founding user (non-invited signup) is OWNER of their org so they can
+  // manage org-level settings (module marketplace, billing, etc.).
+  // Invited users receive ADMIN/EDITOR/VIEWER based on the invite record.
   await ddb.send(
     new PutCommand({
       TableName: USER_TABLE,
@@ -201,7 +196,7 @@ export const handler: Handler = async (event) => {
         email: normalizedEmail,
         displayName,
         organizationId,
-        role: "ADMIN",
+        role: "OWNER",
         allowedModules: ["inventory", "usage"],
         accessSuspended: true, // until payment confirmed
         createdAt: new Date().toISOString(),

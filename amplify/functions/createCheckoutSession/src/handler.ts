@@ -39,6 +39,7 @@ export const handler = async (event: any) => {
     const requestBody = event.body ? JSON.parse(event.body) : {};
     const planKey = String(requestBody.planKey ?? "").trim();
     const billingPeriod = String(requestBody.billingPeriod ?? "").trim();
+    const orgName = String(requestBody.orgName ?? "").trim().slice(0, 100);
 
     if (!VALID_PLAN_KEYS.has(planKey) || !VALID_BILLING_PERIODS.has(billingPeriod)) {
       return {
@@ -77,6 +78,19 @@ export const handler = async (event: any) => {
     const orgRes = await ddb.send(new GetCommand({ TableName: ORG_TABLE, Key: { id: user.organizationId } }));
     if (!orgRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "Organization not found" }) };
     const org = orgRes.Item;
+
+    // Update org name if the user provided one on the subscription page
+    if (orgName) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORG_TABLE,
+          Key: { id: org.id },
+          UpdateExpression: "SET #name = :name",
+          ExpressionAttributeNames: { "#name": "name" },
+          ExpressionAttributeValues: { ":name": orgName },
+        })
+      );
+    }
 
     // Create Stripe customer if needed
     let stripeCustomerId = org.stripeCustomerId;

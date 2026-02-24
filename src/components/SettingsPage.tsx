@@ -753,44 +753,56 @@ export function SettingsPage({
                 {orgModulesError}
               </p>
             ) : null}
-            <div className="settings-columns-list">
-              {MODULE_REGISTRY.filter((m) => orgAvailableModules.includes(m.key)).map((m) => {
-                const checked = orgEnabledModules.includes(m.key);
-                return (
-                  <label className="settings-column-row" key={`org-module-${m.key}`}>
-                    <span className="settings-column-visibility">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={orgModulesSaving}
-                        onChange={async () => {
-                          const next = checked
-                            ? orgEnabledModules.filter((k) => k !== m.key)
-                            : [...orgEnabledModules, m.key];
-                          if (next.length === 0) {
-                            setOrgModulesError("At least one module must remain enabled.");
-                            return;
-                          }
-                          setOrgModulesError(null);
-                          setOrgModulesSaving(true);
-                          onOrgEnabledModulesChange(next);
-                          try {
-                            const saved = await updateOrgModules(next);
-                            onOrgEnabledModulesChange(saved);
-                          } catch (err: any) {
-                            onOrgEnabledModulesChange(orgEnabledModules);
-                            setOrgModulesError(err?.message ?? "Failed to save. Please try again.");
-                          } finally {
-                            setOrgModulesSaving(false);
-                          }
-                        }}
-                      />
-                      <span>{m.name}</span>
-                    </span>
-                    <span className="settings-core-pill">{m.description}</span>
-                  </label>
-                );
-              })}
+            <div className="module-marketplace-grid">
+              {MODULE_REGISTRY
+                .filter((m) => m.status === "stable" && orgAvailableModules.includes(m.key))
+                .map((m) => {
+                  const enabled = orgEnabledModules.includes(m.key);
+                  return (
+                    <div
+                      key={`org-module-${m.key}`}
+                      className={`module-card${enabled ? " module-card-enabled" : ""}`}
+                    >
+                      <div className="module-card-header">
+                        <span className="module-card-icon">{m.icon}</span>
+                        <span className="module-card-name">{m.name}</span>
+                      </div>
+                      <p className="module-card-description">{m.description}</p>
+                      <div className="module-card-footer">
+                        <span className="module-card-category">{m.category}</span>
+                        <label className="module-card-toggle">
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            disabled={orgModulesSaving}
+                            onChange={async () => {
+                              const next = enabled
+                                ? orgEnabledModules.filter((k) => k !== m.key)
+                                : [...orgEnabledModules, m.key];
+                              if (next.length === 0) {
+                                setOrgModulesError("At least one module must remain enabled.");
+                                return;
+                              }
+                              setOrgModulesError(null);
+                              setOrgModulesSaving(true);
+                              onOrgEnabledModulesChange(next);
+                              try {
+                                const saved = await updateOrgModules(next);
+                                onOrgEnabledModulesChange(saved);
+                              } catch (err: any) {
+                                onOrgEnabledModulesChange(orgEnabledModules);
+                                setOrgModulesError(err?.message ?? "Failed to save. Please try again.");
+                              } finally {
+                                setOrgModulesSaving(false);
+                              }
+                            }}
+                          />
+                          <span>{enabled ? "Enabled" : "Disabled"}</span>
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
             </div>
           </details>
         ) : null}

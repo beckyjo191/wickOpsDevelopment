@@ -79,24 +79,48 @@ export const handler = async (event: any) => {
     // Base plan items set the plan and base seat count.
     // Seat add-on items (bought via Customer Portal) add to the seat count.
     const items = subscription.items?.data ?? [];
-    let plan = "Personal";
-    let baseSeats = 1;
+    let resolvedPlan: string | null = null;
+    let baseSeats = 0;
     let addonSeats = 0;
 
     for (const item of items) {
       const itemPriceId = item.price?.id ?? "";
       if (PRICE_TO_PLAN[itemPriceId]) {
-        plan = PRICE_TO_PLAN[itemPriceId];
-        baseSeats = PLAN_SEAT_LIMITS[plan] ?? 1;
+        resolvedPlan = PRICE_TO_PLAN[itemPriceId];
+        baseSeats = PLAN_SEAT_LIMITS[resolvedPlan] ?? 1;
       } else if (SEAT_ADDON_PRICE_IDS.has(itemPriceId)) {
         addonSeats += item.quantity ?? 0;
       }
     }
 
-    const seatLimit = baseSeats + addonSeats;
     const stripeCustomerId = typeof subscription.customer === "string"
       ? subscription.customer
       : subscription.customer?.id ?? "";
+
+    if (!resolvedPlan) {
+      // Price IDs not mapped — likely missing env vars. Activate the org but do NOT
+      // overwrite plan or seatLimit with wrong defaults. Log for investigation.
+      console.error(
+        `[stripeWebhook] No plan resolved for subscription ${subscription.id}.` +
+        ` Price IDs: ${items.map((i) => i.price?.id).join(", ")}.` +
+        ` PRICE_TO_PLAN keys: ${Object.keys(PRICE_TO_PLAN).join(", ") || "(empty — check STRIPE_PRICE_* env vars)"}.` +
+        ` Only updating paymentStatus + stripe IDs.`
+      );
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORG_TABLE,
+          Key: { id: organizationId },
+          UpdateExpression:
+            "SET paymentStatus = :active, stripeSubscriptionId = :sid, stripeCustomerId = :cid",
+          ExpressionAttributeValues: {
+            ":active": "Active",
+            ":sid": subscription.id,
+            ":cid": stripeCustomerId,
+          },
+        })
+      );
+    } else {
+    const seatLimit = baseSeats + addonSeats;
 
     // 1️⃣ Update org
     await ddb.send(
@@ -115,13 +139,14 @@ export const handler = async (event: any) => {
         },
         ExpressionAttributeValues: {
           ":active": "Active",
-          ":plan": plan,
+          ":plan": resolvedPlan,
           ":seats": seatLimit,
           ":sid": subscription.id,
           ":cid": stripeCustomerId,
         },
       })
     );
+    }
 
     // 2️⃣ Unsuspend the single user
     if (userId) {

@@ -30,24 +30,19 @@ export default function AppWrapper({ initialState = "signIn" }: AppWrapperProps)
           FormFields() {
             return (
               <>
-                <View className="signup-account-note" marginBottom="0.8rem">
-                  <strong>Sign-up options:</strong> Organization accounts include up to 5 users.
-                  Leave Organization Name blank for a personal account (1 user).
-                </View>
-
-                {/* Optional Organization Name */}
-                <TextField
-                  name="custom:organizationName"
-                  label="Organization Name (optional)"
-                  placeholder="Fire Department, Company, etc."
-                />
-
-                {/* Friendly display name (NOT Cognito attribute) */}
+                {/* Friendly display name */}
                 <TextField
                   name="name"
                   label="Your Name"
                   placeholder="John Smith"
                   required
+                />
+
+                {/* Organization or account name — used to label the org, does not affect seat count */}
+                <TextField
+                  name="custom:organizationName"
+                  label="Organization or Account Name (optional)"
+                  placeholder="Fire Department, Studio, Family, etc."
                 />
 
                 {/* Email + Password handled by Amplify */}

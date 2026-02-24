@@ -78,28 +78,5 @@ export const PLAN_BY_KEY: Record<PlanKey, PlanDefinition> = Object.fromEntries(
   PLAN_REGISTRY.map((p) => [p.key, p]),
 ) as Record<PlanKey, PlanDefinition>;
 
-// ─── Stripe Price IDs ────────────────────────────────────────────────────────
-// Price IDs are public (they appear in Stripe checkout URLs) — safe to bake
-// into the frontend build via Vite env vars.
-
-export const PLAN_PRICE_IDS: Record<PlanKey, Record<BillingPeriod, string>> = {
-  Personal: {
-    monthly: import.meta.env.VITE_STRIPE_PRICE_PERSONAL_MONTHLY ?? "",
-    yearly: import.meta.env.VITE_STRIPE_PRICE_PERSONAL_YEARLY ?? "",
-  },
-  Department: {
-    monthly: import.meta.env.VITE_STRIPE_PRICE_DEPARTMENT_MONTHLY ?? "",
-    yearly: import.meta.env.VITE_STRIPE_PRICE_DEPARTMENT_YEARLY ?? "",
-  },
-  Organization: {
-    monthly: import.meta.env.VITE_STRIPE_PRICE_ORGANIZATION_MONTHLY ?? "",
-    yearly: import.meta.env.VITE_STRIPE_PRICE_ORGANIZATION_YEARLY ?? "",
-  },
-};
-
-/** Resolve the correct Stripe priceId for a given plan + billing period */
-export const getPriceId = (plan: PlanKey, period: BillingPeriod): string =>
-  PLAN_PRICE_IDS[plan][period];
-
 /** Annual savings percentage vs monthly (rounded) */
 export const ANNUAL_SAVINGS_PCT = 16; // ~2 months free

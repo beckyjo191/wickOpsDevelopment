@@ -315,9 +315,14 @@ const PRICE_ENV_KEYS = [
 ] as const;
 
 for (const key of PRICE_ENV_KEYS) {
-  const val = process.env[key] ?? "";
-  (backend.stripeWebhook.resources.lambda as any).addEnvironment(key, val);
-  (backend.createCheckoutSession.resources.lambda as any).addEnvironment(key, val);
+  const val = process.env[key];
+  // Only call addEnvironment when the value is present at CDK synthesis time.
+  // If omitted, the secret() bindings in each function's resource.ts take effect.
+  // Passing an empty string would silently overwrite those secret references.
+  if (val) {
+    (backend.stripeWebhook.resources.lambda as any).addEnvironment(key, val);
+    (backend.createCheckoutSession.resources.lambda as any).addEnvironment(key, val);
+  }
 }
 
 // Seat add-on price (users buy via Stripe Customer Portal to add seats beyond the base plan)

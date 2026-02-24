@@ -12,28 +12,46 @@ const USER_TABLE = process.env.USER_TABLE!;
 const ORG_TABLE = process.env.ORG_TABLE!;
 const FRONTEND_URL = process.env.FRONTEND_URL!;
 
-// All valid Stripe price IDs — monthly + yearly for each plan tier.
-// The frontend sends the priceId it wants; we validate here before passing to Stripe.
-const VALID_PRICE_IDS = new Set(
-  [
-    process.env.STRIPE_PRICE_PERSONAL_MONTHLY,
-    process.env.STRIPE_PRICE_PERSONAL_YEARLY,
-    process.env.STRIPE_PRICE_DEPARTMENT_MONTHLY,
-    process.env.STRIPE_PRICE_DEPARTMENT_YEARLY,
-    process.env.STRIPE_PRICE_ORGANIZATION_MONTHLY,
-    process.env.STRIPE_PRICE_ORGANIZATION_YEARLY,
-  ].filter(Boolean) as string[],
-);
+type PlanKey = "Personal" | "Department" | "Organization";
+type BillingPeriod = "monthly" | "yearly";
+
+// Resolve price ID server-side from secrets — the frontend only sends planKey + billingPeriod.
+const PRICE_ID_MAP: Record<PlanKey, Record<BillingPeriod, string | undefined>> = {
+  Personal: {
+    monthly: process.env.STRIPE_PRICE_PERSONAL_MONTHLY,
+    yearly:  process.env.STRIPE_PRICE_PERSONAL_YEARLY,
+  },
+  Department: {
+    monthly: process.env.STRIPE_PRICE_DEPARTMENT_MONTHLY,
+    yearly:  process.env.STRIPE_PRICE_DEPARTMENT_YEARLY,
+  },
+  Organization: {
+    monthly: process.env.STRIPE_PRICE_ORGANIZATION_MONTHLY,
+    yearly:  process.env.STRIPE_PRICE_ORGANIZATION_YEARLY,
+  },
+};
+
+const VALID_PLAN_KEYS = new Set<string>(["Personal", "Department", "Organization"]);
+const VALID_BILLING_PERIODS = new Set<string>(["monthly", "yearly"]);
 
 export const handler = async (event: any) => {
   try {
-    // Validate the priceId from the request body before hitting Stripe
     const requestBody = event.body ? JSON.parse(event.body) : {};
-    const priceId = String(requestBody.priceId ?? "").trim();
-    if (!priceId || !VALID_PRICE_IDS.has(priceId)) {
+    const planKey = String(requestBody.planKey ?? "").trim();
+    const billingPeriod = String(requestBody.billingPeriod ?? "").trim();
+
+    if (!VALID_PLAN_KEYS.has(planKey) || !VALID_BILLING_PERIODS.has(billingPeriod)) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: "Invalid or missing priceId." }),
+        body: JSON.stringify({ error: "Invalid plan or billing period." }),
+      };
+    }
+
+    const priceId = PRICE_ID_MAP[planKey as PlanKey][billingPeriod as BillingPeriod];
+    if (!priceId) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "Price not configured for this plan. Contact support." }),
       };
     }
 
@@ -85,7 +103,7 @@ export const handler = async (event: any) => {
       customer: stripeCustomerId,
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${FRONTEND_URL}/?checkout=success`,
-      cancel_url: `${FRONTEND_URL}/?checkout=cancel`,
+      cancel_url: `${FRONTEND_URL}/app`,
       metadata: {
         organizationId: org.id,
         userId: user.id,

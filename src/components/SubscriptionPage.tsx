@@ -3,7 +3,6 @@ import { useAuthenticator } from "@aws-amplify/ui-react";
 import { authFetch } from "../lib/authFetch";
 import {
   PLAN_REGISTRY,
-  getPriceId,
   ANNUAL_SAVINGS_PCT,
   type BillingPeriod,
   type PlanKey,
@@ -17,18 +16,12 @@ export default function SubscriptionPage() {
   const [loadingPlan, setLoadingPlan] = useState<PlanKey | null>(null);
 
   const startCheckout = async (planKey: PlanKey) => {
-    const priceId = getPriceId(planKey, billingPeriod);
-    if (!priceId) {
-      alert("Plan pricing is not configured. Please contact support.");
-      return;
-    }
-
     setLoadingPlan(planKey);
     try {
       const res = await authFetch(`${API_BASE_URL}/create-checkout-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ priceId }),
+        body: JSON.stringify({ planKey, billingPeriod }),
       });
 
       if (!res.ok) {

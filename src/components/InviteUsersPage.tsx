@@ -65,9 +65,14 @@ export function InviteUsersPage({
       }
 
       await onContinue(validInvites);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("Failed to send invites.");
+      const msg = err?.message ?? "";
+      if (msg.includes("UsernameExistsException")) {
+        alert("That email address is already registered. The user may already have an account.");
+      } else {
+        alert("Failed to send invites.");
+      }
     } finally {
       setLoading(false);
     }

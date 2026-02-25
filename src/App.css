@@ -53,7 +53,7 @@
 
 .app-toolbar-brand-text {
   color: var(--text-heading);
-  font-family: "Merriweather Sans", "Trebuchet MS", sans-serif;
+  font-family: "Montserrat", "Trebuchet MS", sans-serif;
   font-size: 1.08rem;
   font-weight: 800;
   letter-spacing: 0.01em;
@@ -74,7 +74,7 @@
   border: 0;
   background: transparent;
   color: var(--text-heading);
-  font-family: "Merriweather Sans", "Trebuchet MS", sans-serif;
+  font-family: "Montserrat", "Trebuchet MS", sans-serif;
   font-size: 1.03rem;
   font-weight: 800;
   cursor: pointer;
@@ -142,7 +142,7 @@
   border: 0;
   background: transparent;
   color: var(--text-heading);
-  font-family: "Merriweather Sans", "Trebuchet MS", sans-serif;
+  font-family: "Montserrat", "Trebuchet MS", sans-serif;
   font-size: 1.03rem;
   font-weight: 800;
   text-decoration: none;
@@ -448,6 +448,12 @@
 
 .button-ghost:hover:not(:disabled) {
   background: var(--danger-surface);
+}
+
+.button-sm {
+  height: auto;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
 }
 
 .status-panel {

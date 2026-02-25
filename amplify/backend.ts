@@ -100,7 +100,7 @@ const addInventoryRoute = (path: string, methods: HttpMethod[]) => {
 
 addInventoryRoute("/inventory/org-modules", [HttpMethod.GET, HttpMethod.POST]);
 addInventoryRoute("/inventory/module-access/users", [HttpMethod.GET]);
-addInventoryRoute("/inventory/module-access/users/{userId}", [HttpMethod.POST]);
+addInventoryRoute("/inventory/module-access/users/{userId}", [HttpMethod.POST, HttpMethod.DELETE]);
 addInventoryRoute("/inventory/profile/display-name", [HttpMethod.POST]);
 addInventoryRoute("/inventory/profile/email/sync", [HttpMethod.POST]);
 addInventoryRoute("/inventory/bootstrap", [HttpMethod.GET]);
@@ -215,7 +215,7 @@ const inviteTable = (backend.data.resources as any)?.tables?.invite;
 
 if (userTable) {
   inventoryApiLambda.addEnvironment("USER_TABLE", userTable.tableName);
-  userTable.grantReadData(backend.inventoryApi.resources.lambda);
+  userTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
 }
 
 // inventoryApi needs read-write on the org table for getAccessContext (two-layer module

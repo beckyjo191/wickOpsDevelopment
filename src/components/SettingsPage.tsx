@@ -12,24 +12,22 @@ import {
   loadInventoryBootstrap,
   type ModuleAccessUser,
   type AppModuleKey,
+  revokeUserAccess,
   syncCurrentUserEmail,
-  updateOrgModules,
   updateUserModuleAccess,
   updateCurrentUserDisplayName,
   updateInventoryColumnLabel,
   updateInventoryColumnVisibility,
   type InventoryColumn,
 } from "../lib/inventoryApi";
-import { MODULE_REGISTRY } from "../lib/moduleRegistry";
 import type { ThemePreference } from "../lib/themePreference";
 import type { UsageFormPreferences } from "../lib/usageFormPreferences";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "orgModules" | "userModuleAccess" | "usageFormFields" | "inventoryColumns";
+type DisclosureKey = "appearance" | "userModuleAccess" | "usageFormFields" | "inventoryColumns";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
-  orgModules: true,
   userModuleAccess: true,
   usageFormFields: true,
   inventoryColumns: false,
@@ -44,10 +42,6 @@ interface SettingsPageProps {
   seatsUsed: number;
   canManageInventoryColumns: boolean;
   canManageModuleAccess: boolean;
-  canManageOrgModules: boolean;
-  orgAvailableModules: AppModuleKey[];
-  orgEnabledModules: AppModuleKey[];
-  onOrgEnabledModulesChange: (modules: AppModuleKey[]) => void;
   currentUserId: string;
   themePreference: ThemePreference;
   onThemePreferenceChange: (preference: ThemePreference) => void;
@@ -56,6 +50,7 @@ interface SettingsPageProps {
   onCurrentUserAllowedModulesChange: (allowedModules: AppModuleKey[]) => void;
   onCurrentUserDisplayNameChange: (displayName: string) => void;
   onCurrentUserEmailChange: (email: string) => void;
+  onUserRevoked: (userId: string, newSeatsUsed: number) => void;
   onInviteUsers: () => void;
 }
 
@@ -68,10 +63,6 @@ export function SettingsPage({
   seatsUsed,
   canManageInventoryColumns,
   canManageModuleAccess,
-  canManageOrgModules,
-  orgAvailableModules,
-  orgEnabledModules,
-  onOrgEnabledModulesChange,
   currentUserId,
   themePreference,
   onThemePreferenceChange,
@@ -80,6 +71,7 @@ export function SettingsPage({
   onCurrentUserAllowedModulesChange,
   onCurrentUserDisplayNameChange,
   onCurrentUserEmailChange,
+  onUserRevoked,
   onInviteUsers,
 }: SettingsPageProps) {
   const normalizeEmail = (value: string): string => value.trim().toLowerCase();
@@ -110,8 +102,8 @@ export function SettingsPage({
   const [moduleAccessKeys, setModuleAccessKeys] = useState<AppModuleKey[]>(["inventory", "usage"]);
   const [loadingModuleAccess, setLoadingModuleAccess] = useState(false);
   const [savingModuleAccessUserId, setSavingModuleAccessUserId] = useState<string | null>(null);
-  const [orgModulesError, setOrgModulesError] = useState<string | null>(null);
-  const [orgModulesSaving, setOrgModulesSaving] = useState(false);
+  const [revokingUserId, setRevokingUserId] = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<string>("");
   const [portalLoading, setPortalLoading] = useState(false);
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
   const [loadedDisclosureKey, setLoadedDisclosureKey] = useState<string>("");
@@ -192,10 +184,6 @@ export function SettingsPage({
       const parsed = JSON.parse(raw) as Partial<DisclosureState>;
       setDisclosures({
         appearance: typeof parsed.appearance === "boolean" ? parsed.appearance : DEFAULT_DISCLOSURE_STATE.appearance,
-        orgModules:
-          typeof parsed.orgModules === "boolean"
-            ? parsed.orgModules
-            : DEFAULT_DISCLOSURE_STATE.orgModules,
         userModuleAccess:
           typeof parsed.userModuleAccess === "boolean"
             ? parsed.userModuleAccess
@@ -372,8 +360,8 @@ export function SettingsPage({
     } else {
       next.delete(moduleKey);
     }
-    if (targetUserId === currentUserId && next.size === 0) {
-      alert("You must keep access to at least one module.");
+    if (next.size === 0) {
+      alert("Users must have access to at least one module. Use \"Revoke Access\" to remove a user entirely.");
       return;
     }
     const nextAllowedModules = Array.from(next) as AppModuleKey[];
@@ -399,6 +387,21 @@ export function SettingsPage({
       alert(err?.message ?? "Failed to update module access");
     } finally {
       setSavingModuleAccessUserId(null);
+    }
+  };
+
+  const onRevokeUser = async (userId: string) => {
+    if (!window.confirm("Revoke this user's access? They will lose access to the organization and their seat will be freed.")) return;
+    setRevokingUserId(userId);
+    setRevokeError("");
+    try {
+      const result = await revokeUserAccess(userId);
+      setModuleAccessUsers((prev) => prev.filter((u) => u.userId !== userId));
+      onUserRevoked(userId, result.seatsUsed);
+    } catch (err: any) {
+      setRevokeError(err?.message ?? "Failed to revoke access. Please try again.");
+    } finally {
+      setRevokingUserId(null);
     }
   };
 
@@ -544,12 +547,12 @@ export function SettingsPage({
         </header>
 
         <div className="status-panel">
-          {canInviteMore
-            ? `You have ${seatsRemaining} invite${seatsRemaining === 1 ? "" : "s"} remaining (${seatsUsed}/${seatLimit} seats used).`
-            : `No invite seats remaining (${seatsUsed}/${seatLimit} seats used).`}
+          {seatsRemaining > 0
+            ? `You have ${seatsRemaining} seat${seatsRemaining === 1 ? "" : "s"} remaining (${seatsUsed}/${seatLimit} seats used).`
+            : `No seats remaining (${seatsUsed}/${seatLimit} seats used).`}
         </div>
 
-        {canManageOrgModules ? (
+        {canManageModuleAccess ? (
           <div className="settings-section spacer-top">
             <h3 className="settings-section-title">Subscription</h3>
             <p className="settings-section-copy">
@@ -738,74 +741,6 @@ export function SettingsPage({
           </div>
         </details>
 
-        {canManageOrgModules && orgAvailableModules.length > 0 ? (
-          <details
-            className="settings-section spacer-top"
-            open={disclosures.orgModules}
-            onToggle={(event) => onDisclosureToggle("orgModules", event.currentTarget.open)}
-          >
-            <summary className="settings-section-title">Organization Modules</summary>
-            <p className="settings-section-copy">
-              Enable or disable modules for all users in your organization.
-            </p>
-            {orgModulesError ? (
-              <p className="settings-section-copy" style={{ color: "var(--color-danger, #c0392b)" }}>
-                {orgModulesError}
-              </p>
-            ) : null}
-            <div className="module-marketplace-grid">
-              {MODULE_REGISTRY
-                .filter((m) => m.status === "stable" && orgAvailableModules.includes(m.key))
-                .map((m) => {
-                  const enabled = orgEnabledModules.includes(m.key);
-                  return (
-                    <div
-                      key={`org-module-${m.key}`}
-                      className={`module-card${enabled ? " module-card-enabled" : ""}`}
-                    >
-                      <div className="module-card-header">
-                        <span className="module-card-icon">{m.icon}</span>
-                        <span className="module-card-name">{m.name}</span>
-                      </div>
-                      <p className="module-card-description">{m.description}</p>
-                      <div className="module-card-footer">
-                        <span className="module-card-category">{m.category}</span>
-                        <label className="module-card-toggle">
-                          <input
-                            type="checkbox"
-                            checked={enabled}
-                            disabled={orgModulesSaving}
-                            onChange={async () => {
-                              const next = enabled
-                                ? orgEnabledModules.filter((k) => k !== m.key)
-                                : [...orgEnabledModules, m.key];
-                              if (next.length === 0) {
-                                setOrgModulesError("At least one module must remain enabled.");
-                                return;
-                              }
-                              setOrgModulesError(null);
-                              setOrgModulesSaving(true);
-                              onOrgEnabledModulesChange(next);
-                              try {
-                                const saved = await updateOrgModules(next);
-                                onOrgEnabledModulesChange(saved);
-                              } catch (err: any) {
-                                onOrgEnabledModulesChange(orgEnabledModules);
-                                setOrgModulesError(err?.message ?? "Failed to save. Please try again.");
-                              } finally {
-                                setOrgModulesSaving(false);
-                              }
-                            }}
-                          />
-                          <span>{enabled ? "Enabled" : "Disabled"}</span>
-                        </label>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          </details>
-        ) : null}
 
         <details
           className="settings-section spacer-top"
@@ -857,9 +792,20 @@ export function SettingsPage({
                       </label>
                       );
                     })}
+                    {user.userId !== currentUserId && !["OWNER", "ACCOUNT_OWNER"].includes(user.role.toUpperCase()) && (
+                      <button
+                        type="button"
+                        className="button button-ghost button-sm"
+                        disabled={revokingUserId === user.userId || savingModuleAccessUserId === user.userId}
+                        onClick={() => { void onRevokeUser(user.userId); }}
+                      >
+                        {revokingUserId === user.userId ? "Revoking…" : "Revoke Access"}
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
+              {revokeError && <p className="settings-error">{revokeError}</p>}
             </div>
           ) : (
             <p className="settings-section-copy">

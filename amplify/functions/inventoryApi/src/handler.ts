@@ -1078,24 +1078,100 @@ const handleUpdateUserModuleAccess = async (
     return json(400, { error: "You cannot change your own module access." });
   }
 
-  await ddb.send(
-    new UpdateCommand({
-      TableName: USER_TABLE,
-      Key: { id: targetUserId },
-      ConditionExpression: "organizationId = :org",
-      UpdateExpression: "SET allowedModules = :allowedModules",
-      ExpressionAttributeValues: {
-        ":org": access.organizationId,
-        ":allowedModules": requestedAllowedModules,
-      },
-    }),
-  );
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: USER_TABLE,
+        Key: { id: targetUserId },
+        ConditionExpression: "organizationId = :org",
+        UpdateExpression: "SET allowedModules = :allowedModules",
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":allowedModules": requestedAllowedModules,
+        },
+      }),
+    );
+  } catch (err: any) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return json(404, { error: "User not found or not in organization" });
+    }
+    throw err;
+  }
 
   return json(200, {
     ok: true,
     userId: targetUserId,
     allowedModules: requestedAllowedModules,
   });
+};
+
+const handleRevokeUserAccess = async (access: AccessContext, path: string) => {
+  if (!COLUMN_ADMIN_ROLES.has(access.role)) {
+    return json(403, { error: "Only admins can revoke user access" });
+  }
+
+  const match = path.match(/\/inventory\/module-access\/users\/([^/]+)$/);
+  const targetUserId = String(match?.[1] ?? "").trim();
+  if (!targetUserId) {
+    return json(400, { error: "User id is required" });
+  }
+  if (targetUserId === access.userId) {
+    return json(400, { error: "You cannot revoke your own access." });
+  }
+
+  const targetRes = await ddb.send(
+    new GetCommand({ TableName: USER_TABLE, Key: { id: targetUserId } }),
+  );
+  const targetUser = targetRes.Item as UserRecord | undefined;
+  if (!targetUser || normalizeOrgId(targetUser.organizationId) !== access.organizationId) {
+    return json(404, { error: "User not found" });
+  }
+  if (OWNER_ROLES.has(normalizeRole(targetUser.role))) {
+    return json(400, { error: "Organization owners cannot be removed." });
+  }
+
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: USER_TABLE,
+        Key: { id: targetUserId },
+        ConditionExpression: "organizationId = :org",
+        UpdateExpression: "SET accessSuspended = :suspended",
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":suspended": true,
+        },
+      }),
+    );
+  } catch (err: any) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return json(404, { error: "User not found or not in organization" });
+    }
+    throw err;
+  }
+
+  // Count remaining active (non-suspended) users for the updated seat tally
+  let seatsUsed = 0;
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb.send(
+      new ScanCommand({
+        TableName: USER_TABLE,
+        FilterExpression:
+          "organizationId = :org AND (attribute_not_exists(accessSuspended) OR accessSuspended = :false)",
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":false": false,
+        },
+        ExclusiveStartKey: lastKey,
+        Select: "COUNT",
+      }),
+    );
+    seatsUsed += page.Count ?? 0;
+    lastKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastKey);
+
+  return json(200, { ok: true, seatsUsed });
 };
 
 const handleUpdateCurrentUserDisplayName = async (access: AccessContext, body: any) => {
@@ -1876,6 +1952,10 @@ export const handler = async (event: any) => {
 
     if (method === "POST" && /\/inventory\/module-access\/users\/[^/]+$/.test(path)) {
       return handleUpdateUserModuleAccess(access, path, parseBody(event));
+    }
+
+    if (method === "DELETE" && /\/inventory\/module-access\/users\/[^/]+$/.test(path)) {
+      return handleRevokeUserAccess(access, path);
     }
 
     if (method === "POST" && path.endsWith("/inventory/profile/display-name")) {

@@ -1,5 +1,6 @@
 import { authFetch } from "./authFetch";
-export type { AppModuleKey } from "./moduleRegistry";
+import type { AppModuleKey } from "./moduleRegistry";
+export type { AppModuleKey };
 
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
 const INVENTORY_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVENTORY_API_BASE_URL);
@@ -392,8 +393,21 @@ export const updateUserModuleAccess = async (
     body: JSON.stringify({ allowedModules }),
   });
   if (!res.ok) {
-    throw new Error((await res.text()) || "Failed to update module access");
+    throw new Error(await getApiErrorMessage(res, "Failed to update module access"));
   }
+};
+
+export const revokeUserAccess = async (
+  userId: string,
+): Promise<{ seatsUsed: number }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/module-access/users/${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to revoke user access");
+  }
+  return res.json() as Promise<{ seatsUsed: number }>;
 };
 
 export const updateCurrentUserDisplayName = async (displayName: string): Promise<void> => {

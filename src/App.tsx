@@ -358,7 +358,6 @@ export default function App() {
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
-  const canManageOrgModules = ["OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const breadcrumbs: BreadcrumbItem[] =
     view === "inventory"
       ? [
@@ -405,13 +404,10 @@ export default function App() {
           setSubState((prev) => ({ ...prev, displayName }))
         }
         onCurrentUserEmailChange={(email) => setCurrentUserEmail(email)}
-        canManageModuleAccess={canManageModuleAccess}
-        canManageOrgModules={canManageOrgModules}
-        orgAvailableModules={subState.orgAvailableModules}
-        orgEnabledModules={subState.orgEnabledModules}
-        onOrgEnabledModulesChange={(orgEnabledModules) =>
-          setSubState((prev) => ({ ...prev, orgEnabledModules }))
+        onUserRevoked={(_userId, newSeatsUsed) =>
+          setSubState((prev) => ({ ...prev, seatsUsed: newSeatsUsed }))
         }
+        canManageModuleAccess={canManageModuleAccess}
         currentUserId={String(user?.attributes?.sub ?? "")}
         onInviteUsers={() => {
           if (!canInviteMore) return;

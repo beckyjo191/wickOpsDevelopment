@@ -287,6 +287,16 @@ if (userPool) {
       resources: [userPool.userPoolArn],
     }),
   );
+  inventoryApiLambda.addEnvironment("USER_POOL_ID", userPool.userPoolId);
+  inventoryApiLambda.addToRolePolicy(
+    new PolicyStatement({
+      actions: [
+        "cognito-idp:AdminDisableUser",
+        "cognito-idp:AdminUserGlobalSignOut",
+      ],
+      resources: [userPool.userPoolArn],
+    }),
+  );
 }
 
 wireCoreDataTables(backend.createCheckoutSession.resources.lambda, {

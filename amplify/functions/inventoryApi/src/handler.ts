@@ -17,12 +17,19 @@ import {
   ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
+import {
+  AdminDisableUserCommand,
+  AdminUserGlobalSignOutCommand,
+  CognitoIdentityProviderClient,
+} from "@aws-sdk/client-cognito-identity-provider";
 import { createHash, randomUUID } from "node:crypto";
 
 const rawDdb = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(rawDdb);
+const cognito = new CognitoIdentityProviderClient({});
 
 const USER_TABLE = process.env.USER_TABLE!;
+const USER_POOL_ID = process.env.USER_POOL_ID ?? "";
 const ORG_TABLE = process.env.ORG_TABLE!;
 const DEFAULT_INVENTORY_COLUMN_TABLE = process.env.INVENTORY_COLUMN_TABLE!;
 const DEFAULT_INVENTORY_ITEM_TABLE = process.env.INVENTORY_ITEM_TABLE!;
@@ -1150,6 +1157,26 @@ const handleRevokeUserAccess = async (access: AccessContext, path: string) => {
     throw err;
   }
 
+  // Disable Cognito account (prevents new logins) and invalidate existing sessions
+  if (USER_POOL_ID) {
+    try {
+      await cognito.send(new AdminDisableUserCommand({
+        UserPoolId: USER_POOL_ID,
+        Username: targetUserId,
+      }));
+    } catch (err: any) {
+      console.error("Failed to disable Cognito user:", targetUserId, err?.message);
+    }
+    try {
+      await cognito.send(new AdminUserGlobalSignOutCommand({
+        UserPoolId: USER_POOL_ID,
+        Username: targetUserId,
+      }));
+    } catch (err: any) {
+      console.error("Failed to global sign out Cognito user:", targetUserId, err?.message);
+    }
+  }
+
   // Count remaining active (non-suspended) users for the updated seat tally
   let seatsUsed = 0;
   let lastKey: Record<string, unknown> | undefined;
@@ -1170,6 +1197,16 @@ const handleRevokeUserAccess = async (access: AccessContext, path: string) => {
     seatsUsed += page.Count ?? 0;
     lastKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (lastKey);
+
+  // Write the accurate count back to the org table so userSubscriptionCheck stays in sync
+  await ddb.send(
+    new UpdateCommand({
+      TableName: ORG_TABLE,
+      Key: { id: access.organizationId },
+      UpdateExpression: "SET seatsUsed = :seatsUsed",
+      ExpressionAttributeValues: { ":seatsUsed": seatsUsed },
+    }),
+  );
 
   return json(200, { ok: true, seatsUsed });
 };

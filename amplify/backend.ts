@@ -28,10 +28,11 @@ const backend = defineBackend({
 const deploymentEnv = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
   .trim()
   .toLowerCase();
-const corsAllowedOrigins =
-  deploymentEnv === "prod" || deploymentEnv === "production"
-    ? ["https://systems.wickops.com"]
-    : ["http://localhost:5173"];
+const deployedBranch = process.env.AWS_BRANCH ?? process.env.AMPLIFY_BRANCH ?? "";
+const isDeployed = deployedBranch !== "" || deploymentEnv === "prod" || deploymentEnv === "production";
+const corsAllowedOrigins = isDeployed
+  ? ["https://systems.wickops.com"]
+  : ["http://localhost:5173"];
 const corsAllowedHeaders = ["Authorization", "Content-Type"];
 const browserCorsMethods = [
   CorsHttpMethod.GET,

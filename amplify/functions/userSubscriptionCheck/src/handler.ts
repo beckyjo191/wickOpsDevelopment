@@ -629,6 +629,10 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
       accessSuspended = false;
     }
 
+    // onboardingCompleted: absent on legacy/pre-feature orgs → treat as true.
+    // Only show onboarding when explicitly set to false (new orgs set this in postConfirmation).
+    const onboardingCompleted = org.onboardingCompleted !== false;
+
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -646,6 +650,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
         orgAvailableModules,
         orgEnabledModules,
         allowedModules,
+        onboardingCompleted,
       }),
     };
   } catch (err) {

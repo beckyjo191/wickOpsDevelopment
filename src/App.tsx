@@ -7,6 +7,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { DashboardPage } from "./components/DashboardPage";
 import { AppToolbar } from "./components/AppToolbar";
 import { InventoryUsagePage } from "./components/InventoryUsagePage";
+import { OnboardingPage } from "./components/OnboardingPage";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -82,6 +83,7 @@ export default function App() {
     allowedModules: AppModuleKey[];
     orgAvailableModules: AppModuleKey[];
     orgEnabledModules: AppModuleKey[];
+    onboardingCompleted: boolean;
     loadError: boolean;
   }>({
     status: "loading",
@@ -96,6 +98,7 @@ export default function App() {
     allowedModules: ["inventory", "usage"],
     orgAvailableModules: [],
     orgEnabledModules: [],
+    onboardingCompleted: true,
     loadError: false,
   });
   const usagePreferencesScope = `${subState.organizationId || "personal"}.${userViewScope || "anonymous"}`;
@@ -149,6 +152,7 @@ export default function App() {
           allowedModules: normalizeModuleKeys(data.allowedModules),
           orgAvailableModules: normalizeModuleKeys(data.orgAvailableModules),
           orgEnabledModules: normalizeModuleKeys(data.orgEnabledModules),
+          onboardingCompleted: data.onboardingCompleted !== false,
           loadError: false,
         });
 
@@ -186,6 +190,7 @@ export default function App() {
           allowedModules: ["inventory", "usage"],
           orgAvailableModules: [],
           orgEnabledModules: [],
+          onboardingCompleted: true,
           loadError: true,
         });
       }
@@ -342,6 +347,16 @@ export default function App() {
 
   if (subState.status === "unsubscribed" || subState.accessSuspended) {
     return <SubscriptionPage />;
+  }
+
+  const isOrgOwner = ["OWNER", "ACCOUNT_OWNER"].includes(subState.role);
+  if (subState.status === "subscribed" && !subState.onboardingCompleted && isOrgOwner) {
+    return (
+      <OnboardingPage
+        orgName={subState.orgName}
+        onComplete={() => setSubState((prev) => ({ ...prev, onboardingCompleted: true }))}
+      />
+    );
   }
 
   const userEmail = currentUserEmail || derivedUserEmail;

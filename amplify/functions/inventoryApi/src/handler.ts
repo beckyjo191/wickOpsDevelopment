@@ -1959,6 +1959,216 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
   });
 };
 
+// ─── Industry Onboarding Templates ───────────────────────────────────────────
+
+type TemplateColumn = {
+  label: string;
+  type: InventoryColumnType;
+};
+
+type IndustryTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  columns: TemplateColumn[];
+};
+
+const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
+  {
+    id: "fire_ems",
+    name: "Fire / EMS",
+    description: "Track SCBA, turnout gear, medical supplies, and apparatus equipment",
+    columns: [
+      { label: "Location", type: "text" },
+      { label: "Vehicle / Unit", type: "text" },
+      { label: "Serial Number", type: "text" },
+      { label: "Last Inspected", type: "date" },
+      { label: "Condition", type: "text" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+  {
+    id: "plumbing",
+    name: "Plumbing",
+    description: "Manage pipe fittings, valves, tools, and parts inventory",
+    columns: [
+      { label: "Part Number", type: "text" },
+      { label: "Size / Spec", type: "text" },
+      { label: "Manufacturer", type: "text" },
+      { label: "Location", type: "text" },
+      { label: "Unit Cost", type: "number" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+  {
+    id: "electrical",
+    name: "Electrical",
+    description: "Track wire, conduit, breakers, panels, and electrical components",
+    columns: [
+      { label: "Part Number", type: "text" },
+      { label: "Voltage / Amperage", type: "text" },
+      { label: "Manufacturer", type: "text" },
+      { label: "Location", type: "text" },
+      { label: "Unit Cost", type: "number" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+  {
+    id: "hvac",
+    name: "HVAC",
+    description: "Monitor filters, refrigerant, coils, and service components",
+    columns: [
+      { label: "Part Number", type: "text" },
+      { label: "Size / Spec", type: "text" },
+      { label: "Manufacturer", type: "text" },
+      { label: "Location", type: "text" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+  {
+    id: "restaurant",
+    name: "Restaurant / Food Service",
+    description: "Manage ingredients, smallwares, and kitchen supplies",
+    columns: [
+      { label: "Category", type: "text" },
+      { label: "Unit", type: "text" },
+      { label: "Supplier", type: "text" },
+      { label: "Storage Location", type: "text" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+  {
+    id: "medical",
+    name: "Medical / Healthcare",
+    description: "Track medications, PPE, and medical supplies with lot and location control",
+    columns: [
+      { label: "Category", type: "text" },
+      { label: "Lot Number", type: "text" },
+      { label: "Storage Location", type: "text" },
+      { label: "Controlled", type: "boolean" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+  {
+    id: "it_tech",
+    name: "IT / Technology",
+    description: "Manage hardware, peripherals, licenses, and tech equipment",
+    columns: [
+      { label: "Asset Tag", type: "text" },
+      { label: "Serial Number", type: "text" },
+      { label: "Assigned To", type: "text" },
+      { label: "Location", type: "text" },
+      { label: "Purchase Date", type: "date" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+  {
+    id: "general",
+    name: "General / Office",
+    description: "A flexible setup for general supplies and equipment",
+    columns: [
+      { label: "Category", type: "text" },
+      { label: "Location", type: "text" },
+      { label: "Notes", type: "text" },
+    ],
+  },
+];
+
+/** GET /inventory/onboarding/templates */
+const handleListOnboardingTemplates = () => {
+  return json(200, { templates: INDUSTRY_TEMPLATES });
+};
+
+/** POST /inventory/onboarding/apply-template */
+const handleApplyOnboardingTemplate = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  body: any,
+) => {
+  if (!OWNER_ROLES.has(access.role)) {
+    return json(403, { error: "Only organization owners can apply onboarding templates." });
+  }
+
+  const templateId = String(body?.templateId ?? "").trim();
+
+  // Mark the org as onboarded regardless of template choice.
+  await ddb.send(
+    new UpdateCommand({
+      TableName: ORG_TABLE,
+      Key: { id: access.organizationId },
+      UpdateExpression: "SET onboardingCompleted = :done",
+      ExpressionAttributeValues: { ":done": true },
+    }),
+  );
+
+  if (!templateId || templateId === "skip") {
+    return json(200, { ok: true, addedColumns: [] });
+  }
+
+  const template = INDUSTRY_TEMPLATES.find((t) => t.id === templateId);
+  if (!template) {
+    return json(200, { ok: true, addedColumns: [] });
+  }
+
+  // Only add template columns when the org has just the default core columns.
+  const existing = await listColumns(storage);
+  const coreOnlyCount = 4; // itemName, quantity, minQuantity, expirationDate
+  if (existing.length > coreOnlyCount) {
+    return json(200, { ok: true, addedColumns: [], skipped: true });
+  }
+
+  const existingLooseLabels = new Set(
+    existing.map((c) => normalizeLooseKey(c.label)),
+  );
+
+  let sortOrder = (existing[existing.length - 1]?.sortOrder ?? 40) + 10;
+  const addedColumns: Array<{ label: string; key: string }> = [];
+
+  for (const col of template.columns) {
+    // Skip if a column with this label already exists (e.g. "Notes")
+    if (existingLooseLabels.has(normalizeLooseKey(col.label))) continue;
+
+    const baseKey = toKey(col.label) || "column";
+    const existingKeys = new Set(existing.map((c) => c.key));
+    let key = baseKey;
+    let suffix = 2;
+    while (existingKeys.has(key)) {
+      key = `${baseKey}_${suffix}`;
+      suffix += 1;
+    }
+
+    const newColumn: InventoryColumn = {
+      id: randomUUID(),
+      organizationId: access.organizationId,
+      module: "inventory",
+      key,
+      label: col.label,
+      type: col.type,
+      isCore: false,
+      isRequired: false,
+      isVisible: true,
+      isEditable: true,
+      sortOrder,
+      createdAt: new Date().toISOString(),
+    };
+
+    await ddb.send(
+      new PutCommand({
+        TableName: storage.columnTable,
+        Item: newColumn,
+        ConditionExpression: "attribute_not_exists(id)",
+      }),
+    );
+
+    existing.push(newColumn);
+    existingLooseLabels.add(normalizeLooseKey(col.label));
+    addedColumns.push({ label: newColumn.label, key: newColumn.key });
+    sortOrder += 10;
+  }
+
+  return json(200, { ok: true, addedColumns });
+};
+
 export const handler = async (event: any) => {
   try {
     const method = getMethod(event);
@@ -2003,7 +2213,15 @@ export const handler = async (event: any) => {
       return handleSyncCurrentUserEmail(access);
     }
 
+    if (method === "GET" && path.endsWith("/inventory/onboarding/templates")) {
+      return handleListOnboardingTemplates();
+    }
+
     const storage = await ensureStorageForOrganization(access.organizationId);
+
+    if (method === "POST" && path.endsWith("/inventory/onboarding/apply-template")) {
+      return handleApplyOnboardingTemplate(storage, access, parseBody(event));
+    }
 
     if (method === "GET" && path.endsWith("/inventory/bootstrap")) {
       if (!hasModuleAccess(access, ["inventory", "usage"])) {

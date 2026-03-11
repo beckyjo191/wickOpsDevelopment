@@ -482,6 +482,48 @@ export const updateOrgModules = async (
     : []) as AppModuleKey[];
 };
 
+// ─── Onboarding Templates ────────────────────────────────────────────────────
+
+export type IndustryTemplateColumn = {
+  label: string;
+  type: "text" | "number" | "date" | "link" | "boolean";
+};
+
+export type IndustryTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  columns: IndustryTemplateColumn[];
+};
+
+export const listIndustryTemplates = async (): Promise<IndustryTemplate[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/onboarding/templates`);
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to load industry templates");
+  }
+  const data = await res.json();
+  return (Array.isArray(data.templates) ? data.templates : []) as IndustryTemplate[];
+};
+
+export const applyIndustryTemplate = async (
+  templateId: string,
+): Promise<{ addedColumns: Array<{ label: string; key: string }> }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/onboarding/apply-template`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ templateId }),
+  });
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to apply template"));
+  }
+  const data = await res.json();
+  return {
+    addedColumns: Array.isArray(data.addedColumns) ? data.addedColumns : [],
+  };
+};
+
 // ─── Billing Portal ───────────────────────────────────────────────────────────
 
 /**

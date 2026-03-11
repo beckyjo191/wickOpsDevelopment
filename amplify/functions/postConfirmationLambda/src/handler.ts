@@ -178,6 +178,7 @@ export const handler: Handler = async (event) => {
         plan: "",       // placeholder — overwritten by stripeWebhook on checkout completion
         paymentStatus: "Pending",
         enabledModules: ["inventory", "usage"],
+        onboardingCompleted: false,
         createdAt: new Date().toISOString(),
       },
       ConditionExpression: "attribute_not_exists(id)",

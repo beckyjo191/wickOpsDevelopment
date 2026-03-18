@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent
 import {
   convertImportFileToCsv,
   extractCsvHeaders,
+  generateAndDownloadInventoryTemplate,
   importInventoryCsv,
   isInventoryProvisioningError,
   loadInventoryBootstrap,
@@ -11,12 +12,13 @@ import {
   type InventoryRow,
 } from "../lib/inventoryApi";
 
-type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
+export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
 type SortDirection = "asc" | "desc";
 
 interface InventoryPageProps {
   canEditInventory: boolean;
   canManageInventoryColumns: boolean;
+  initialFilter?: InventoryFilter;
 }
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
@@ -92,13 +94,16 @@ const buildRowsSignature = (rows: InventoryRow[]): string =>
 export function InventoryPage({
   canEditInventory,
   canManageInventoryColumns,
+  initialFilter,
 }: InventoryPageProps) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [importingCsv, setImportingCsv] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<InventoryFilter>("all");
+  const [activeFilter, setActiveFilter] = useState<InventoryFilter>(() => initialFilter ?? "all");
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false);
+  const [templateSelectedIds, setTemplateSelectedIds] = useState<Set<string> | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [locationFilter, setLocationFilter] = useState("All Locations");
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
@@ -1268,6 +1273,17 @@ export function InventoryPage({
                     >
                       Paste Data
                     </button>
+                    <button
+                      type="button"
+                      className="inventory-import-option"
+                      onClick={() => {
+                        setTemplateSelectedIds(new Set(columns.map((c) => c.id)));
+                        setShowTemplateDialog(true);
+                      }}
+                      disabled={importingCsv || saving}
+                    >
+                      Download Template
+                    </button>
                   </div>
                 </details>
                 <button
@@ -1777,6 +1793,65 @@ export function InventoryPage({
               </button>
               <button className="button button-primary" onClick={onConfirmPasteImport} disabled={importingCsv}>
                 Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showTemplateDialog ? (
+        <div className="inventory-import-overlay" role="dialog" aria-modal="true" aria-label="Download template">
+          <div className="inventory-import-dialog">
+            <h3 className="inventory-import-title">Customize Template Columns</h3>
+            <p className="inventory-import-subtitle">
+              Choose which columns to include in the download.
+            </p>
+            <div className="inventory-import-list">
+              {columns.map((col) => {
+                const selected = templateSelectedIds?.has(col.id) ?? true;
+                return (
+                  <label key={col.id} className="inventory-import-item">
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      onChange={() =>
+                        setTemplateSelectedIds((prev) => {
+                          const next = new Set(prev ?? columns.map((c) => c.id));
+                          if (next.has(col.id)) next.delete(col.id);
+                          else next.add(col.id);
+                          return next;
+                        })
+                      }
+                    />
+                    <span>
+                      {col.label}
+                      <span style={{ opacity: 0.5, marginLeft: "0.5rem", fontSize: "0.75em" }}>
+                        {col.type}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="inventory-import-actions">
+              <button
+                className="button button-secondary"
+                onClick={() => setShowTemplateDialog(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button-primary"
+                disabled={!templateSelectedIds || templateSelectedIds.size === 0}
+                onClick={() => {
+                  const selectedCols = columns.filter(
+                    (c) => templateSelectedIds?.has(c.id) ?? true,
+                  );
+                  void generateAndDownloadInventoryTemplate(selectedCols).then(() =>
+                    setShowTemplateDialog(false),
+                  );
+                }}
+              >
+                Download
               </button>
             </div>
           </div>

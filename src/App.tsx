@@ -7,6 +7,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { DashboardPage } from "./components/DashboardPage";
 import { AppToolbar } from "./components/AppToolbar";
 import { InventoryUsagePage } from "./components/InventoryUsagePage";
+import { UsageReviewPage } from "./components/UsageReviewPage";
 import { OnboardingPage } from "./components/OnboardingPage";
 import { authFetch } from "./lib/authFetch";
 import {
@@ -22,6 +23,7 @@ import {
   type UsageFormPreferences,
 } from "./lib/usageFormPreferences";
 import { normalizeModuleKeys, type AppModuleKey } from "./lib/moduleRegistry";
+import type { InventoryFilter } from "./components/InventoryPage";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
@@ -42,7 +44,7 @@ const pickRandom = (items: string[]): string =>
   items[Math.floor(Math.random() * items.length)] ?? "Loading...";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
-type AppView = "dashboard" | "inventory" | "usage" | "invite" | "settings";
+type AppView = "dashboard" | "inventory" | "usage" | "usageReview" | "invite" | "settings";
 type BreadcrumbItem = {
   label: string;
   onClick?: () => void;
@@ -52,6 +54,7 @@ const isAppView = (value: unknown): value is AppView =>
   value === "dashboard" ||
   value === "inventory" ||
   value === "usage" ||
+  value === "usageReview" ||
   value === "invite" ||
   value === "settings";
 
@@ -59,6 +62,7 @@ export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [view, setView] = useState<AppView>("dashboard");
+  const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);
   const [loadingLine, setLoadingLine] = useState(() => pickRandom(APP_LOADING_LINES));
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   const [usageFormPreferences, setUsageFormPreferences] = useState<UsageFormPreferences>(
@@ -373,6 +377,8 @@ export default function App() {
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
+  const canReviewUsageSubmissions = canEditInventory && canAccessUsage;
+
   const breadcrumbs: BreadcrumbItem[] =
     view === "inventory"
       ? [
@@ -383,6 +389,12 @@ export default function App() {
         ? [
             { label: "Dashboard", onClick: () => setView("dashboard") },
             { label: "Usage Form" },
+          ]
+      : view === "usageReview"
+        ? [
+            { label: "Dashboard", onClick: () => setView("dashboard") },
+            { label: "Usage Form", onClick: () => setView("usage") },
+            { label: "Review" },
           ]
       : view === "settings"
         ? [
@@ -435,6 +447,7 @@ export default function App() {
       <InventoryPage
         canEditInventory={canEditInventory}
         canManageInventoryColumns={canManageInventoryColumns}
+        initialFilter={inventoryInitialFilter}
       />
     ) : (
       <DashboardPage
@@ -444,7 +457,20 @@ export default function App() {
     );
   } else if (view === "usage") {
     content = canAccessUsage ? (
-      <InventoryUsagePage usageFormPreferences={usageFormPreferences} />
+      <InventoryUsagePage
+        usageFormPreferences={usageFormPreferences}
+        canReviewSubmissions={canReviewUsageSubmissions}
+        onNavigateToReview={canReviewUsageSubmissions ? () => setView("usageReview") : undefined}
+      />
+    ) : (
+      <DashboardPage
+        accessibleModules={subState.allowedModules}
+        onNavigateToModule={(key) => setView(key as AppView)}
+      />
+    );
+  } else if (view === "usageReview") {
+    content = canReviewUsageSubmissions ? (
+      <UsageReviewPage onNavigateToUsageForm={() => setView("usage")} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
@@ -491,6 +517,10 @@ export default function App() {
       <DashboardPage
         accessibleModules={subState.allowedModules}
         onNavigateToModule={(key) => setView(key as AppView)}
+        onNavigateToInventoryWithFilter={(filter) => {
+          setInventoryInitialFilter(filter);
+          setView("inventory");
+        }}
       />
     );
   }

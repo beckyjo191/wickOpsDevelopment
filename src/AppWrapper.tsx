@@ -20,7 +20,7 @@ export default function AppWrapper({ initialState = "signIn" }: AppWrapperProps)
           return (
             <View textAlign="center" marginBottom="1rem">
               <div className="brand-lockup">
-                <img className="brand-logo" src={logoOriginal} alt="WickOps Systems" />
+                <img className="brand-logo" src={logoOriginal} alt="WickOps" />
               </div>
             </View>
           );

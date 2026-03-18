@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { applyIndustryTemplate } from "../lib/inventoryApi";
+import { Flame, Wrench, Zap, Wind, UtensilsCrossed, Stethoscope, Monitor, Package, type LucideIcon } from "lucide-react";
 
 type TemplateColumn = { label: string; type: string };
 type IndustryTemplate = { id: string; name: string; description: string; columns: TemplateColumn[] };
@@ -105,15 +106,15 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
   },
 ];
 
-const TEMPLATE_ICONS: Record<string, string> = {
-  fire_ems: "🚒",
-  plumbing: "🔧",
-  electrical: "⚡",
-  hvac: "🌡️",
-  restaurant: "🍽️",
-  medical: "🏥",
-  it_tech: "💻",
-  general: "📦",
+const TEMPLATE_ICONS: Record<string, LucideIcon> = {
+  fire_ems: Flame,
+  plumbing: Wrench,
+  electrical: Zap,
+  hvac: Wind,
+  restaurant: UtensilsCrossed,
+  medical: Stethoscope,
+  it_tech: Monitor,
+  general: Package,
 };
 
 interface OnboardingPageProps {
@@ -167,7 +168,7 @@ export function OnboardingPage({ orgName, onComplete }: OnboardingPageProps) {
                 disabled={applying}
               >
                 <span className="onboarding-template-icon" aria-hidden="true">
-                  {TEMPLATE_ICONS[template.id] ?? "📋"}
+                  {(() => { const Icon = TEMPLATE_ICONS[template.id]; return Icon ? <Icon size={22} strokeWidth={1.5} /> : null; })()}
                 </span>
                 <span className="onboarding-template-name">{template.name}</span>
                 <span className="onboarding-template-desc">{template.description}</span>

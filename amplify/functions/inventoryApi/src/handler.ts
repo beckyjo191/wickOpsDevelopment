@@ -148,6 +148,7 @@ type InventoryItem = {
 type AccessContext = {
   userId: string;
   email: string;
+  displayName: string;
   organizationId: string;
   role: string;
   /** Modules the org owner has activated (intersection of plan-available + owner-enabled) */
@@ -161,6 +162,7 @@ type AccessContext = {
 type InventoryStorage = {
   columnTable: string;
   itemTable: string;
+  pendingTable: string;
 };
 
 const storageCache = new Map<string, { storage: InventoryStorage; checkedAt: number }>();
@@ -270,7 +272,7 @@ const sanitizeOrgIdForTableName = (organizationId: string): string =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 36) || "org";
 
-const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items"): string => {
+const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items" | "pending"): string => {
   const safeOrg = sanitizeOrgIdForTableName(organizationId);
   const hash = createHash("sha256").update(organizationId).digest("hex").slice(0, 10);
   return `${INVENTORY_ORG_TABLE_PREFIX}-${INVENTORY_STORAGE_NAMESPACE}-${safeOrg}-${hash}-${suffix}`;
@@ -359,11 +361,50 @@ const createOrgTableIfMissing = async (
   }
 };
 
+const createOrgPendingTableIfMissing = async (tableName: string): Promise<{ created: boolean }> => {
+  const existing = await describeTable(tableName);
+  if (existing?.Table) {
+    if (existing.Table.TableStatus !== "ACTIVE") {
+      try {
+        await waitForTableActive(tableName);
+      } catch {
+        throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
+      }
+    }
+    return { created: false };
+  }
+
+  try {
+    await rawDdb.send(
+      new CreateTableCommand({
+        TableName: tableName,
+        BillingMode: BillingMode.PAY_PER_REQUEST,
+        AttributeDefinitions: [
+          { AttributeName: "id", AttributeType: ScalarAttributeType.S },
+        ],
+        KeySchema: [{ AttributeName: "id", KeyType: KeyType.HASH }],
+      }),
+    );
+  } catch (err: any) {
+    if (!isResourceInUse(err)) {
+      throw err;
+    }
+  }
+
+  try {
+    await waitForTableActive(tableName);
+    return { created: true };
+  } catch {
+    throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
+  }
+};
+
 const ensureStorageForOrganization = async (organizationId: string): Promise<InventoryStorage> => {
   if (!ENABLE_PER_ORG_TABLES) {
     return {
       columnTable: DEFAULT_INVENTORY_COLUMN_TABLE,
       itemTable: DEFAULT_INVENTORY_ITEM_TABLE,
+      pendingTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-pending`,
     };
   }
 
@@ -376,11 +417,13 @@ const ensureStorageForOrganization = async (organizationId: string): Promise<Inv
   const storage: InventoryStorage = {
     columnTable: buildOrgScopedTableName(organizationId, "columns"),
     itemTable: buildOrgScopedTableName(organizationId, "items"),
+    pendingTable: buildOrgScopedTableName(organizationId, "pending"),
   };
 
   await Promise.all([
     createOrgTableIfMissing(storage.columnTable, INVENTORY_COLUMN_BY_MODULE_INDEX, "sortOrder"),
     createOrgTableIfMissing(storage.itemTable, INVENTORY_ITEM_BY_MODULE_INDEX, "position"),
+    createOrgPendingTableIfMissing(storage.pendingTable),
   ]);
 
   storageCache.set(organizationId, { storage, checkedAt: now });
@@ -391,7 +434,7 @@ const deleteStorageForOrganization = async (organizationId: string): Promise<voi
   if (!ENABLE_PER_ORG_TABLES) return;
   const storage = await ensureStorageForOrganization(organizationId);
   await Promise.all(
-    [storage.columnTable, storage.itemTable].map(async (tableName) => {
+    [storage.columnTable, storage.itemTable, storage.pendingTable].map(async (tableName) => {
       try {
         await rawDdb.send(new DeleteTableCommand({ TableName: tableName }));
       } catch (err: any) {
@@ -923,6 +966,7 @@ const getAccessContext = async (event: any): Promise<AccessContext> => {
   return {
     userId,
     email: claimEmail,
+    displayName: String(user.displayName ?? "").trim(),
     organizationId,
     role,
     orgEnabledModules,
@@ -1263,6 +1307,52 @@ const handleSyncCurrentUserEmail = async (access: AccessContext) => {
   });
 };
 
+const getDaysUntilExpiration = (raw: string | null | undefined): number | null => {
+  const str = String(raw ?? "").trim();
+  if (!str) return null;
+  const date = new Date(str);
+  if (Number.isNaN(date.getTime())) return null;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const targetStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return Math.floor((targetStart.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24));
+};
+
+const handleAlertSummary = async (storage: InventoryStorage) => {
+  const items = await listAllItems(storage, "");
+  let expiredCount = 0;
+  let expiringSoonCount = 0;
+  let lowStockCount = 0;
+
+  for (const item of items) {
+    let values: Record<string, unknown> = {};
+    try {
+      values = JSON.parse(item.valuesJson ?? "{}") ?? {};
+    } catch {
+      continue;
+    }
+
+    const daysUntil = getDaysUntilExpiration(values.expirationDate as string | null | undefined);
+    if (daysUntil !== null) {
+      if (daysUntil < 0) expiredCount += 1;
+      else if (daysUntil <= 30) expiringSoonCount += 1;
+    }
+
+    const quantity = Number(values.quantity);
+    const minQuantity = Number(values.minQuantity);
+    const hasMinQty =
+      values.minQuantity !== null &&
+      values.minQuantity !== undefined &&
+      String(values.minQuantity).trim() !== "" &&
+      Number.isFinite(minQuantity);
+    if (hasMinQty && Number.isFinite(quantity) && quantity < minQuantity) {
+      lowStockCount += 1;
+    }
+  }
+
+  return json(200, { expiredCount, expiringSoonCount, lowStockCount });
+};
+
 const handleBootstrap = async (storage: InventoryStorage, access: AccessContext) => {
   const columns = await ensureColumns(access.organizationId);
   const items = await listAllItems(storage, access.organizationId);
@@ -1363,13 +1453,36 @@ const handleSaveItems = async (storage: InventoryStorage, access: AccessContext,
   return json(200, { ok: true });
 };
 
+type PendingEntry = {
+  itemId: string;
+  itemName: string;
+  quantityUsed: number;
+  notes?: string;
+  location?: string;
+};
+
+type PendingSubmission = {
+  id: string;
+  submittedAt: string;
+  submittedByUserId: string;
+  submittedByEmail: string;
+  submittedByName: string;
+  status: "pending" | "approved" | "rejected";
+  entriesJson: string;
+  reviewedAt?: string;
+  reviewedByUserId?: string;
+  reviewedByEmail?: string;
+  rejectionReason?: string;
+};
+
 const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContext, body: any) => {
   const entries = Array.isArray(body?.entries) ? body.entries : [];
   if (entries.length === 0) {
     return json(400, { error: "At least one usage entry is required." });
   }
 
-  const usageByItemId = new Map<string, { quantityUsed: number; location?: string }>();
+  // Validate and deduplicate entries
+  const usageByItemId = new Map<string, { quantityUsed: number; notes?: string; location?: string }>();
   for (let i = 0; i < entries.length; i += 1) {
     const entry = entries[i];
     const itemId = String(entry?.itemId ?? "").trim();
@@ -1381,28 +1494,25 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
       return json(400, { error: "Used quantity must be greater than 0." });
     }
     const location = String(entry?.location ?? "").trim();
+    const notes = String(entry?.notes ?? "").trim();
     const existing = usageByItemId.get(itemId);
     if (!existing) {
-      usageByItemId.set(itemId, {
-        quantityUsed,
-        location: location || undefined,
-      });
+      usageByItemId.set(itemId, { quantityUsed, notes: notes || undefined, location: location || undefined });
       continue;
     }
-
     if (existing.location && location && existing.location !== location) {
       return json(400, { error: `Entry ${i + 1}: conflicting locations for the same item.` });
     }
-
     existing.quantityUsed += quantityUsed;
     if (!existing.location && location) existing.location = location;
     usageByItemId.set(itemId, existing);
   }
 
+  // Validate items exist and denormalize names for the pending record
   const items = await listAllItems(storage, access.organizationId);
   const byId = new Map(items.map((item) => [String(item.id), item]));
-  let updatedCount = 0;
 
+  const pendingEntries: PendingEntry[] = [];
   let itemCounter = 0;
   for (const [itemId, entry] of usageByItemId) {
     itemCounter += 1;
@@ -1410,35 +1520,99 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
     if (!item) {
       return json(404, { error: `Entry ${itemCounter}: item not found.` });
     }
-
     let values: Record<string, string | number | boolean | null> = {};
     try {
       values = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, string | number | boolean | null>;
     } catch {
       values = {};
     }
+    const itemName = String(values.itemName ?? "").trim() || `Item ${itemId.slice(0, 8)}`;
     const itemLocation = String(values.location ?? "").trim();
     if (entry.location && itemLocation && entry.location !== itemLocation) {
       return json(400, { error: `Entry ${itemCounter}: location does not match inventory.` });
     }
+    pendingEntries.push({
+      itemId,
+      itemName,
+      quantityUsed: entry.quantityUsed,
+      notes: entry.notes,
+      location: entry.location,
+    });
+  }
 
-    const currentQuantityRaw = values.quantity;
-    const currentQuantity = Number(currentQuantityRaw ?? 0);
+  const submissionId = randomUUID();
+  const submission: PendingSubmission = {
+    id: submissionId,
+    submittedAt: new Date().toISOString(),
+    submittedByUserId: access.userId,
+    submittedByEmail: access.email,
+    submittedByName: access.displayName || access.email,
+    status: "pending",
+    entriesJson: JSON.stringify(pendingEntries),
+  };
+
+  await ddb.send(new PutCommand({ TableName: storage.pendingTable, Item: submission }));
+
+  return json(200, { ok: true, pending: true, submissionId, entryCount: pendingEntries.length });
+};
+
+const handleListPendingSubmissions = async (storage: InventoryStorage, access: AccessContext) => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can review usage submissions." });
+  }
+
+  const result = await ddb.send(
+    new ScanCommand({ TableName: storage.pendingTable }),
+  );
+
+  const submissions = ((result.Items ?? []) as PendingSubmission[])
+    .sort((a, b) => (b.submittedAt ?? "").localeCompare(a.submittedAt ?? ""));
+
+  return json(200, { submissions });
+};
+
+const applyUsageEntries = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  pendingEntries: PendingEntry[],
+): Promise<{ error?: string }> => {
+  const items = await listAllItems(storage, access.organizationId);
+  const byId = new Map(items.map((item) => [String(item.id), item]));
+
+  for (let i = 0; i < pendingEntries.length; i += 1) {
+    const entry = pendingEntries[i];
+    const item = byId.get(entry.itemId);
+    if (!item) {
+      return { error: `Entry ${i + 1} (${entry.itemName}): item no longer exists.` };
+    }
+    let values: Record<string, string | number | boolean | null> = {};
+    try {
+      values = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, string | number | boolean | null>;
+    } catch {
+      values = {};
+    }
+    const currentQuantity = Number(values.quantity ?? 0);
     if (!Number.isFinite(currentQuantity) || currentQuantity < 0) {
-      return json(400, { error: `Entry ${itemCounter}: current quantity is invalid.` });
+      return { error: `Entry ${i + 1} (${entry.itemName}): current quantity is invalid.` };
     }
     if (entry.quantityUsed > currentQuantity) {
-      return json(400, {
-        error: `Entry ${itemCounter}: usage (${entry.quantityUsed}) exceeds available quantity (${currentQuantity}).`,
-      });
+      return {
+        error: `Entry ${i + 1} (${entry.itemName}): usage (${entry.quantityUsed}) exceeds available quantity (${currentQuantity}).`,
+      };
     }
+  }
 
-    const nextQuantity = currentQuantity - entry.quantityUsed;
-    const nextValues = {
-      ...values,
-      quantity: nextQuantity,
-    };
-
+  // All validated — apply deductions
+  for (const entry of pendingEntries) {
+    const item = byId.get(entry.itemId)!;
+    let values: Record<string, string | number | boolean | null> = {};
+    try {
+      values = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, string | number | boolean | null>;
+    } catch {
+      values = {};
+    }
+    const nextQuantity = Number(values.quantity ?? 0) - entry.quantityUsed;
+    const nextValues = { ...values, quantity: nextQuantity };
     try {
       await ddb.send(
         new UpdateCommand({
@@ -1446,9 +1620,7 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
           Key: { id: item.id },
           ConditionExpression: "organizationId = :org AND #module = :module",
           UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
-          ExpressionAttributeNames: {
-            "#module": "module",
-          },
+          ExpressionAttributeNames: { "#module": "module" },
           ExpressionAttributeValues: {
             ":org": access.organizationId,
             ":module": "inventory",
@@ -1457,16 +1629,111 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
           },
         }),
       );
-      updatedCount += 1;
     } catch (err: any) {
       if (err?.name === "ConditionalCheckFailedException") {
-        return json(403, { error: `Entry ${itemCounter}: item does not belong to organization.` });
+        return { error: `Item (${entry.itemName}): does not belong to organization.` };
       }
       throw err;
     }
   }
+  return {};
+};
 
-  return json(200, { ok: true, updatedCount });
+const handleApproveSubmission = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  path: string,
+) => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can approve usage submissions." });
+  }
+
+  const match = path.match(/\/inventory\/usage\/pending\/([^/]+)\/approve$/);
+  const submissionId = match?.[1];
+  if (!submissionId) return json(400, { error: "Missing submission ID." });
+
+  const res = await ddb.send(new GetCommand({ TableName: storage.pendingTable, Key: { id: submissionId } }));
+  const submission = res.Item as PendingSubmission | undefined;
+  if (!submission) return json(404, { error: "Submission not found." });
+  if (submission.status !== "pending") {
+    return json(409, { error: `Submission is already ${submission.status}.` });
+  }
+
+  let pendingEntries: PendingEntry[] = [];
+  try {
+    pendingEntries = JSON.parse(submission.entriesJson) as PendingEntry[];
+  } catch {
+    return json(400, { error: "Submission data is corrupt." });
+  }
+
+  const applyResult = await applyUsageEntries(storage, access, pendingEntries);
+  if (applyResult.error) {
+    return json(409, { error: applyResult.error });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: storage.pendingTable,
+      Key: { id: submissionId },
+      UpdateExpression: "SET #status = :status, reviewedAt = :reviewedAt, reviewedByUserId = :uid, reviewedByEmail = :email",
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: {
+        ":status": "approved",
+        ":reviewedAt": new Date().toISOString(),
+        ":uid": access.userId,
+        ":email": access.email,
+      },
+    }),
+  );
+
+  return json(200, { ok: true, updatedCount: pendingEntries.length });
+};
+
+const handleRejectSubmission = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  path: string,
+  body: any,
+) => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can reject usage submissions." });
+  }
+
+  const match = path.match(/\/inventory\/usage\/pending\/([^/]+)\/reject$/);
+  const submissionId = match?.[1];
+  if (!submissionId) return json(400, { error: "Missing submission ID." });
+
+  const res = await ddb.send(new GetCommand({ TableName: storage.pendingTable, Key: { id: submissionId } }));
+  const submission = res.Item as PendingSubmission | undefined;
+  if (!submission) return json(404, { error: "Submission not found." });
+  if (submission.status !== "pending") {
+    return json(409, { error: `Submission is already ${submission.status}.` });
+  }
+
+  const rejectionReason = String(body?.reason ?? "").trim();
+
+  const updateExpr = rejectionReason
+    ? "SET #status = :status, reviewedAt = :reviewedAt, reviewedByUserId = :uid, reviewedByEmail = :email, rejectionReason = :reason"
+    : "SET #status = :status, reviewedAt = :reviewedAt, reviewedByUserId = :uid, reviewedByEmail = :email";
+  const exprValues: Record<string, unknown> = {
+    ":status": "rejected",
+    ":reviewedAt": new Date().toISOString(),
+    ":uid": access.userId,
+    ":email": access.email,
+  };
+  if (rejectionReason) exprValues[":reason"] = rejectionReason;
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: storage.pendingTable,
+      Key: { id: submissionId },
+      UpdateExpression: updateExpr,
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: exprValues,
+    }),
+  );
+
+  return json(200, { ok: true });
 };
 
 const handleCreateColumn = async (storage: InventoryStorage, access: AccessContext, body: any) => {
@@ -2223,6 +2490,13 @@ export const handler = async (event: any) => {
       return handleApplyOnboardingTemplate(storage, access, parseBody(event));
     }
 
+    if (method === "GET" && path.endsWith("/inventory/alert-summary")) {
+      if (!hasModuleAccess(access, ["inventory", "usage"])) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleAlertSummary(storage);
+    }
+
     if (method === "GET" && path.endsWith("/inventory/bootstrap")) {
       if (!hasModuleAccess(access, ["inventory", "usage"])) {
         return json(403, { error: "Module access denied" });
@@ -2249,6 +2523,27 @@ export const handler = async (event: any) => {
         return json(403, { error: "Module access denied" });
       }
       return handleSubmitUsage(storage, access, parseBody(event));
+    }
+
+    if (method === "GET" && path.endsWith("/inventory/usage/pending")) {
+      if (!hasModuleAccess(access, "usage")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleListPendingSubmissions(storage, access);
+    }
+
+    if (method === "POST" && /\/inventory\/usage\/pending\/[^/]+\/approve$/.test(path)) {
+      if (!hasModuleAccess(access, "usage")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleApproveSubmission(storage, access, path);
+    }
+
+    if (method === "POST" && /\/inventory\/usage\/pending\/[^/]+\/reject$/.test(path)) {
+      if (!hasModuleAccess(access, "usage")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleRejectSubmission(storage, access, path, parseBody(event));
     }
 
     if (method === "POST" && path.endsWith("/inventory/import-csv")) {

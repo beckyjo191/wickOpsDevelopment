@@ -3,7 +3,7 @@ import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 import { MODULE_REGISTRY, type AppModuleKey } from "../lib/moduleRegistry";
 
 interface AppToolbarProps {
-  currentView: "dashboard" | "inventory" | "usage" | "invite" | "settings";
+  currentView: "dashboard" | "inventory" | "usage" | "usageReview" | "invite" | "settings";
   userName: string;
   orgName?: string;
   accessibleModules: AppModuleKey[];
@@ -29,8 +29,8 @@ export function AppToolbar({
   return (
     <header className="app-toolbar">
       <a className="app-toolbar-logo-link" href="/">
-        <img className="app-toolbar-logo" src={logoThumb} alt="WickOps Systems" />
-        <span className="app-toolbar-brand-text">WickOps Systems</span>
+        <img className="app-toolbar-logo" src={logoThumb} alt="WickOps" />
+        <span className="app-toolbar-brand-text">WickOps</span>
       </a>
 
       {accessibleModules.length > 0 ? (

@@ -181,7 +181,9 @@ export const submitInventoryUsage = async (
   entries: InventoryUsageEntryInput[],
 ): Promise<{
   ok: boolean;
-  updatedCount: number;
+  pending: boolean;
+  submissionId: string;
+  entryCount: number;
 }> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/usage/submit`, {
@@ -195,8 +197,76 @@ export const submitInventoryUsage = async (
   const data = await res.json();
   return {
     ok: !!data?.ok,
-    updatedCount: Number(data?.updatedCount ?? 0),
+    pending: !!data?.pending,
+    submissionId: String(data?.submissionId ?? ""),
+    entryCount: Number(data?.entryCount ?? 0),
   };
+};
+
+export type PendingEntry = {
+  itemId: string;
+  itemName: string;
+  quantityUsed: number;
+  notes?: string;
+  location?: string;
+};
+
+export type PendingSubmission = {
+  id: string;
+  submittedAt: string;
+  submittedByUserId: string;
+  submittedByEmail: string;
+  submittedByName: string;
+  status: "pending" | "approved" | "rejected";
+  entriesJson: string;
+  reviewedAt?: string;
+  reviewedByUserId?: string;
+  reviewedByEmail?: string;
+  rejectionReason?: string;
+};
+
+export const listPendingSubmissions = async (): Promise<PendingSubmission[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/usage/pending`);
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to load pending submissions."));
+  }
+  const data = await res.json();
+  return (Array.isArray(data.submissions) ? data.submissions : []) as PendingSubmission[];
+};
+
+export const approveUsageSubmission = async (
+  submissionId: string,
+): Promise<{ ok: boolean; updatedCount: number }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(
+    `${base}/inventory/usage/pending/${encodeURIComponent(submissionId)}/approve`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to approve submission."));
+  }
+  const data = await res.json();
+  return { ok: !!data?.ok, updatedCount: Number(data?.updatedCount ?? 0) };
+};
+
+export const rejectUsageSubmission = async (
+  submissionId: string,
+  reason?: string,
+): Promise<{ ok: boolean }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(
+    `${base}/inventory/usage/pending/${encodeURIComponent(submissionId)}/reject`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason ?? "" }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to reject submission."));
+  }
+  return { ok: true };
 };
 
 export const importInventoryCsv = async (
@@ -522,6 +592,76 @@ export const applyIndustryTemplate = async (
   return {
     addedColumns: Array.isArray(data.addedColumns) ? data.addedColumns : [],
   };
+};
+
+// ─── Alert Summary ────────────────────────────────────────────────────────────
+
+export type InventoryAlertSummary = {
+  expiredCount: number;
+  expiringSoonCount: number;
+  lowStockCount: number;
+};
+
+export const fetchInventoryAlertSummary = async (): Promise<InventoryAlertSummary> => {
+  try {
+    const base = requireBaseUrl();
+    const res = await authFetch(`${base}/inventory/alert-summary`);
+    if (!res.ok) return { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 };
+    const data = await res.json();
+    return {
+      expiredCount: Number(data.expiredCount ?? 0),
+      expiringSoonCount: Number(data.expiringSoonCount ?? 0),
+      lowStockCount: Number(data.lowStockCount ?? 0),
+    };
+  } catch {
+    return { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 };
+  }
+};
+
+// ─── XLSX Template Generation ─────────────────────────────────────────────────
+
+export const generateAndDownloadInventoryTemplate = async (
+  columns: InventoryColumn[],
+): Promise<void> => {
+  const XLSX = await import("xlsx");
+
+  const today = new Date();
+  const nextYear = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
+  const nextYearStr = `${String(nextYear.getMonth() + 1).padStart(2, "0")}/${String(nextYear.getDate()).padStart(2, "0")}/${nextYear.getFullYear()}`;
+
+  const sampleValues: Record<string, (string | number)[]> = {
+    itemName: ["Example Item 1", "Example Item 2"],
+    quantity: [10, 5],
+    minQuantity: [3, 2],
+    expirationDate: [nextYearStr, nextYearStr],
+  };
+
+  const headers = columns.map((c) => c.label);
+  const row1: (string | number)[] = columns.map((col) => {
+    if (col.key in sampleValues) return sampleValues[col.key]![0]!;
+    if (col.type === "number") return 1;
+    if (col.type === "boolean") return "Yes";
+    if (col.type === "date") return nextYearStr;
+    if (col.type === "link") return "https://example.com";
+    return "Example";
+  });
+  const row2: (string | number)[] = columns.map((col) => {
+    if (col.key in sampleValues) return sampleValues[col.key]![1]!;
+    if (col.type === "number") return 1;
+    if (col.type === "boolean") return "No";
+    if (col.type === "date") return nextYearStr;
+    if (col.type === "link") return "https://example.com";
+    return "Example";
+  });
+
+  const wsData = [headers, row1, row2];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  ws["!cols"] = columns.map((col) => ({ wch: Math.max(col.label.length + 4, 15) }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Inventory Template");
+  XLSX.writeFile(wb, "wickops-inventory-template.xlsx");
 };
 
 // ─── Billing Portal ───────────────────────────────────────────────────────────

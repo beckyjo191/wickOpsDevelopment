@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   isInventoryProvisioningError,
+  listPendingSubmissions,
   loadInventoryBootstrap,
   submitInventoryUsage,
   type InventoryColumn,
@@ -73,9 +74,15 @@ const getItemDisplayName = (row: InventoryRow): string => {
 
 type InventoryUsagePageProps = {
   usageFormPreferences: UsageFormPreferences;
+  canReviewSubmissions?: boolean;
+  onNavigateToReview?: () => void;
 };
 
-export function InventoryUsagePage({ usageFormPreferences }: InventoryUsagePageProps) {
+export function InventoryUsagePage({
+  usageFormPreferences,
+  canReviewSubmissions,
+  onNavigateToReview,
+}: InventoryUsagePageProps) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -84,6 +91,7 @@ export function InventoryUsagePage({ usageFormPreferences }: InventoryUsagePageP
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup()]);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const refreshInventoryRows = useCallback(
     async (opts?: { initial?: boolean; silent?: boolean }) => {
@@ -129,6 +137,13 @@ export function InventoryUsagePage({ usageFormPreferences }: InventoryUsagePageP
   useEffect(() => {
     void refreshInventoryRows({ initial: true });
   }, [refreshInventoryRows]);
+
+  useEffect(() => {
+    if (!canReviewSubmissions) return;
+    listPendingSubmissions()
+      .then((subs) => setPendingCount(subs.filter((s) => s.status === "pending").length))
+      .catch(() => {});
+  }, [canReviewSubmissions]);
 
   useEffect(() => {
     if (loading) return;
@@ -385,12 +400,11 @@ export function InventoryUsagePage({ usageFormPreferences }: InventoryUsagePageP
     setFeedback("");
     try {
       const result = await submitInventoryUsage(normalized);
-      await refreshInventoryRows({ silent: true });
       setGroups([createUsageGroup()]);
       setFeedback(
-        result.updatedCount === 1
-          ? "Usage submitted for 1 item."
-          : `Usage submitted for ${result.updatedCount} items.`,
+        result.entryCount === 1
+          ? "Submitted for review — 1 item pending approval."
+          : `Submitted for review — ${result.entryCount} items pending approval.`,
       );
     } catch (err: any) {
       alert(err?.message ?? "Failed to submit usage");
@@ -426,6 +440,20 @@ export function InventoryUsagePage({ usageFormPreferences }: InventoryUsagePageP
             <h2 className="app-title">Inventory Usage Submission</h2>
           </div>
         </header>
+
+        {canReviewSubmissions && pendingCount > 0 && onNavigateToReview ? (
+          <div className="usage-review-pending-banner">
+            <span className="usage-review-pending-banner-count">{pendingCount}</span>
+            <span>{pendingCount === 1 ? "submission" : "submissions"} awaiting review</span>
+            <button
+              type="button"
+              className="usage-review-pending-banner-link"
+              onClick={onNavigateToReview}
+            >
+              Review
+            </button>
+          </div>
+        ) : null}
 
         <div className="usage-form-list">
           {groups.map((group, groupIndex) => {

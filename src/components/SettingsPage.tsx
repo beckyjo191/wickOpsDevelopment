@@ -546,195 +546,170 @@ export function SettingsPage({
 
   return (
     <section className="app-content">
-      <div className="app-card">
-        <header className="app-header">
-          <div>
-            <h2 className="app-title">Organization Settings</h2>
-            <p className="app-subtitle">Manage account profile, modules, and team access settings.</p>
-          </div>
-          <div className="app-actions">
+      <div className="settings-page">
+        <div className="settings-page-header">
+          <h2 className="dash-title">Settings</h2>
+          {(userName || onLogout) && (
+            <div className="settings-logged-in">
+              {userName && <span className="settings-logged-in-text">Logged in as <strong>{userName}</strong></span>}
+              {onLogout && (
+                <button type="button" className="settings-logout-link" onClick={onLogout}>
+                  Log Out
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="settings-account-bar">
+          <span className="settings-account-seats">
+            {seatsUsed}/{seatLimit} seats used
+            {seatsRemaining > 0 ? ` \u00b7 ${seatsRemaining} remaining` : ""}
+          </span>
+          <div className="settings-account-actions">
             <button
-              className="button button-primary"
+              className="button button-secondary button-sm"
               onClick={onInviteUsers}
               disabled={!canInviteMore}
             >
-              Invite More Users
+              Invite Users
             </button>
-          </div>
-        </header>
-
-        {(userName || onLogout) && (
-          <div className="settings-logged-in">
-            {userName && <span className="settings-logged-in-text">Logged in as <strong>{userName}</strong></span>}
-            {onLogout && (
-              <button type="button" className="settings-logout-link" onClick={onLogout}>
-                Log Out
+            {canManageModuleAccess ? (
+              <button
+                className="button button-secondary button-sm"
+                type="button"
+                disabled={portalLoading}
+                onClick={() => {
+                  setPortalLoading(true);
+                  createBillingPortalSession()
+                    .then((url) => {
+                      window.location.href = url;
+                    })
+                    .catch((err: any) => {
+                      alert(err?.message ?? "Could not open billing portal. Please try again.");
+                      setPortalLoading(false);
+                    });
+                }}
+              >
+                {portalLoading ? "Opening…" : "Billing"}
               </button>
-            )}
+            ) : null}
           </div>
-        )}
-
-        <div className="status-panel">
-          {seatsRemaining > 0
-            ? `You have ${seatsRemaining} seat${seatsRemaining === 1 ? "" : "s"} remaining (${seatsUsed}/${seatLimit} seats used).`
-            : `No seats remaining (${seatsUsed}/${seatLimit} seats used).`}
         </div>
 
-        {canManageModuleAccess ? (
-          <div className="settings-section spacer-top">
-            <h3 className="settings-section-title">Subscription</h3>
-            <p className="settings-section-copy">
-              Add seats, change your plan, or update payment info via the billing portal.
-            </p>
-            <button
-              className="button button-secondary"
-              type="button"
-              disabled={portalLoading}
-              onClick={() => {
-                setPortalLoading(true);
-                createBillingPortalSession()
-                  .then((url) => {
-                    window.location.href = url;
-                  })
-                  .catch((err: any) => {
-                    alert(err?.message ?? "Could not open billing portal. Please try again.");
-                    setPortalLoading(false);
-                  });
-              }}
-            >
-              {portalLoading ? "Opening…" : "Manage Subscription"}
-            </button>
-          </div>
-        ) : null}
-
-        <details
-          className="settings-section spacer-top"
-          open
-        >
+        <details className="settings-section" open>
           <summary className="settings-section-title">Profile</summary>
-          <p className="settings-section-copy">
-            Update your display name.
-          </p>
-          <div className="settings-columns-add settings-columns-add-inline">
-            <input
-              className={`field settings-profile-field${!editingDisplayName ? " settings-profile-field-locked" : ""}`}
-              type="text"
-              placeholder="Your name"
-              value={displayNameInput}
-              onChange={(event) => setDisplayNameInput(event.target.value)}
-              disabled={!editingDisplayName || savingDisplayName}
-            />
-            {!editingDisplayName ? (
-              <div className="settings-action-wrap">
+          <div className="settings-field-group">
+            <label className="settings-field-label">Display Name</label>
+            <div className="settings-field-row">
+              <input
+                className={`field settings-profile-field${!editingDisplayName ? " settings-profile-field-locked" : ""}`}
+                type="text"
+                placeholder="Your name"
+                value={displayNameInput}
+                onChange={(event) => setDisplayNameInput(event.target.value)}
+                disabled={!editingDisplayName || savingDisplayName}
+              />
+              {!editingDisplayName ? (
                 <button
-                  className="settings-action-icon"
+                  className="button button-ghost button-sm"
                   onClick={() => setEditingDisplayName(true)}
-                  aria-label="Edit name"
                   type="button"
                 >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
-                  </svg>
+                  Edit
                 </button>
-                <span className="settings-action-tip" role="tooltip">Edit</span>
-              </div>
-            ) : (
-              <span className="settings-column-edit">
-                <button
-                  className="button button-secondary settings-inline-action"
-                  type="button"
-                  onClick={() => void onSaveDisplayName()}
-                  disabled={savingDisplayName || !displayNameInput.trim()}
-                >
-                  {savingDisplayName ? "Saving..." : "Save"}
-                </button>
-                <button
-                  className="button button-ghost settings-inline-action"
-                  type="button"
-                  onClick={onCancelDisplayNameEdit}
-                  disabled={savingDisplayName}
-                >
-                  Cancel
-                </button>
-              </span>
-            )}
+              ) : (
+                <>
+                  <button
+                    className="button button-secondary button-sm"
+                    type="button"
+                    onClick={() => void onSaveDisplayName()}
+                    disabled={savingDisplayName || !displayNameInput.trim()}
+                  >
+                    {savingDisplayName ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    className="button button-ghost button-sm"
+                    type="button"
+                    onClick={onCancelDisplayNameEdit}
+                    disabled={savingDisplayName}
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
-          <div className="settings-columns-add settings-columns-add-inline spacer-top">
-            <input
-              className={`field settings-profile-field${!editingEmail ? " settings-profile-field-locked" : ""}`}
-              type="email"
-              placeholder="your@email.com"
-              value={emailInput}
-              onChange={(event) => setEmailInput(event.target.value)}
-              disabled={!editingEmail || savingEmail || verifyingEmail}
-            />
-            {!editingEmail ? (
-              <div className="settings-action-wrap">
-                <button
-                  className="settings-action-icon"
-                  onClick={onStartEmailEdit}
-                  aria-label="Edit email"
-                  type="button"
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
-                  </svg>
-                </button>
-                <span className="settings-action-tip" role="tooltip">Edit</span>
-              </div>
-            ) : (
-              <span className="settings-column-edit">
-                <button
-                  className="button button-secondary settings-inline-action"
-                  type="button"
-                  onClick={() => void onSendEmailVerification()}
-                  disabled={savingEmail || verifyingEmail || !normalizeEmail(emailInput)}
-                >
-                  {savingEmail ? "Sending..." : "Verify"}
-                </button>
-                <button
-                  className="button button-ghost settings-inline-action"
-                  type="button"
-                  onClick={onCancelEmailEdit}
-                  disabled={savingEmail || verifyingEmail}
-                >
-                  Cancel
-                </button>
-              </span>
-            )}
-          </div>
-          {editingEmail && pendingEmailVerification ? (
-            <div className="settings-columns-add settings-columns-add-inline spacer-top">
+          <div className="settings-field-group">
+            <label className="settings-field-label">Email</label>
+            <div className="settings-field-row">
               <input
-                className="field settings-profile-field"
-                type="text"
-                placeholder="Verification code"
-                value={emailVerificationCode}
-                onChange={(event) => setEmailVerificationCode(event.target.value)}
-                disabled={verifyingEmail}
+                className={`field settings-profile-field${!editingEmail ? " settings-profile-field-locked" : ""}`}
+                type="email"
+                placeholder="your@email.com"
+                value={emailInput}
+                onChange={(event) => setEmailInput(event.target.value)}
+                disabled={!editingEmail || savingEmail || verifyingEmail}
               />
-              <button
-                className="button button-secondary settings-inline-action"
-                type="button"
-                onClick={() => void onConfirmEmailVerification()}
-                disabled={verifyingEmail || !emailVerificationCode.trim()}
-              >
-                {verifyingEmail ? "Confirming..." : "Confirm"}
-              </button>
+              {!editingEmail ? (
+                <button
+                  className="button button-ghost button-sm"
+                  onClick={onStartEmailEdit}
+                  type="button"
+                >
+                  Edit
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="button button-secondary button-sm"
+                    type="button"
+                    onClick={() => void onSendEmailVerification()}
+                    disabled={savingEmail || verifyingEmail || !normalizeEmail(emailInput)}
+                  >
+                    {savingEmail ? "Sending..." : "Verify"}
+                  </button>
+                  <button
+                    className="button button-ghost button-sm"
+                    type="button"
+                    onClick={onCancelEmailEdit}
+                    disabled={savingEmail || verifyingEmail}
+                  >
+                    Cancel
+                  </button>
+                </>
+              )}
             </div>
-          ) : null}
+            {editingEmail && pendingEmailVerification ? (
+              <div className="settings-field-row" style={{ marginTop: "0.5rem" }}>
+                <input
+                  className="field settings-profile-field"
+                  type="text"
+                  placeholder="Verification code"
+                  value={emailVerificationCode}
+                  onChange={(event) => setEmailVerificationCode(event.target.value)}
+                  disabled={verifyingEmail}
+                />
+                <button
+                  className="button button-secondary button-sm"
+                  type="button"
+                  onClick={() => void onConfirmEmailVerification()}
+                  disabled={verifyingEmail || !emailVerificationCode.trim()}
+                >
+                  {verifyingEmail ? "Confirming..." : "Confirm"}
+                </button>
+              </div>
+            ) : null}
+          </div>
         </details>
 
         <details
-          className="settings-section spacer-top"
+          className="settings-section"
           open={disclosures.appearance}
           onToggle={(event) => onDisclosureToggle("appearance", event.currentTarget.open)}
         >
           <summary className="settings-section-title">Appearance</summary>
-          <p className="settings-section-copy">
-            Choose how WickOps should look on this device.
-          </p>
           <div className="settings-theme-options" role="radiogroup" aria-label="Theme preference">
             <label className="settings-theme-option">
               <input
@@ -771,14 +746,11 @@ export function SettingsPage({
 
 
         <details
-          className="settings-section spacer-top"
+          className="settings-section"
           open={disclosures.userModuleAccess}
           onToggle={(event) => onDisclosureToggle("userModuleAccess", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">User Module Access</summary>
-          <p className="settings-section-copy">
-            Admins can control which modules each user can access.
-          </p>
+          <summary className="settings-section-title">Team Access</summary>
           {canManageModuleAccess ? (
             <div className="settings-columns-list">
               {loadingModuleAccess ? <div>Loading users...</div> : null}
@@ -843,17 +815,14 @@ export function SettingsPage({
         </details>
 
         <details
-          className="settings-section spacer-top"
+          className="settings-section"
           open={disclosures.locations}
           onToggle={(event) => onDisclosureToggle("locations", event.currentTarget.open)}
         >
           <summary className="settings-section-title">Locations</summary>
           {canManageInventoryColumns ? (
             <>
-              <p className="settings-section-copy">
-                Manage inventory locations. Renaming a location updates all items assigned to it.
-              </p>
-              <div className="settings-columns-add settings-columns-add-inline" style={{ marginBottom: "0.75rem" }}>
+              <div className="settings-field-row" style={{ marginBottom: "0.5rem" }}>
                 <input
                   className="field"
                   placeholder="New location name"
@@ -981,17 +950,13 @@ export function SettingsPage({
         </details>
 
         <details
-          className="settings-section spacer-top"
+          className="settings-section"
           open={disclosures.inventoryColumns}
           onToggle={(event) => onDisclosureToggle("inventoryColumns", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">Inventory Columns</summary>
+          <summary className="settings-section-title">Columns</summary>
           {canManageInventoryColumns ? (
             <>
-              <p className="settings-section-copy">
-                Add or remove custom columns. *Required columns cannot be removed, but can be shown
-                or hidden by clicking the checkbox.
-              </p>
               <div className="settings-columns-toolbar">
                 <div className="inventory-search-wrap settings-columns-toolbar-search">
                   <input

@@ -140,17 +140,34 @@
 }
 
 /* Settings logged-in section */
+/* ── Settings page layout ─────────────────────────────────── */
+.settings-page {
+  width: min(680px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.settings-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.settings-page-header .dash-title {
+  margin: 0;
+}
+
 .settings-logged-in {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0 0.75rem;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 0.75rem;
+  gap: 0.5rem;
 }
 
 .settings-logged-in-text {
-  font-size: 0.84rem;
+  font-size: 0.82rem;
   color: var(--text-soft);
 }
 
@@ -163,7 +180,7 @@
   border: none;
   background: transparent;
   color: var(--danger);
-  font-size: 0.84rem;
+  font-size: 0.82rem;
   font-weight: 600;
   cursor: pointer;
   padding: 0;
@@ -173,6 +190,50 @@
 
 .settings-logout-link:hover {
   opacity: 0.8;
+}
+
+.settings-account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.settings-account-seats {
+  font-size: 0.84rem;
+  color: var(--text-soft);
+  font-weight: 500;
+}
+
+.settings-account-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.settings-field-group {
+  margin-top: 0.65rem;
+}
+
+.settings-field-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-soft);
+  margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.settings-field-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 .app-card {
@@ -742,22 +803,43 @@
 
 .settings-section {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-alt);
-  padding: 0.9rem;
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 1rem;
 }
 
 .settings-section-title {
   margin: 0;
   color: var(--text-heading);
-  font-size: 1.02rem;
+  font-size: 0.95rem;
+  font-weight: 700;
   cursor: pointer;
   user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-section-title::-webkit-details-marker {
+  display: none;
+}
+
+.settings-section-title::after {
+  content: "▸";
+  font-size: 0.8rem;
+  color: var(--text-soft);
+  transition: transform 150ms ease;
+}
+
+details[open] > .settings-section-title::after {
+  transform: rotate(90deg);
 }
 
 .settings-section-copy {
   margin: 0.45rem 0 0.7rem;
   color: var(--text-muted);
+  font-size: 0.84rem;
 }
 
 .settings-theme-options {
@@ -812,9 +894,10 @@
 }
 
 .settings-profile-field {
-  width: 260px;
+  width: 280px;
   min-width: 0;
   max-width: 100%;
+  flex: 1;
 }
 
 .settings-profile-field-locked {
@@ -3200,6 +3283,37 @@ textarea.inventory-card-input {
     min-width: 0;
   }
 
+  .settings-page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+  }
+
+  .settings-account-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .settings-account-actions {
+    width: 100%;
+  }
+
+  .settings-account-actions .button {
+    flex: 1;
+  }
+
+  .settings-column-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+
+  .settings-column-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
   .inventory-table th,
   .inventory-table td {
     padding: 0.42rem 0.45rem;
@@ -3221,15 +3335,13 @@ textarea.inventory-card-input {
   }
 
   .settings-section {
-    padding: 0.65rem;
-  }
-
-  .settings-section + .settings-section {
-    margin-top: 0.45rem;
+    padding: 0.75rem;
   }
 
   .settings-profile-field {
     width: 100%;
+    flex: 1;
+    min-width: 0;
   }
 
   .inventory-filter-right {
@@ -3250,8 +3362,16 @@ textarea.inventory-card-input {
 
   input,
   select,
-  textarea {
-    font-size: 16px;
+  textarea,
+  .inventory-search-input,
+  .usage-autocomplete-input,
+  .usage-qty-input,
+  .usage-location-select,
+  .field,
+  .location-pill-add-input,
+  .settings-column-edit-input,
+  .quickadd-date-input {
+    font-size: 16px !important;
   }
 
   .inventory-columns-panel {

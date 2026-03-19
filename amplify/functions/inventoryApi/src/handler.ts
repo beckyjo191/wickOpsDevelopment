@@ -1639,10 +1639,32 @@ const applyUsageEntries = async (
   return {};
 };
 
+const handleDeleteSubmission = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  path: string,
+) => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can delete usage submissions." });
+  }
+
+  const match = path.match(/\/inventory\/usage\/pending\/([^/]+)$/);
+  const submissionId = match?.[1];
+  if (!submissionId) return json(400, { error: "Missing submission ID." });
+
+  const res = await ddb.send(new GetCommand({ TableName: storage.pendingTable, Key: { id: submissionId } }));
+  const submission = res.Item as PendingSubmission | undefined;
+  if (!submission) return json(404, { error: "Submission not found." });
+
+  await ddb.send(new DeleteCommand({ TableName: storage.pendingTable, Key: { id: submissionId } }));
+  return json(200, { ok: true });
+};
+
 const handleApproveSubmission = async (
   storage: InventoryStorage,
   access: AccessContext,
   path: string,
+  body: any,
 ) => {
   if (!access.canEditInventory) {
     return json(403, { error: "Only editors and admins can approve usage submissions." });
@@ -1659,11 +1681,17 @@ const handleApproveSubmission = async (
     return json(409, { error: `Submission is already ${submission.status}.` });
   }
 
+  // Accept optional override entries from the request body (for inline edits by reviewer)
   let pendingEntries: PendingEntry[] = [];
-  try {
-    pendingEntries = JSON.parse(submission.entriesJson) as PendingEntry[];
-  } catch {
-    return json(400, { error: "Submission data is corrupt." });
+  const overrideEntries = Array.isArray(body?.entries) ? (body.entries as PendingEntry[]) : null;
+  if (overrideEntries && overrideEntries.length > 0) {
+    pendingEntries = overrideEntries;
+  } else {
+    try {
+      pendingEntries = JSON.parse(submission.entriesJson) as PendingEntry[];
+    } catch {
+      return json(400, { error: "Submission data is corrupt." });
+    }
   }
 
   const applyResult = await applyUsageEntries(storage, access, pendingEntries);
@@ -2536,7 +2564,7 @@ export const handler = async (event: any) => {
       if (!hasModuleAccess(access, "usage")) {
         return json(403, { error: "Module access denied" });
       }
-      return handleApproveSubmission(storage, access, path);
+      return handleApproveSubmission(storage, access, path, parseBody(event));
     }
 
     if (method === "POST" && /\/inventory\/usage\/pending\/[^/]+\/reject$/.test(path)) {
@@ -2544,6 +2572,13 @@ export const handler = async (event: any) => {
         return json(403, { error: "Module access denied" });
       }
       return handleRejectSubmission(storage, access, path, parseBody(event));
+    }
+
+    if (method === "DELETE" && /\/inventory\/usage\/pending\/[^/]+$/.test(path)) {
+      if (!hasModuleAccess(access, "usage")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleDeleteSubmission(storage, access, path);
     }
 
     if (method === "POST" && path.endsWith("/inventory/import-csv")) {

@@ -104,10 +104,17 @@ addInventoryRoute("/inventory/module-access/users", [HttpMethod.GET]);
 addInventoryRoute("/inventory/module-access/users/{userId}", [HttpMethod.POST, HttpMethod.DELETE]);
 addInventoryRoute("/inventory/profile/display-name", [HttpMethod.POST]);
 addInventoryRoute("/inventory/profile/email/sync", [HttpMethod.POST]);
+addInventoryRoute("/inventory/onboarding/templates", [HttpMethod.GET]);
+addInventoryRoute("/inventory/onboarding/apply-template", [HttpMethod.POST]);
+addInventoryRoute("/inventory/alert-summary", [HttpMethod.GET]);
 addInventoryRoute("/inventory/bootstrap", [HttpMethod.GET]);
 addInventoryRoute("/inventory/items", [HttpMethod.GET]);
 addInventoryRoute("/inventory/items/save", [HttpMethod.POST]);
 addInventoryRoute("/inventory/usage/submit", [HttpMethod.POST]);
+addInventoryRoute("/inventory/usage/pending", [HttpMethod.GET]);
+addInventoryRoute("/inventory/usage/pending/{submissionId}", [HttpMethod.DELETE]);
+addInventoryRoute("/inventory/usage/pending/{submissionId}/approve", [HttpMethod.POST]);
+addInventoryRoute("/inventory/usage/pending/{submissionId}/reject", [HttpMethod.POST]);
 addInventoryRoute("/inventory/import-csv", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}/visibility", [HttpMethod.POST]);
@@ -205,6 +212,7 @@ inventoryApiLambda.addToRolePolicy(
       "dynamodb:DeleteItem",
       "dynamodb:Query",
       "dynamodb:BatchWriteItem",
+      "dynamodb:Scan",
     ],
     resources: [inventoryDynamicTableArn, `${inventoryDynamicTableArn}/index/*`],
   }),

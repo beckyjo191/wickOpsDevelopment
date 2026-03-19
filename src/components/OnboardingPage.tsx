@@ -126,6 +126,7 @@ export function OnboardingPage({ orgName, onComplete }: OnboardingPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState("");
+  const [doNotShowAgain, setDoNotShowAgain] = useState(false);
 
   const selected = INDUSTRY_TEMPLATES.find((t) => t.id === selectedId) ?? null;
 
@@ -212,10 +213,25 @@ export function OnboardingPage({ orgName, onComplete }: OnboardingPageProps) {
             type="button"
             className="button button-ghost"
             disabled={applying}
-            onClick={() => void handleApply(null)}
+            onClick={() => {
+              if (doNotShowAgain) {
+                void handleApply(null);
+              } else {
+                onComplete();
+              }
+            }}
           >
             Skip for now
           </button>
+          <label className="onboarding-do-not-show">
+            <input
+              type="checkbox"
+              checked={doNotShowAgain}
+              onChange={(e) => setDoNotShowAgain(e.target.checked)}
+              disabled={applying}
+            />
+            Don't show this again
+          </label>
         </footer>
       </div>
     </section>

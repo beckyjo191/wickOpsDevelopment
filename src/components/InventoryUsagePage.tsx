@@ -40,6 +40,20 @@ const PROVISIONING_LINES = [
 const pickRandom = (items: string[]): string =>
   items[Math.floor(Math.random() * items.length)] ?? "Loading usage form...";
 
+const formatActivityTime = (isoString: string): string => {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return "";
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
+};
+
 const normalizeLooseKey = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -74,15 +88,9 @@ const getItemDisplayName = (row: InventoryRow): string => {
 
 type InventoryUsagePageProps = {
   usageFormPreferences: UsageFormPreferences;
-  canReviewSubmissions?: boolean;
-  onNavigateToReview?: () => void;
 };
 
-export function InventoryUsagePage({
-  usageFormPreferences,
-  canReviewSubmissions,
-  onNavigateToReview,
-}: InventoryUsagePageProps) {
+export function InventoryUsagePage({ usageFormPreferences }: InventoryUsagePageProps) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -91,7 +99,7 @@ export function InventoryUsagePage({
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup()]);
-  const [pendingCount, setPendingCount] = useState(0);
+  const [recentSubmissions, setRecentSubmissions] = useState<import("../lib/inventoryApi").PendingSubmission[]>([]);
 
   const refreshInventoryRows = useCallback(
     async (opts?: { initial?: boolean; silent?: boolean }) => {
@@ -138,12 +146,15 @@ export function InventoryUsagePage({
     void refreshInventoryRows({ initial: true });
   }, [refreshInventoryRows]);
 
-  useEffect(() => {
-    if (!canReviewSubmissions) return;
+  const refreshSubmissions = useCallback(() => {
     listPendingSubmissions()
-      .then((subs) => setPendingCount(subs.filter((s) => s.status === "pending").length))
+      .then((subs) => setRecentSubmissions(subs))
       .catch(() => {});
-  }, [canReviewSubmissions]);
+  }, []);
+
+  useEffect(() => {
+    refreshSubmissions();
+  }, [refreshSubmissions]);
 
   useEffect(() => {
     if (loading) return;
@@ -396,16 +407,22 @@ export function InventoryUsagePage({
       return;
     }
 
+    // Capture names before clearing the form
+    const submittedLines = normalized.map((entry) => {
+      const row = rowById.get(entry.itemId);
+      const name = row ? getItemDisplayName(row) : entry.itemId;
+      return `${name} ×${entry.quantityUsed}`;
+    });
+
     setSubmitting(true);
     setFeedback("");
     try {
-      const result = await submitInventoryUsage(normalized);
+      await submitInventoryUsage(normalized);
       setGroups([createUsageGroup()]);
-      setFeedback(
-        result.entryCount === 1
-          ? "Submitted for review — 1 item pending approval."
-          : `Submitted for review — ${result.entryCount} items pending approval.`,
-      );
+      const timeStr = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const itemList = submittedLines.join(", ");
+      setFeedback(`Submitted at ${timeStr}: ${itemList} — pending approval.`);
+      refreshSubmissions();
     } catch (err: any) {
       alert(err?.message ?? "Failed to submit usage");
     } finally {
@@ -432,6 +449,10 @@ export function InventoryUsagePage({
     );
   }
 
+  const recentActivity = recentSubmissions
+    .filter((s) => s.status !== "rejected")
+    .slice(0, 1);
+
   return (
     <section className="app-content">
       <div className="app-card">
@@ -440,20 +461,6 @@ export function InventoryUsagePage({
             <h2 className="app-title">Inventory Usage Submission</h2>
           </div>
         </header>
-
-        {canReviewSubmissions && pendingCount > 0 && onNavigateToReview ? (
-          <div className="usage-review-pending-banner">
-            <span className="usage-review-pending-banner-count">{pendingCount}</span>
-            <span>{pendingCount === 1 ? "submission" : "submissions"} awaiting review</span>
-            <button
-              type="button"
-              className="usage-review-pending-banner-link"
-              onClick={onNavigateToReview}
-            >
-              Review
-            </button>
-          </div>
-        ) : null}
 
         <div className="usage-form-list">
           {groups.map((group, groupIndex) => {
@@ -646,6 +653,27 @@ export function InventoryUsagePage({
           </button>
         </div>
         {feedback ? <p className="usage-feedback">{feedback}</p> : null}
+
+        {recentActivity.length > 0 ? (
+          <div className="usage-activity">
+            <h3 className="usage-activity-title">Recent Checkouts</h3>
+            <ul className="usage-activity-list">
+              {recentActivity.map((sub) => {
+                let entries: import("../lib/inventoryApi").PendingEntry[] = [];
+                try { entries = JSON.parse(sub.entriesJson); } catch { entries = []; }
+                const label = entries.map((e) => `${e.itemName} ×${e.quantityUsed}`).join(", ");
+                const when = formatActivityTime(sub.submittedAt);
+                return (
+                  <li key={sub.id} className="usage-activity-row">
+                    <span className="usage-activity-who">{sub.submittedByName || sub.submittedByEmail}</span>
+                    <span className="usage-activity-items">{label}</span>
+                    <span className="usage-activity-when">{when}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </section>
   );

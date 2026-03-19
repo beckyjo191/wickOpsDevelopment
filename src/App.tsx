@@ -7,7 +7,6 @@ import { SettingsPage } from "./components/SettingsPage";
 import { DashboardPage } from "./components/DashboardPage";
 import { AppToolbar } from "./components/AppToolbar";
 import { InventoryUsagePage } from "./components/InventoryUsagePage";
-import { UsageReviewPage } from "./components/UsageReviewPage";
 import { OnboardingPage } from "./components/OnboardingPage";
 import { authFetch } from "./lib/authFetch";
 import {
@@ -44,7 +43,7 @@ const pickRandom = (items: string[]): string =>
   items[Math.floor(Math.random() * items.length)] ?? "Loading...";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
-type AppView = "dashboard" | "inventory" | "usage" | "usageReview" | "invite" | "settings";
+type AppView = "dashboard" | "inventory" | "usage" | "invite" | "settings";
 type BreadcrumbItem = {
   label: string;
   onClick?: () => void;
@@ -54,7 +53,6 @@ const isAppView = (value: unknown): value is AppView =>
   value === "dashboard" ||
   value === "inventory" ||
   value === "usage" ||
-  value === "usageReview" ||
   value === "invite" ||
   value === "settings";
 
@@ -390,12 +388,6 @@ export default function App() {
             { label: "Dashboard", onClick: () => setView("dashboard") },
             { label: "Usage Form" },
           ]
-      : view === "usageReview"
-        ? [
-            { label: "Dashboard", onClick: () => setView("dashboard") },
-            { label: "Usage Form", onClick: () => setView("usage") },
-            { label: "Review" },
-          ]
       : view === "settings"
         ? [
             { label: "Dashboard", onClick: () => setView("dashboard") },
@@ -447,6 +439,7 @@ export default function App() {
       <InventoryPage
         canEditInventory={canEditInventory}
         canManageInventoryColumns={canManageInventoryColumns}
+        canReviewSubmissions={canReviewUsageSubmissions}
         initialFilter={inventoryInitialFilter}
       />
     ) : (
@@ -457,20 +450,7 @@ export default function App() {
     );
   } else if (view === "usage") {
     content = canAccessUsage ? (
-      <InventoryUsagePage
-        usageFormPreferences={usageFormPreferences}
-        canReviewSubmissions={canReviewUsageSubmissions}
-        onNavigateToReview={canReviewUsageSubmissions ? () => setView("usageReview") : undefined}
-      />
-    ) : (
-      <DashboardPage
-        accessibleModules={subState.allowedModules}
-        onNavigateToModule={(key) => setView(key as AppView)}
-      />
-    );
-  } else if (view === "usageReview") {
-    content = canReviewUsageSubmissions ? (
-      <UsageReviewPage onNavigateToUsageForm={() => setView("usage")} />
+      <InventoryUsagePage usageFormPreferences={usageFormPreferences} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}

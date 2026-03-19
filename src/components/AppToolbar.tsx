@@ -3,7 +3,7 @@ import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 import { MODULE_REGISTRY, type AppModuleKey } from "../lib/moduleRegistry";
 
 interface AppToolbarProps {
-  currentView: "dashboard" | "inventory" | "usage" | "usageReview" | "invite" | "settings";
+  currentView: "dashboard" | "inventory" | "usage" | "invite" | "settings";
   userName: string;
   orgName?: string;
   accessibleModules: AppModuleKey[];

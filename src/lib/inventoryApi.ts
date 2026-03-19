@@ -237,17 +237,36 @@ export const listPendingSubmissions = async (): Promise<PendingSubmission[]> => 
 
 export const approveUsageSubmission = async (
   submissionId: string,
+  overrideEntries?: PendingEntry[],
 ): Promise<{ ok: boolean; updatedCount: number }> => {
   const base = requireBaseUrl();
+  const body = overrideEntries && overrideEntries.length > 0
+    ? JSON.stringify({ entries: overrideEntries })
+    : undefined;
   const res = await authFetch(
     `${base}/inventory/usage/pending/${encodeURIComponent(submissionId)}/approve`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body,
+    },
   );
   if (!res.ok) {
     throw new Error(await getApiErrorMessage(res, "Failed to approve submission."));
   }
   const data = await res.json();
   return { ok: !!data?.ok, updatedCount: Number(data?.updatedCount ?? 0) };
+};
+
+export const deleteUsageSubmission = async (submissionId: string): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(
+    `${base}/inventory/usage/pending/${encodeURIComponent(submissionId)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to delete submission."));
+  }
 };
 
 export const rejectUsageSubmission = async (

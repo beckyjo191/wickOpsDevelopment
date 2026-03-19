@@ -1,23 +1,30 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
+  approveUsageSubmission,
   convertImportFileToCsv,
+  deleteUsageSubmission,
   extractCsvHeaders,
   generateAndDownloadInventoryTemplate,
   importInventoryCsv,
   isInventoryProvisioningError,
+  listPendingSubmissions,
   loadInventoryBootstrap,
   saveInventoryItems,
   updateInventoryColumnVisibility,
   type InventoryColumn,
   type InventoryRow,
+  type PendingEntry,
+  type PendingSubmission,
 } from "../lib/inventoryApi";
 
 export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
+type ActiveTab = InventoryFilter | "pendingSubmissions";
 type SortDirection = "asc" | "desc";
 
 interface InventoryPageProps {
   canEditInventory: boolean;
   canManageInventoryColumns: boolean;
+  canReviewSubmissions?: boolean;
   initialFilter?: InventoryFilter;
 }
 
@@ -91,9 +98,109 @@ const buildRowsSignature = (rows: InventoryRow[]): string =>
     })),
   );
 
+type PendingSubmissionCardProps = {
+  submission: PendingSubmission;
+  entries: PendingEntry[];
+  editedQtys: Record<number, string>;
+  buildLabel: (entry: PendingEntry) => string;
+  onEditQty: (entryIndex: number, value: string) => void;
+  onDelete: () => Promise<void>;
+};
+
+function PendingSubmissionCard({
+  submission,
+  entries,
+  editedQtys,
+  buildLabel,
+  onEditQty,
+  onDelete,
+}: PendingSubmissionCardProps) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const handle = async (action: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (err: any) {
+      setError(err?.message ?? "Action failed.");
+      setBusy(false);
+    }
+  };
+
+  // Merge entries with the same itemId within this submission
+  type MergedEntry = { entry: PendingEntry; origIndex: number; totalQty: number };
+  const merged: MergedEntry[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const existing = merged.find((m) => m.entry.itemId === e.itemId);
+    if (existing) {
+      existing.totalQty += e.quantityUsed;
+    } else {
+      merged.push({ entry: e, origIndex: i, totalQty: e.quantityUsed });
+    }
+  }
+
+  return (
+    <div className="inventory-pending-card">
+      <div className="inventory-pending-card-meta">
+        <span className="inventory-pending-who">{submission.submittedByName || submission.submittedByEmail}</span>
+        <span className="inventory-pending-when">{formatPendingTime(submission.submittedAt)}</span>
+      </div>
+      <table className="inventory-pending-entries">
+        <tbody>
+          {merged.map(({ entry, origIndex, totalQty }) => (
+            <tr key={entry.itemId}>
+              <td className="inventory-pending-entry-name">{buildLabel(entry)}</td>
+              <td className="inventory-pending-entry-qty">
+                <input
+                  type="number"
+                  min={1}
+                  step="any"
+                  className="inventory-pending-qty-input"
+                  value={editedQtys[origIndex] !== undefined ? editedQtys[origIndex] : String(totalQty)}
+                  onChange={(e) => onEditQty(origIndex, e.target.value)}
+                  disabled={busy}
+                  aria-label={`Quantity for ${entry.itemName}`}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {error ? <p className="inventory-pending-error">{error}</p> : null}
+      <div className="inventory-pending-actions">
+        <button
+          type="button"
+          className="button button-ghost button-sm"
+          onClick={() => void handle(onDelete)}
+          disabled={busy}
+        >
+          {busy ? "Deleting..." : "Delete"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const formatPendingTime = (isoString: string): string => {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return "";
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return `${Math.floor(diffHr / 24)}d ago`;
+};
+
 export function InventoryPage({
   canEditInventory,
   canManageInventoryColumns,
+  canReviewSubmissions,
   initialFilter,
 }: InventoryPageProps) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -101,7 +208,18 @@ export function InventoryPage({
   const [loading, setLoading] = useState(true);
   const [importingCsv, setImportingCsv] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<InventoryFilter>(() => initialFilter ?? "all");
+  const [activeTab, setActiveTabRaw] = useState<ActiveTab>(() => initialFilter ?? "all");
+  const activeFilter: InventoryFilter = activeTab === "pendingSubmissions" ? "all" : activeTab;
+  const setActiveFilter = (f: InventoryFilter) => setActiveTabRaw(f);
+
+  // Pending submissions state
+  const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [pendingError, setPendingError] = useState("");
+  const [approvingAll, setApprovingAll] = useState(false);
+  const [approveAllError, setApproveAllError] = useState("");
+  // Per-submission edited quantities: submissionId → entry index → quantityUsed
+  const [editedQtys, setEditedQtys] = useState<Record<string, Record<number, string>>>({});
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   const [templateSelectedIds, setTemplateSelectedIds] = useState<Set<string> | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -134,6 +252,52 @@ export function InventoryPage({
   const restoringSnapshotRef = useRef(false);
   const editSessionCellRef = useRef<string | null>(null);
   const canEditTable = canEditInventory && activeFilter === "all";
+
+  const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+
+  const buildPendingEntryLabel = (entry: PendingEntry): string => {
+    const row = rowById.get(entry.itemId);
+    const exp = row ? toDateInputValue(row.values.expirationDate) : "";
+    const currentQty = row !== undefined ? Number(row.values.quantity ?? 0) : null;
+    const expPart = exp ? ` | exp ${exp}` : "";
+    const qtyPart = currentQty !== null ? ` (${currentQty})` : "";
+    return `${entry.itemName}${expPart}${qtyPart}`;
+  };
+
+  const mergedPendingItems = useMemo(() => {
+    if (activeTab !== "pendingSubmissions") return [] as { entry: PendingEntry; totalQty: number }[];
+    const map = new Map<string, { entry: PendingEntry; totalQty: number }>();
+    for (const sub of pendingSubmissions) {
+      let entries: PendingEntry[] = [];
+      try { entries = JSON.parse(sub.entriesJson); } catch { entries = []; }
+      for (const e of entries) {
+        const existing = map.get(e.itemId);
+        if (existing) {
+          existing.totalQty += e.quantityUsed;
+        } else {
+          map.set(e.itemId, { entry: e, totalQty: e.quantityUsed });
+        }
+      }
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.entry.itemName.localeCompare(b.entry.itemName),
+    );
+  }, [pendingSubmissions, activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "pendingSubmissions" || !canReviewSubmissions) return;
+    setPendingLoading(true);
+    setPendingError("");
+    listPendingSubmissions()
+      .then((subs) => {
+        setPendingSubmissions(subs.filter((s) => s.status === "pending"));
+        setPendingLoading(false);
+      })
+      .catch((err: any) => {
+        setPendingError(err?.message ?? "Failed to load pending submissions.");
+        setPendingLoading(false);
+      });
+  }, [activeTab, canReviewSubmissions]);
 
   useEffect(() => {
     rowsRef.current = rows;
@@ -1301,36 +1465,36 @@ export function InventoryPage({
         <div className="inventory-filter-bar">
           <div className="inventory-tabs" role="tablist" aria-label="Inventory filters">
             <button
-              className={`inventory-tab-btn${activeFilter === "all" ? " active" : ""}`}
-              onClick={() => setActiveFilter("all")}
+              className={`inventory-tab-btn${activeTab === "all" ? " active" : ""}`}
+              onClick={() => setActiveTabRaw("all")}
               role="tab"
-              aria-selected={activeFilter === "all"}
+              aria-selected={activeTab === "all"}
             >
               All Items
             </button>
             {hasExpirationColumn ? (
               <>
                 <button
-                  className={`inventory-tab-btn${activeFilter === "expired" ? " active" : ""}`}
-                  onClick={() => setActiveFilter("expired")}
+                  className={`inventory-tab-btn${activeTab === "expired" ? " active" : ""}`}
+                  onClick={() => setActiveTabRaw("expired")}
                   role="tab"
-                  aria-selected={activeFilter === "expired"}
+                  aria-selected={activeTab === "expired"}
                 >
                   Expired
                 </button>
                 <button
-                  className={`inventory-tab-btn${activeFilter === "exp30" ? " active" : ""}`}
-                  onClick={() => setActiveFilter("exp30")}
+                  className={`inventory-tab-btn${activeTab === "exp30" ? " active" : ""}`}
+                  onClick={() => setActiveTabRaw("exp30")}
                   role="tab"
-                  aria-selected={activeFilter === "exp30"}
+                  aria-selected={activeTab === "exp30"}
                 >
                   Expiring Within 30 Days
                 </button>
                 <button
-                  className={`inventory-tab-btn${activeFilter === "exp60" ? " active" : ""}`}
-                  onClick={() => setActiveFilter("exp60")}
+                  className={`inventory-tab-btn${activeTab === "exp60" ? " active" : ""}`}
+                  onClick={() => setActiveTabRaw("exp60")}
                   role="tab"
-                  aria-selected={activeFilter === "exp60"}
+                  aria-selected={activeTab === "exp60"}
                 >
                   Expiring Within 60 Days
                 </button>
@@ -1338,12 +1502,25 @@ export function InventoryPage({
             ) : null}
             {hasMinQuantityColumn ? (
               <button
-                className={`inventory-tab-btn${activeFilter === "lowStock" ? " active" : ""}`}
-                onClick={() => setActiveFilter("lowStock")}
+                className={`inventory-tab-btn${activeTab === "lowStock" ? " active" : ""}`}
+                onClick={() => setActiveTabRaw("lowStock")}
                 role="tab"
-                aria-selected={activeFilter === "lowStock"}
+                aria-selected={activeTab === "lowStock"}
               >
                 Low Stock
+              </button>
+            ) : null}
+            {canReviewSubmissions ? (
+              <button
+                className={`inventory-tab-btn${activeTab === "pendingSubmissions" ? " active" : ""}`}
+                onClick={() => setActiveTabRaw("pendingSubmissions")}
+                role="tab"
+                aria-selected={activeTab === "pendingSubmissions"}
+              >
+                Pending Submissions
+                {pendingSubmissions.length > 0 && activeTab !== "pendingSubmissions" ? (
+                  <span className="inventory-tab-badge">{pendingSubmissions.length}</span>
+                ) : null}
               </button>
             ) : null}
           </div>
@@ -1394,6 +1571,105 @@ export function InventoryPage({
           </div>
         </div>
 
+        {activeTab === "pendingSubmissions" ? (
+          <div className="inventory-pending-wrap">
+            {pendingLoading ? (
+              <div className="app-loading-card" style={{ padding: "2rem", textAlign: "center" }}>
+                <span className="app-spinner" aria-hidden="true" /> Loading submissions...
+              </div>
+            ) : pendingError ? (
+              <p style={{ color: "var(--text-soft)", padding: "1rem" }}>{pendingError}</p>
+            ) : pendingSubmissions.length === 0 ? (
+              <p style={{ color: "var(--text-soft)", padding: "1rem" }}>No pending submissions.</p>
+            ) : (
+              <>
+                {/* Merged summary + Approve All */}
+                <div className="inventory-pending-summary">
+                  <div className="inventory-pending-summary-header">
+                    <h4 className="inventory-pending-summary-title">All Pending Items</h4>
+                    <button
+                      type="button"
+                      className="button button-primary button-sm"
+                      disabled={approvingAll}
+                      onClick={async () => {
+                        setApprovingAll(true);
+                        setApproveAllError("");
+                        const toApprove = [...pendingSubmissions];
+                        const failed: string[] = [];
+                        for (const sub of toApprove) {
+                          try {
+                            let entries: PendingEntry[] = [];
+                            try { entries = JSON.parse(sub.entriesJson); } catch { entries = []; }
+                            const subEdits = editedQtys[sub.id] ?? {};
+                            const effectiveEntries = entries.map((e, i) => ({
+                              ...e,
+                              quantityUsed: subEdits[i] !== undefined ? Number(subEdits[i]) || e.quantityUsed : e.quantityUsed,
+                            }));
+                            const anyEdited = Object.keys(subEdits).length > 0;
+                            await approveUsageSubmission(sub.id, anyEdited ? effectiveEntries : undefined);
+                            setPendingSubmissions((prev) => prev.filter((s) => s.id !== sub.id));
+                            setEditedQtys((prev) => { const next = { ...prev }; delete next[sub.id]; return next; });
+                          } catch {
+                            failed.push(sub.submittedByName || sub.submittedByEmail);
+                          }
+                        }
+                        setApprovingAll(false);
+                        if (failed.length > 0) {
+                          setApproveAllError(`Failed to approve: ${failed.join(", ")}`);
+                        }
+                      }}
+                    >
+                      {approvingAll ? "Approving..." : "Approve All"}
+                    </button>
+                  </div>
+                  <table className="inventory-pending-entries">
+                    <tbody>
+                      {mergedPendingItems.map(({ entry, totalQty }) => (
+                        <tr key={entry.itemId}>
+                          <td className="inventory-pending-entry-name">{buildPendingEntryLabel(entry)}</td>
+                          <td className="inventory-pending-entry-qty" style={{ color: "var(--text-soft)", fontWeight: 600 }}>×{totalQty}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {approveAllError ? <p className="inventory-pending-error">{approveAllError}</p> : null}
+                </div>
+
+                {/* Individual submissions for delete (or qty edits before approve all) */}
+                <h4 className="inventory-pending-summary-title" style={{ marginTop: "1.25rem" }}>Submissions</h4>
+                {pendingSubmissions.map((sub) => {
+                  let entries: PendingEntry[] = [];
+                  try { entries = JSON.parse(sub.entriesJson); } catch { entries = []; }
+                  const subEdits = editedQtys[sub.id] ?? {};
+                  const effectiveEntries: PendingEntry[] = entries.map((e, i) => ({
+                    ...e,
+                    quantityUsed: subEdits[i] !== undefined ? Number(subEdits[i]) || e.quantityUsed : e.quantityUsed,
+                  }));
+                  return (
+                    <PendingSubmissionCard
+                      key={sub.id}
+                      submission={sub}
+                      entries={effectiveEntries}
+                      editedQtys={subEdits}
+                      buildLabel={buildPendingEntryLabel}
+                      onEditQty={(entryIndex, value) =>
+                        setEditedQtys((prev) => ({
+                          ...prev,
+                          [sub.id]: { ...prev[sub.id], [entryIndex]: value },
+                        }))
+                      }
+                      onDelete={async () => {
+                        await deleteUsageSubmission(sub.id);
+                        setPendingSubmissions((prev) => prev.filter((s) => s.id !== sub.id));
+                        setEditedQtys((prev) => { const next = { ...prev }; delete next[sub.id]; return next; });
+                      }}
+                    />
+                  );
+                })}
+              </>
+            )}
+          </div>
+        ) : (
         <div className="inventory-table-wrap">
           <table className="inventory-table">
             <thead>
@@ -1734,6 +2010,7 @@ export function InventoryPage({
             </tbody>
           </table>
         </div>
+        )}
       </div>
       {csvImportDialog ? (
         <div className="inventory-import-overlay" role="dialog" aria-modal="true" aria-label="Choose import columns">

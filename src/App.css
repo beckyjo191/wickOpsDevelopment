@@ -1075,6 +1075,131 @@
   box-shadow: none;
 }
 
+.inventory-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  min-width: 1.2rem;
+  height: 1.2rem;
+  padding: 0 0.35rem;
+  margin-left: 0.3rem;
+  line-height: 1;
+}
+
+.inventory-pending-wrap {
+  padding: 0.75rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.inventory-pending-summary {
+  border: 1px solid var(--table-grid);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  background: var(--surface-alt);
+  margin-bottom: 0.25rem;
+}
+
+.inventory-pending-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.inventory-pending-summary-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+  margin: 0;
+}
+
+.inventory-pending-card {
+  border: 1px solid var(--table-grid);
+  border-left: 3px solid var(--primary);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  background: var(--surface-soft);
+}
+
+.inventory-pending-card-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.inventory-pending-who {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.inventory-pending-when {
+  font-size: 0.75rem;
+  color: var(--text-soft);
+}
+
+.inventory-pending-entries {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.5rem;
+}
+
+.inventory-pending-entries td {
+  padding: 0.25rem 0.4rem 0.25rem 0;
+  font-size: 0.85rem;
+  vertical-align: middle;
+}
+
+.inventory-pending-entry-name {
+  font-weight: 500;
+  min-width: 8rem;
+}
+
+.inventory-pending-entry-loc,
+.inventory-pending-entry-notes {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.inventory-pending-entry-qty {
+  text-align: right;
+  width: 6rem;
+}
+
+.inventory-pending-qty-input {
+  width: 5.5rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--table-grid);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  text-align: right;
+}
+
+.inventory-pending-error {
+  font-size: 0.8rem;
+  color: #c0392b;
+  margin: 0.25rem 0;
+}
+
+.inventory-pending-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
 .inventory-search-input {
   min-width: 0;
   max-width: 100%;
@@ -1664,6 +1789,68 @@
 .usage-review-pending-banner-count {
   font-weight: 600;
   color: var(--primary);
+}
+
+.usage-review-header-btn {
+  flex-shrink: 0;
+}
+
+.usage-activity {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--table-grid);
+}
+
+.usage-activity-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-soft);
+  margin: 0 0 0.55rem;
+}
+
+.usage-activity-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.usage-activity-row {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content max-content;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
+.usage-activity-who {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.usage-activity-items {
+  color: var(--text-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-activity-when {
+  color: var(--text-soft);
+  white-space: nowrap;
+  font-size: 0.77rem;
+}
+
+.usage-activity-pending {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--primary);
+  white-space: nowrap;
 }
 
 .usage-review-pending-banner-link {
@@ -2703,8 +2890,23 @@
   padding: 20px 36px 28px;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   border-top: 1px solid var(--border);
+}
+
+.onboarding-do-not-show {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.onboarding-do-not-show input[type="checkbox"] {
+  cursor: pointer;
 }
 
 @media (max-width: 600px) {

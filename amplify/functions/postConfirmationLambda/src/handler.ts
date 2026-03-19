@@ -19,7 +19,7 @@ const ddb = DynamoDBDocumentClient.from(
 const cognito = new CognitoIdentityProviderClient({ region: process.env.AWS_REGION || "us-east-2" });
 const isPaidStatus = (value: unknown): boolean => {
   const normalized = String(value ?? "").toLowerCase();
-  return normalized === "active" || normalized === "paid";
+  return normalized === "active" || normalized === "paid" || normalized === "sponsored";
 };
 
 export const handler: Handler = async (event) => {

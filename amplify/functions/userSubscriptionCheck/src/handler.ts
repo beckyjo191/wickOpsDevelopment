@@ -84,7 +84,7 @@ const normalizeEmail = (value: unknown): string =>
   String(value ?? "").trim().toLowerCase();
 const isPaidStatus = (value: unknown): boolean => {
   const normalized = String(value ?? "").toLowerCase();
-  return normalized === "active" || normalized === "paid";
+  return normalized === "active" || normalized === "paid" || normalized === "sponsored";
 };
 
 const countOrgUsers = async (organizationId: string): Promise<number> => {

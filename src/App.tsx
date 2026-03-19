@@ -50,6 +50,7 @@ export default function App() {
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [view, setViewRaw] = useState<AppView>("dashboard");
   const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);
+  const [inventoryKey, setInventoryKey] = useState(0);
   const setView = (v: AppView) => {
     if (v !== "inventory") setInventoryInitialFilter(undefined);
     setViewRaw(v);
@@ -426,6 +427,7 @@ export default function App() {
   } else if (view === "inventory") {
     content = canAccessInventory ? (
       <InventoryPage
+        key={inventoryKey}
         canEditInventory={canEditInventory}
         canManageInventoryColumns={canManageInventoryColumns}
         canReviewSubmissions={canReviewUsageSubmissions}
@@ -497,6 +499,7 @@ export default function App() {
         onNavigateToModule={(key) => setView(key as AppView)}
         onNavigateToInventoryWithFilter={(filter) => {
           setInventoryInitialFilter(filter);
+          setInventoryKey((k) => k + 1);
           setView("inventory");
         }}
       />

@@ -48,6 +48,8 @@ interface SettingsPageProps {
   onCurrentUserEmailChange: (email: string) => void;
   onUserRevoked: (userId: string, newSeatsUsed: number) => void;
   onInviteUsers: () => void;
+  userName?: string;
+  onLogout?: () => void;
 }
 
 export function SettingsPage({
@@ -67,6 +69,8 @@ export function SettingsPage({
   onCurrentUserEmailChange,
   onUserRevoked,
   onInviteUsers,
+  userName,
+  onLogout,
 }: SettingsPageProps) {
   const normalizeEmail = (value: string): string => value.trim().toLowerCase();
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
@@ -471,6 +475,17 @@ export function SettingsPage({
             </button>
           </div>
         </header>
+
+        {(userName || onLogout) && (
+          <div className="settings-logged-in">
+            {userName && <span className="settings-logged-in-text">Logged in as <strong>{userName}</strong></span>}
+            {onLogout && (
+              <button type="button" className="settings-logout-link" onClick={onLogout}>
+                Log Out
+              </button>
+            )}
+          </div>
+        )}
 
         <div className="status-panel">
           {seatsRemaining > 0

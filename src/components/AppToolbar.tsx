@@ -1,67 +1,52 @@
-import type { MouseEvent } from "react";
 import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 
+type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "invite" | "settings";
+
 interface AppToolbarProps {
-  userName: string;
-  orgName?: string;
-  onNavigateToDashboard: () => void;
-  onOpenSettings: () => void;
-  onLogout: () => void;
+  view: AppView;
+  onNavigate: (view: AppView) => void;
 }
 
 export function AppToolbar({
-  userName,
-  orgName,
-  onNavigateToDashboard,
-  onOpenSettings,
-  onLogout,
+  view,
+  onNavigate,
 }: AppToolbarProps) {
-  const closeMenu = (event: MouseEvent<HTMLButtonElement>) => {
-    const details = event.currentTarget.closest("details");
-    details?.removeAttribute("open");
-  };
+  const isInventorySection = view === "inventory" || view === "usage" || view === "quickadd";
 
   return (
     <header className="app-toolbar">
       <button
         type="button"
         className="app-toolbar-logo-link"
-        onClick={onNavigateToDashboard}
+        onClick={() => onNavigate("dashboard")}
       >
         <img className="app-toolbar-logo" src={logoThumb} alt="WickOps" />
         <span className="app-toolbar-brand-text">WickOps</span>
       </button>
 
-      <details className="app-user-menu">
-        <summary className="app-user-menu-trigger">
-          {userName}
-        </summary>
-        <div className="app-user-menu-panel">
-          {orgName ? (
-            <div className="app-user-menu-org" aria-label="Current organization">
-              {orgName}
-            </div>
-          ) : null}
-          <button
-            className="app-user-menu-item"
-            onClick={(event) => {
-              closeMenu(event);
-              onOpenSettings();
-            }}
-          >
-            Settings
-          </button>
-          <button
-            className="app-user-menu-item app-user-menu-item-danger"
-            onClick={(event) => {
-              closeMenu(event);
-              onLogout();
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </details>
+      <nav className="app-toolbar-nav">
+        <button
+          type="button"
+          className={`app-toolbar-nav-item${view === "dashboard" ? " active" : ""}`}
+          onClick={() => onNavigate("dashboard")}
+        >
+          Dashboard
+        </button>
+        <button
+          type="button"
+          className={`app-toolbar-nav-item${isInventorySection ? " active" : ""}`}
+          onClick={() => onNavigate("inventory")}
+        >
+          Inventory
+        </button>
+        <button
+          type="button"
+          className={`app-toolbar-nav-item${view === "settings" || view === "invite" ? " active" : ""}`}
+          onClick={() => onNavigate("settings")}
+        >
+          Settings
+        </button>
+      </nav>
     </header>
   );
 }

@@ -48,6 +48,7 @@ const PLAN_MODULE_MAP: Record<string, ModuleKey[]> = {
   Personal:     ["inventory", "usage"],
   Department:   ["inventory", "usage"],
   Organization: ["inventory", "usage"],
+  Sponsored:    ["inventory", "usage"],
 };
 const getAvailableModulesForPlan = (plan: string): ModuleKey[] =>
   PLAN_MODULE_MAP[plan] ?? [];

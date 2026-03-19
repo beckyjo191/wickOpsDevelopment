@@ -246,6 +246,9 @@ export function InventoryPage({
   const [editingDateCell, setEditingDateCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickInventoryLine());
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
+  const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
   const isProvisioningRef = useRef(false);
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
@@ -258,6 +261,20 @@ export function InventoryPage({
   const restoringSnapshotRef = useRef(false);
   const editSessionCellRef = useRef<string | null>(null);
   const canEditTable = canEditInventory && activeFilter === "all";
+
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 780px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile) {
+      setSelectMode(false);
+      setExpandedCardId(null);
+    }
+  }, [isMobile]);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -1412,6 +1429,15 @@ export function InventoryPage({
                 />
                 {canEditTable ? (
                   <>
+                    {isMobile ? (
+                      <button
+                        type="button"
+                        className="button button-primary button-sm"
+                        onClick={(event) => onAddRow("top", event)}
+                      >
+                        Add Item
+                      </button>
+                    ) : (
                     <details className="inventory-import-menu">
                       <summary className="inventory-import-trigger">Add Row</summary>
                       <div className="inventory-import-panel">
@@ -1445,47 +1471,50 @@ export function InventoryPage({
                         </button>
                       </div>
                     </details>
-                    {rows.length > 1 && selectedRowIds.size > 0 ? (
+                    )}
+                    {!isMobile && rows.length > 1 && selectedRowIds.size > 0 ? (
                       <button className="button button-secondary" onClick={onRemoveSelectedRows}>
                         Delete Selected ({selectedRowIds.size})
                       </button>
                     ) : null}
                   </>
                 ) : null}
-                <details className="inventory-import-menu">
-                  <summary className="inventory-import-trigger">
-                    {importingCsv ? "Importing..." : "Import"}
-                  </summary>
-                  <div className="inventory-import-panel">
-                    <button
-                      type="button"
-                      className="inventory-import-option"
-                      onClick={onChooseCsvImport}
-                      disabled={importingCsv || saving}
-                    >
-                      Upload CSV/XLSX
-                    </button>
-                    <button
-                      type="button"
-                      className="inventory-import-option"
-                      onClick={onOpenPasteImport}
-                      disabled={importingCsv || saving}
-                    >
-                      Paste Data
-                    </button>
-                    <button
-                      type="button"
-                      className="inventory-import-option"
-                      onClick={() => {
-                        setTemplateSelectedIds(new Set(columns.map((c) => c.id)));
-                        setShowTemplateDialog(true);
-                      }}
-                      disabled={importingCsv || saving}
-                    >
-                      Download Template
-                    </button>
-                  </div>
-                </details>
+                {!isMobile && (
+                  <details className="inventory-import-menu">
+                    <summary className="inventory-import-trigger">
+                      {importingCsv ? "Importing..." : "Import"}
+                    </summary>
+                    <div className="inventory-import-panel">
+                      <button
+                        type="button"
+                        className="inventory-import-option"
+                        onClick={onChooseCsvImport}
+                        disabled={importingCsv || saving}
+                      >
+                        Upload CSV/XLSX
+                      </button>
+                      <button
+                        type="button"
+                        className="inventory-import-option"
+                        onClick={onOpenPasteImport}
+                        disabled={importingCsv || saving}
+                      >
+                        Paste Data
+                      </button>
+                      <button
+                        type="button"
+                        className="inventory-import-option"
+                        onClick={() => {
+                          setTemplateSelectedIds(new Set(columns.map((c) => c.id)));
+                          setShowTemplateDialog(true);
+                        }}
+                        disabled={importingCsv || saving}
+                      >
+                        Download Template
+                      </button>
+                    </div>
+                  </details>
+                )}
                 <button
                   className="button button-primary"
                   onClick={() => void onSave()}
@@ -1499,6 +1528,38 @@ export function InventoryPage({
         </header>
 
         <div className="inventory-filter-bar">
+          {isMobile ? (
+            <select
+              className="inventory-tab-select"
+              value={activeTab}
+              onChange={(e) => setActiveTabRaw(e.target.value as typeof activeTab)}
+            >
+              <option value="all">All Items</option>
+              {hasExpirationColumn && (
+                <>
+                  <option value="expired">
+                    Expired{tabCounts.expired > 0 ? ` (${tabCounts.expired})` : ""}
+                  </option>
+                  <option value="exp30">
+                    Expiring 30d{tabCounts.exp30 > 0 ? ` (${tabCounts.exp30})` : ""}
+                  </option>
+                  <option value="exp60">
+                    Expiring 60d{tabCounts.exp60 > 0 ? ` (${tabCounts.exp60})` : ""}
+                  </option>
+                </>
+              )}
+              {hasMinQuantityColumn && (
+                <option value="lowStock">
+                  Low Stock{tabCounts.lowStock > 0 ? ` (${tabCounts.lowStock})` : ""}
+                </option>
+              )}
+              {canReviewSubmissions && (
+                <option value="pendingSubmissions">
+                  Pending{pendingSubmissions.length > 0 ? ` (${pendingSubmissions.length})` : ""}
+                </option>
+              )}
+            </select>
+          ) : (
           <div className="inventory-tabs" role="tablist" aria-label="Inventory filters">
             <button
               className={`inventory-tab-btn${activeTab === "all" ? " active" : ""}`}
@@ -1572,6 +1633,7 @@ export function InventoryPage({
               </button>
             ) : null}
           </div>
+          )}
           <div className="inventory-filter-right">
             <div className="inventory-search-wrap">
               <input
@@ -1592,6 +1654,7 @@ export function InventoryPage({
                 </button>
               ) : null}
             </div>
+            {!isMobile && (
             <details className="inventory-columns-menu">
               <summary className="inventory-columns-trigger">Columns</summary>
               <div className="inventory-columns-panel">
@@ -1616,6 +1679,7 @@ export function InventoryPage({
                   })}
               </div>
             </details>
+            )}
           </div>
         </div>
 
@@ -1723,6 +1787,251 @@ export function InventoryPage({
               </>
             )}
           </div>
+        ) : isMobile ? (
+        <div className="inventory-cards-wrap">
+          {canEditTable && (
+            <div className="inventory-cards-toolbar">
+              <button
+                type="button"
+                className={`button button-ghost button-sm${selectMode ? " active" : ""}`}
+                onClick={() => {
+                  setSelectMode((prev) => !prev);
+                  if (selectMode) setSelectedRowIds(new Set());
+                }}
+              >
+                {selectMode ? `Cancel (${selectedRowIds.size})` : "Select"}
+              </button>
+              {selectMode && selectedRowIds.size > 0 && rows.length > 1 && (
+                <button
+                  type="button"
+                  className="button button-secondary button-sm"
+                  onClick={onRemoveSelectedRows}
+                >
+                  Delete ({selectedRowIds.size})
+                </button>
+              )}
+            </div>
+          )}
+          {filteredRows.length === 0 ? (
+            <p className="inventory-cards-empty">No items match your filters.</p>
+          ) : (
+            filteredRows.map(({ row }) => {
+              const isExpanded = expandedCardId === row.id;
+              const isSelected = selectedRowIds.has(row.id);
+
+              /* Dynamic card summary: use first visible column as title,
+                 show up to 4 additional columns as meta badges */
+              const nameCol = visibleColumns.find((c) => c.key === "itemName");
+              const cardTitle = nameCol
+                ? String(row.values[nameCol.key] ?? "").trim() || "Untitled"
+                : visibleColumns.length > 0
+                  ? String(row.values[visibleColumns[0].key] ?? "").trim() || "Untitled"
+                  : "Untitled";
+              const titleKey = nameCol ? nameCol.key : visibleColumns[0]?.key;
+
+              /* Remaining visible columns (skip the title column), up to 4 */
+              const previewCols = visibleColumns
+                .filter((c) => c.key !== titleKey)
+                .slice(0, 4);
+
+              /* Expiration status for card border styling */
+              const expValue = row.values.expirationDate;
+              const daysUntil = getDaysUntilExpiration(expValue);
+              let expClass = "";
+              if (daysUntil !== null) {
+                if (daysUntil < 0) expClass = "inventory-card-exp--expired";
+                else if (daysUntil <= 30) expClass = "inventory-card-exp--soon";
+                else if (daysUntil <= 60) expClass = "inventory-card-exp--warning";
+              }
+
+              /* Low stock check */
+              const qtyNum = Number(row.values.quantity);
+              const minQtyNum = Number(row.values.minQuantity);
+              const isLowStock =
+                Number.isFinite(qtyNum) &&
+                Number.isFinite(minQtyNum) &&
+                minQtyNum > 0 &&
+                qtyNum < minQtyNum;
+
+              return (
+                <div
+                  key={row.id}
+                  className={`inventory-card${isExpanded ? " inventory-card--expanded" : ""}${isSelected ? " inventory-card--selected" : ""}`}
+                  onClick={() => {
+                    if (selectMode) {
+                      onToggleRowSelection(row.id);
+                    } else {
+                      setExpandedCardId(isExpanded ? null : row.id);
+                      setSelectedRowId(row.id);
+                    }
+                  }}
+                >
+                  <div className="inventory-card-summary">
+                    {selectMode && (
+                      <input
+                        type="checkbox"
+                        className="inventory-select-checkbox"
+                        checked={isSelected}
+                        onChange={() => onToggleRowSelection(row.id)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    )}
+                    <div className="inventory-card-info">
+                      <span className="inventory-card-name">{cardTitle}</span>
+                      <div className="inventory-card-meta">
+                        {previewCols.map((col) => {
+                          const val = row.values[col.key];
+                          const displayText = getReadOnlyCellText(col, val);
+                          if (!displayText.trim()) return null;
+
+                          /* Special styling for quantity (low stock) */
+                          if (col.key === "quantity") {
+                            const minQtyVal = row.values.minQuantity;
+                            const minLabel = minQtyVal !== null && minQtyVal !== undefined && String(minQtyVal).trim() !== "" && Number(minQtyVal) > 0
+                              ? ` / ${minQtyVal}`
+                              : "";
+                            return (
+                              <span key={col.id} className={`inventory-card-badge${isLowStock ? " inventory-card-badge--low" : ""}`}>
+                                {col.label}: {displayText}{minLabel}
+                              </span>
+                            );
+                          }
+
+                          /* Special styling for expiration date */
+                          if (col.key === "expirationDate" && daysUntil !== null) {
+                            return (
+                              <span key={col.id} className={`inventory-card-exp ${expClass}`}>
+                                {displayText}
+                              </span>
+                            );
+                          }
+
+                          /* Generic column badge */
+                          return (
+                            <span key={col.id} className="inventory-card-tag">
+                              {col.label}: {displayText}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <span className="inventory-card-chevron" aria-hidden="true">
+                      {isExpanded ? "\u25B2" : "\u25BC"}
+                    </span>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="inventory-card-detail" onClick={(e) => e.stopPropagation()}>
+                      {visibleColumns.map((column) => (
+                        <div key={column.id} className="inventory-card-field">
+                          <label className="inventory-card-field-label">{column.label}</label>
+                          {!canEditTable ? (
+                            column.type === "link" ? (
+                              (() => {
+                                const normalizedLink = normalizeLinkValue(String(row.values[column.key] ?? ""));
+                                return normalizedLink ? (
+                                  <a className="inventory-card-field-link" href={normalizedLink} target="_blank" rel="noreferrer">
+                                    {normalizedLink}
+                                  </a>
+                                ) : (
+                                  <span className="inventory-card-field-value">--</span>
+                                );
+                              })()
+                            ) : (
+                              <span className="inventory-card-field-value">
+                                {getReadOnlyCellText(column, row.values[column.key]) || "--"}
+                              </span>
+                            )
+                          ) : column.type === "text" ? (
+                            <textarea
+                              className="inventory-card-input"
+                              value={String(row.values[column.key] ?? "")}
+                              rows={2}
+                              onFocus={() => {
+                                setSelectedRowId(row.id);
+                                beginCellEditSession(row.id, column.key);
+                              }}
+                              onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
+                              onBlur={endCellEditSession}
+                            />
+                          ) : column.type === "number" ? (
+                            <input
+                              type="number"
+                              className="inventory-card-input"
+                              min={0}
+                              value={String(row.values[column.key] ?? "")}
+                              onFocus={() => {
+                                setSelectedRowId(row.id);
+                                beginCellEditSession(row.id, column.key);
+                              }}
+                              onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
+                              onBlur={endCellEditSession}
+                            />
+                          ) : column.type === "date" ? (
+                            <div className="inventory-card-date-wrap">
+                              <input
+                                type="date"
+                                className="inventory-card-input"
+                                value={toDateInputValue(row.values[column.key])}
+                                onFocus={() => {
+                                  setSelectedRowId(row.id);
+                                  beginCellEditSession(row.id, column.key);
+                                }}
+                                onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
+                                onBlur={endCellEditSession}
+                              />
+                              {toDateInputValue(row.values[column.key]) && (
+                                <button
+                                  type="button"
+                                  className="inventory-date-clear"
+                                  onClick={() => onCellChange(row.id, column, "")}
+                                  aria-label="Clear date"
+                                >
+                                  &times;
+                                </button>
+                              )}
+                            </div>
+                          ) : column.type === "link" ? (
+                            <input
+                              type="url"
+                              className="inventory-card-input"
+                              value={String(row.values[column.key] ?? "")}
+                              placeholder="Paste link"
+                              onFocus={() => {
+                                setSelectedRowId(row.id);
+                                beginCellEditSession(row.id, column.key);
+                              }}
+                              onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
+                              onBlur={(e) => {
+                                const normalized = normalizeLinkValue(e.target.value);
+                                if (normalized !== e.target.value) {
+                                  onCellChange(row.id, column, normalized);
+                                }
+                                endCellEditSession();
+                              }}
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              className="inventory-card-input"
+                              value={String(row.values[column.key] ?? "")}
+                              onFocus={() => {
+                                setSelectedRowId(row.id);
+                                beginCellEditSession(row.id, column.key);
+                              }}
+                              onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
+                              onBlur={endCellEditSession}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
         ) : (
         <div className="inventory-table-wrap">
           <table className="inventory-table">

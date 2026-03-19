@@ -1,5 +1,6 @@
 import { useAuthenticator } from "@aws-amplify/ui-react";
 import { useEffect, useState } from "react";
+import { LayoutDashboard, Package, Settings as SettingsIcon } from "lucide-react";
 import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
 import { InventoryPage } from "./components/InventoryPage";
@@ -32,10 +33,6 @@ import { pickAppLine } from "./lib/loadingLines";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "invite" | "settings";
-type BreadcrumbItem = {
-  label: string;
-  onClick?: () => void;
-};
 
 const isAppView = (value: unknown): value is AppView =>
   value === "dashboard" ||
@@ -57,6 +54,14 @@ export default function App() {
   };
   const [loadingLine, setLoadingLine] = useState(() => pickAppLine());
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
+
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 780px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
 
   const userViewScope =
     String(user?.attributes?.sub ?? "") ||
@@ -247,7 +252,6 @@ export default function App() {
   useEffect(() => {
     const detailsMenuSelector = [
       "details.app-module-menu[open]",
-      "details.app-user-menu[open]",
       "details.inventory-import-menu[open]",
       "details.inventory-columns-menu[open]",
       "details.inventory-location-menu[open]",
@@ -369,30 +373,6 @@ export default function App() {
   const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const canReviewUsageSubmissions = canEditInventory && canAccessUsage;
 
-  const breadcrumbs: BreadcrumbItem[] =
-    view === "inventory"
-      ? [
-          { label: "Dashboard", onClick: () => setView("dashboard") },
-          { label: "Inventory" },
-        ]
-      : view === "usage" || view === "quickadd"
-        ? [
-            { label: "Dashboard", onClick: () => setView("dashboard") },
-            { label: "Inventory" },
-          ]
-      : view === "settings"
-        ? [
-            { label: "Dashboard", onClick: () => setView("dashboard") },
-            { label: "Settings" },
-          ]
-        : view === "invite"
-          ? [
-              { label: "Dashboard", onClick: () => setView("dashboard") },
-              { label: "Settings", onClick: () => setView("settings") },
-              { label: "Invite Users" },
-            ]
-          : [{ label: "Dashboard" }];
-
   let content: JSX.Element;
   if (view === "settings") {
     content = (
@@ -422,6 +402,8 @@ export default function App() {
           if (!canInviteMore) return;
           setView("invite");
         }}
+        userName={userName}
+        onLogout={signOut}
       />
     );
   } else if (view === "inventory") {
@@ -506,40 +488,15 @@ export default function App() {
     );
   }
 
+  const isInventorySection = view === "inventory" || view === "usage" || view === "quickadd";
+
   return (
-    <section className="app-shell">
+    <section className={`app-shell${isMobile ? " app-shell--mobile" : ""}`}>
       <AppToolbar
-        userName={userName}
-        orgName={subState.orgName}
-        onNavigateToDashboard={() => setView("dashboard")}
-        onOpenSettings={() => setView("settings")}
-        onLogout={signOut}
+        view={view}
+        onNavigate={(v) => setView(v)}
       />
-      <nav className="app-breadcrumbs" aria-label="Breadcrumb">
-        {breadcrumbs.map((item, index) => (
-          <span key={`${item.label}-${index}`} className="app-breadcrumb-item">
-            {item.onClick ? (
-              <button
-                type="button"
-                className="app-breadcrumb-link"
-                onClick={item.onClick}
-              >
-                {item.label}
-              </button>
-            ) : (
-              <span className="app-breadcrumb-current" aria-current="page">
-                {item.label}
-              </span>
-            )}
-            {index < breadcrumbs.length - 1 ? (
-              <span className="app-breadcrumb-separator" aria-hidden="true">
-                &gt;
-              </span>
-            ) : null}
-          </span>
-        ))}
-      </nav>
-      {(view === "inventory" || view === "usage" || view === "quickadd") && (
+      {isInventorySection && (
         <InventorySubNav
           activeView={view}
           accessibleModules={subState.allowedModules}
@@ -547,6 +504,34 @@ export default function App() {
         />
       )}
       {content}
+      {isMobile && (
+        <nav className="app-bottom-bar" aria-label="Main navigation">
+          <button
+            type="button"
+            className={`app-bottom-bar-item${view === "dashboard" ? " active" : ""}`}
+            onClick={() => setView("dashboard")}
+          >
+            <LayoutDashboard size={20} />
+            <span>Dashboard</span>
+          </button>
+          <button
+            type="button"
+            className={`app-bottom-bar-item${isInventorySection ? " active" : ""}`}
+            onClick={() => setView("inventory")}
+          >
+            <Package size={20} />
+            <span>Inventory</span>
+          </button>
+          <button
+            type="button"
+            className={`app-bottom-bar-item${view === "settings" || view === "invite" ? " active" : ""}`}
+            onClick={() => setView("settings")}
+          >
+            <SettingsIcon size={20} />
+            <span>Settings</span>
+          </button>
+        </nav>
+      )}
     </section>
   );
 }

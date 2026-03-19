@@ -1,90 +1,68 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isInventoryProvisioningError,
-  listPendingSubmissions,
   loadInventoryBootstrap,
-  submitInventoryUsage,
+  saveInventoryItems,
   type InventoryColumn,
   type InventoryRow,
-  type InventoryUsageEntryInput,
 } from "../lib/inventoryApi";
 
-type UsageEntry = {
+/* ── Types ─────────────────────────────────────────────────────────────── */
+
+type RestockEntry = {
   id: string;
   itemId: string;
   itemSearch: string;
-  quantityUsed: string;
-  notes: string;
-  notesOpen: boolean;
+  quantityToAdd: string;
+  expirationDate: string;
+  needsExpiration: boolean;
   error: string;
 };
 
-type UsageGroup = {
+type RestockGroup = {
   id: string;
   location: string;
   locationError: string;
-  entries: UsageEntry[];
+  entries: RestockEntry[];
 };
+
+type AutocompleteOption = {
+  id: string;
+  name: string;
+  quantity: number;
+};
+
+/* ── Helpers ───────────────────────────────────────────────────────────── */
 
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
 import { pickUsageLine, pickProvisioningLine } from "../lib/loadingLines";
 
-const formatActivityTime = (isoString: string): string => {
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return "";
-  const diffMs = Date.now() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return `${diffDay}d ago`;
-  return date.toLocaleDateString();
-};
-
 const normalizeLooseKey = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-const toDateInputValue = (value: unknown): string => {
-  const raw = String(value ?? "").trim();
-  if (!raw) return "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return "";
-  return parsed.toISOString().slice(0, 10);
-};
-
-const createUsageEntry = (): UsageEntry => ({
-  id: crypto.randomUUID(),
-  itemId: "",
-  itemSearch: "",
-  quantityUsed: "",
-  notes: "",
-  notesOpen: false,
-  error: "",
-});
-
-const createUsageGroup = (location = ""): UsageGroup => ({
-  id: crypto.randomUUID(),
-  location,
-  locationError: "",
-  entries: [createUsageEntry()],
-});
 
 const getItemDisplayName = (row: InventoryRow): string => {
   const name = String(row.values.itemName ?? "").trim();
   return name || `Item ${row.id.slice(0, 8)}`;
 };
 
-/* ── Custom autocomplete dropdown ──────────────────────────────────────── */
+const createRestockEntry = (): RestockEntry => ({
+  id: crypto.randomUUID(),
+  itemId: "",
+  itemSearch: "",
+  quantityToAdd: "",
+  expirationDate: "",
+  needsExpiration: false,
+  error: "",
+});
 
-type AutocompleteOption = {
-  id: string;
-  name: string;
-  quantity: number;
-  expirationDate: string;
-};
+const createRestockGroup = (location = ""): RestockGroup => ({
+  id: crypto.randomUUID(),
+  location,
+  locationError: "",
+  entries: [createRestockEntry()],
+});
+
+/* ── Autocomplete (no expiration display) ──────────────────────────────── */
 
 function ItemAutocomplete({
   options,
@@ -212,10 +190,7 @@ function ItemAutocomplete({
       </div>
       {selectedId && (
         <span className="usage-autocomplete-badge">
-          Qty: {options.find((o) => o.id === selectedId)?.quantity ?? "—"}
-          {options.find((o) => o.id === selectedId)?.expirationDate
-            ? ` · Exp ${options.find((o) => o.id === selectedId)?.expirationDate}`
-            : ""}
+          Current stock: {options.find((o) => o.id === selectedId)?.quantity ?? "—"}
         </span>
       )}
       {showDropdown && (
@@ -230,10 +205,7 @@ function ItemAutocomplete({
               onClick={() => selectOption(opt)}
             >
               <span className="usage-autocomplete-option-name">{opt.name}</span>
-              <span className="usage-autocomplete-option-meta">
-                Qty {opt.quantity}
-                {opt.expirationDate ? ` · ${opt.expirationDate}` : ""}
-              </span>
+              <span className="usage-autocomplete-option-meta">Qty {opt.quantity}</span>
             </li>
           ))}
         </ul>
@@ -242,16 +214,14 @@ function ItemAutocomplete({
   );
 }
 
-/* ── Quantity Stepper ──────────────────────────────────────────────────── */
+/* ── Quantity Stepper (no max cap) ─────────────────────────────────────── */
 
 function QtyStepper({
   value,
-  max,
   onChange,
   disabled,
 }: {
   value: string;
-  max: number;
   onChange: (v: string) => void;
   disabled: boolean;
 }) {
@@ -272,7 +242,6 @@ function QtyStepper({
         className="usage-qty-input"
         inputMode="numeric"
         min={0}
-        max={max}
         step="any"
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -283,7 +252,7 @@ function QtyStepper({
         type="button"
         className="usage-qty-btn"
         onClick={() => onChange(String(num + 1))}
-        disabled={disabled || num >= max}
+        disabled={disabled}
         aria-label="Increase quantity"
       >
         +
@@ -294,7 +263,7 @@ function QtyStepper({
 
 /* ── Main component ────────────────────────────────────────────────────── */
 
-export function InventoryUsagePage() {
+export function QuickAddPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -302,9 +271,10 @@ export function InventoryUsagePage() {
   const [loadingMessage, setLoadingMessage] = useState(() => pickUsageLine());
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
-  const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup()]);
-  const [recentSubmissions, setRecentSubmissions] = useState<import("../lib/inventoryApi").PendingSubmission[]>([]);
+  const [groups, setGroups] = useState<RestockGroup[]>([createRestockGroup()]);
   const [formError, setFormError] = useState("");
+
+  /* ── Data loading ── */
 
   const refreshInventoryRows = useCallback(
     async (opts?: { initial?: boolean; silent?: boolean }) => {
@@ -335,7 +305,7 @@ export function InventoryUsagePage() {
             continue;
           }
           if (!silent) {
-            setLoadError(err?.message ?? "Failed to load usage form");
+            setLoadError(err?.message ?? "Failed to load restock form");
           }
           if (initial) {
             setLoading(false);
@@ -350,16 +320,6 @@ export function InventoryUsagePage() {
   useEffect(() => {
     void refreshInventoryRows({ initial: true });
   }, [refreshInventoryRows]);
-
-  const refreshSubmissions = useCallback(() => {
-    listPendingSubmissions()
-      .then((subs) => setRecentSubmissions(subs))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    refreshSubmissions();
-  }, [refreshSubmissions]);
 
   useEffect(() => {
     if (loading) return;
@@ -378,7 +338,29 @@ export function InventoryUsagePage() {
     };
   }, [loading, refreshInventoryRows]);
 
+  /* ── Derived state ── */
+
   const rowById = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
+
+  const expirationDateKey = useMemo(() => {
+    const fromColumns = columns.find((column) => {
+      const keyLoose = normalizeLooseKey(String(column.key ?? ""));
+      const labelLoose = normalizeLooseKey(String(column.label ?? ""));
+      return keyLoose === "expirationdate" || labelLoose === "expirationdate";
+    });
+    if (fromColumns) return fromColumns.key;
+
+    const rowKeys = new Set<string>();
+    for (const row of rows) {
+      for (const key of Object.keys(row.values ?? {})) {
+        rowKeys.add(key);
+      }
+    }
+    for (const key of rowKeys) {
+      if (normalizeLooseKey(key) === "expirationdate") return key;
+    }
+    return null;
+  }, [columns, rows]);
 
   const locationKey = useMemo(() => {
     const fromColumns = columns.find((column) => {
@@ -400,46 +382,20 @@ export function InventoryUsagePage() {
     return null;
   }, [columns, rows]);
 
-  const notesKey = useMemo(() => {
-    const fromColumns = columns.find((column) => {
-      const keyLoose = normalizeLooseKey(String(column.key ?? ""));
-      const labelLoose = normalizeLooseKey(String(column.label ?? ""));
-      return keyLoose === "notes" || keyLoose === "note" || labelLoose === "notes" || labelLoose === "note";
-    });
-    if (fromColumns) return fromColumns.key;
-
-    const rowKeys = new Set<string>();
-    for (const row of rows) {
-      for (const key of Object.keys(row.values ?? {})) {
-        rowKeys.add(key);
-      }
-    }
-    for (const key of rowKeys) {
-      const loose = normalizeLooseKey(key);
-      if (loose === "notes" || loose === "note") return key;
-    }
-    return null;
-  }, [columns, rows]);
-
-  const effectiveLocationKey = locationKey;
-  const effectiveNotesKey = notesKey;
-
   const locationValues = useMemo(() => {
-    if (!effectiveLocationKey) return [] as string[];
+    if (!locationKey) return [] as string[];
     return Array.from(
       new Set(
         rows
-          .map((row) => String(row.values[effectiveLocationKey] ?? "").trim())
+          .map((row) => String(row.values[locationKey] ?? "").trim())
           .filter((value) => value.length > 0),
       ),
     ).sort((a, b) => a.localeCompare(b));
-  }, [effectiveLocationKey, rows]);
+  }, [locationKey, rows]);
 
-  // Only show the location picker when there are 2+ distinct locations
-  const showLocationPicker = effectiveLocationKey !== null && locationValues.length > 1;
-  const singleLocation = effectiveLocationKey !== null && locationValues.length === 1 ? locationValues[0] : null;
+  const showLocationPicker = locationKey !== null && locationValues.length > 1;
+  const singleLocation = locationKey !== null && locationValues.length === 1 ? locationValues[0] : null;
 
-  // Auto-assign the single location to all groups when there's exactly one
   useEffect(() => {
     if (!singleLocation) return;
     setGroups((prev) =>
@@ -453,9 +409,9 @@ export function InventoryUsagePage() {
     (location: string): AutocompleteOption[] =>
       rows
         .filter((row) => {
-          if (!effectiveLocationKey) return true;
+          if (!locationKey) return true;
           if (!location.trim()) return false;
-          return String(row.values[effectiveLocationKey] ?? "").trim() === location;
+          return String(row.values[locationKey] ?? "").trim() === location;
         })
         .filter((row) => String(row.values.itemName ?? "").trim().length > 0)
         .slice()
@@ -464,23 +420,25 @@ export function InventoryUsagePage() {
           id: row.id,
           name: getItemDisplayName(row),
           quantity: Number(row.values.quantity ?? 0),
-          expirationDate: toDateInputValue(row.values.expirationDate),
         })),
-    [rows, effectiveLocationKey],
+    [rows, locationKey],
   );
 
+  // Clear stale selections when location changes or rows refresh
   useEffect(() => {
     setGroups((prev) =>
       prev.map((group) => {
         const validIds = new Set(getItemOptionsForLocation(group.location).map((item) => item.id));
         const nextEntries = group.entries.map((entry) => {
           if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-          return { ...entry, itemId: "", itemSearch: "", notes: "", notesOpen: false, error: "" };
+          return { ...entry, itemId: "", itemSearch: "", needsExpiration: false, expirationDate: "", error: "" };
         });
         return { ...group, entries: nextEntries };
       }),
     );
   }, [getItemOptionsForLocation]);
+
+  /* ── Group / entry helpers ── */
 
   const clearErrors = () => {
     setFormError("");
@@ -493,19 +451,18 @@ export function InventoryUsagePage() {
     );
   };
 
-  const updateGroup = (groupId: string, patch: Partial<UsageGroup>) => {
+  const updateGroup = (groupId: string, patch: Partial<RestockGroup>) => {
     setGroups((prev) =>
       prev.map((group) => {
-        if (group.id !== groupId) return { ...group };
+        if (group.id !== groupId) return group;
         const next = { ...group, ...patch };
-        // When the location changes, clear entries whose items don't exist in the new location
         if ("location" in patch && patch.location !== group.location) {
           const validIds = new Set(
             getItemOptionsForLocation(patch.location ?? "").map((o) => o.id),
           );
           next.entries = next.entries.map((entry) => {
             if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-            return { ...entry, itemId: "", itemSearch: "", quantityUsed: "", notes: "", notesOpen: false, error: "" };
+            return { ...entry, itemId: "", itemSearch: "", quantityToAdd: "", needsExpiration: false, expirationDate: "", error: "" };
           });
         }
         return next;
@@ -513,7 +470,7 @@ export function InventoryUsagePage() {
     );
   };
 
-  const updateEntry = (groupId: string, entryId: string, patch: Partial<UsageEntry>) => {
+  const updateEntry = (groupId: string, entryId: string, patch: Partial<RestockEntry>) => {
     setGroups((prev) =>
       prev.map((group) => {
         if (group.id !== groupId) return group;
@@ -528,11 +485,17 @@ export function InventoryUsagePage() {
   };
 
   const onSelectItem = (groupId: string, entryId: string, itemId: string) => {
-    const options = getItemOptionsForLocation(groups.find((group) => group.id === groupId)?.location ?? "");
-    const selectedOption = options.find((item) => item.id === itemId);
+    const row = rowById.get(itemId);
+    const name = row ? getItemDisplayName(row) : "";
+    const hasExpiration =
+      !!expirationDateKey &&
+      !!row &&
+      String(row.values[expirationDateKey] ?? "").trim().length > 0;
     updateEntry(groupId, entryId, {
       itemId,
-      itemSearch: selectedOption?.name ?? "",
+      itemSearch: name,
+      needsExpiration: hasExpiration,
+      expirationDate: "",
       error: "",
     });
   };
@@ -541,6 +504,8 @@ export function InventoryUsagePage() {
     updateEntry(groupId, entryId, {
       itemSearch: value,
       itemId: "",
+      needsExpiration: false,
+      expirationDate: "",
       error: "",
     });
   };
@@ -549,7 +514,7 @@ export function InventoryUsagePage() {
     setGroups((prev) =>
       prev.map((group) =>
         group.id === groupId
-          ? { ...group, entries: [...group.entries, createUsageEntry()] }
+          ? { ...group, entries: [...group.entries, createRestockEntry()] }
           : group,
       ),
     );
@@ -566,7 +531,7 @@ export function InventoryUsagePage() {
   };
 
   const addLocationSection = () => {
-    setGroups((prev) => [...prev, createUsageGroup()]);
+    setGroups((prev) => [...prev, createRestockGroup()]);
   };
 
   const removeLocationSection = (groupId: string) => {
@@ -576,14 +541,26 @@ export function InventoryUsagePage() {
     });
   };
 
+  /* ── Submit ── */
+
   const onSubmit = async () => {
     if (submitting) return;
     clearErrors();
-    const normalized: InventoryUsageEntryInput[] = [];
+
+    // Refresh to get latest quantities before saving
+    await refreshInventoryRows({ silent: true });
+
     let hasError = false;
 
-    const nextGroups = groups.map((group, g) => {
-      const groupLabel = showLocationPicker ? `Location section ${g + 1}` : `Section ${g + 1}`;
+    type ValidEntry = {
+      itemId: string;
+      quantityToAdd: number;
+      expirationDate: string;
+      needsExpiration: boolean;
+    };
+    const validEntries: ValidEntry[] = [];
+
+    const nextGroups = groups.map((group) => {
       let locationError = "";
 
       if (showLocationPicker && !group.location.trim()) {
@@ -591,19 +568,21 @@ export function InventoryUsagePage() {
         hasError = true;
       }
 
-      const nextEntries = group.entries.map((entry, i) => {
+      const nextEntries = group.entries.map((entry) => {
         const itemId = entry.itemId.trim();
-        const quantityUsed = Number(entry.quantityUsed);
-        const notes = entry.notes.trim();
-        const isEmpty = !itemId && entry.quantityUsed.trim() === "" && notes === "";
+        const quantityToAdd = Number(entry.quantityToAdd);
+        const isEmpty = !itemId && entry.quantityToAdd.trim() === "";
         if (isEmpty) return entry;
 
         let error = "";
         if (!itemId) {
           error = "Select an item";
           hasError = true;
-        } else if (!Number.isFinite(quantityUsed) || quantityUsed <= 0) {
+        } else if (!Number.isFinite(quantityToAdd) || quantityToAdd <= 0) {
           error = "Enter a quantity greater than 0";
+          hasError = true;
+        } else if (entry.needsExpiration && !entry.expirationDate) {
+          error = "Enter an expiration date";
           hasError = true;
         } else {
           const row = rowById.get(itemId);
@@ -611,18 +590,12 @@ export function InventoryUsagePage() {
             error = "Item not found";
             hasError = true;
           } else {
-            const available = Number(row.values.quantity ?? 0);
-            if (!Number.isFinite(available) || quantityUsed > available) {
-              error = `Exceeds available (${available})`;
-              hasError = true;
-            } else {
-              normalized.push({
-                itemId,
-                quantityUsed,
-                notes: notes || undefined,
-                location: effectiveLocationKey ? group.location : undefined,
-              });
-            }
+            validEntries.push({
+              itemId,
+              quantityToAdd,
+              expirationDate: entry.expirationDate,
+              needsExpiration: entry.needsExpiration,
+            });
           }
         }
         return { ...entry, error };
@@ -632,34 +605,87 @@ export function InventoryUsagePage() {
     });
 
     setGroups(nextGroups);
-
     if (hasError) return;
 
-    if (normalized.length === 0) {
-      setFormError("Add at least one item to submit.");
+    if (validEntries.length === 0) {
+      setFormError("Add at least one item to restock.");
       return;
     }
 
-    const submittedLines = normalized.map((entry) => {
+    // Merge duplicate non-expiration entries for the same item
+    const mergedMap = new Map<string, ValidEntry>();
+    const expirationEntries: ValidEntry[] = [];
+
+    for (const entry of validEntries) {
+      if (entry.needsExpiration) {
+        expirationEntries.push(entry);
+      } else {
+        const existing = mergedMap.get(entry.itemId);
+        if (existing) {
+          existing.quantityToAdd += entry.quantityToAdd;
+        } else {
+          mergedMap.set(entry.itemId, { ...entry });
+        }
+      }
+    }
+
+    // Build rows to save
+    const rowsToSave: InventoryRow[] = [];
+    const maxPosition = rows.length > 0 ? Math.max(...rows.map((r) => r.position)) : 0;
+    let newRowOffset = 0;
+
+    // Non-expiration: increment existing row quantity
+    for (const entry of mergedMap.values()) {
+      const originalRow = rowById.get(entry.itemId);
+      if (!originalRow) continue;
+      const currentQty = Number(originalRow.values.quantity ?? 0);
+      rowsToSave.push({
+        ...originalRow,
+        values: {
+          ...originalRow.values,
+          quantity: currentQty + entry.quantityToAdd,
+        },
+      });
+    }
+
+    // Expiration: create new rows
+    for (const entry of expirationEntries) {
+      const originalRow = rowById.get(entry.itemId);
+      if (!originalRow) continue;
+      newRowOffset++;
+      rowsToSave.push({
+        id: crypto.randomUUID(),
+        position: maxPosition + newRowOffset,
+        values: {
+          ...originalRow.values,
+          quantity: entry.quantityToAdd,
+          ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
+        },
+      });
+    }
+
+    // Build summary for feedback
+    const summaryLines = validEntries.map((entry) => {
       const row = rowById.get(entry.itemId);
       const name = row ? getItemDisplayName(row) : entry.itemId;
-      return `${name} ×${entry.quantityUsed}`;
+      return `${name} +${entry.quantityToAdd}`;
     });
 
     setSubmitting(true);
     setFeedback(null);
     try {
-      await submitInventoryUsage(normalized);
-      setGroups([createUsageGroup()]);
-      const itemList = submittedLines.join(", ");
-      setFeedback({ type: "success", message: `Submitted: ${itemList} — pending approval.` });
-      refreshSubmissions();
+      await saveInventoryItems(rowsToSave, []);
+      setGroups([createRestockGroup(singleLocation ?? "")]);
+      setFeedback({ type: "success", message: `Restocked: ${summaryLines.join(", ")}` });
+      void refreshInventoryRows({ silent: true });
     } catch (err: any) {
-      setFeedback({ type: "error", message: err?.message ?? "Failed to submit usage" });
+      setFeedback({ type: "error", message: err?.message ?? "Failed to save restock" });
     } finally {
       setSubmitting(false);
     }
   };
+
+  /* ── Render ── */
 
   if (loading) {
     return (
@@ -680,15 +706,11 @@ export function InventoryUsagePage() {
     );
   }
 
-  const recentActivity = recentSubmissions
-    .filter((s) => s.status !== "rejected")
-    .slice(0, 1);
-
   return (
     <section className="app-content">
-      <div className="app-card usage-card">
+      <div className="app-card usage-card quickadd-form">
         <header className="usage-header">
-          <h2 className="usage-title">Log Usage</h2>
+          <h2 className="usage-title">Quick Add / Restock</h2>
         </header>
 
         {feedback && (
@@ -718,11 +740,11 @@ export function InventoryUsagePage() {
                 {showLocationPicker && (
                   <div className="usage-location-wrap">
                     <div className="usage-location-field">
-                      <label className="usage-field-label" htmlFor={`usage-location-select-${group.id}`}>
+                      <label className="usage-field-label" htmlFor={`quickadd-location-select-${group.id}`}>
                         Location
                       </label>
                       <select
-                        id={`usage-location-select-${group.id}`}
+                        id={`quickadd-location-select-${group.id}`}
                         className={`usage-location-select${group.locationError ? " usage-input--error" : ""}`}
                         value={group.location}
                         onChange={(event) => updateGroup(group.id, { location: event.target.value, locationError: "" })}
@@ -754,119 +776,70 @@ export function InventoryUsagePage() {
                 )}
 
                 <div className="usage-entries">
-                  {group.entries.map((entry) => {
-                    const selectedItem = itemOptions.find((o) => o.id === entry.itemId);
-                    const maxQty = selectedItem?.quantity ?? 9999;
-                    return (
-                      <div className={`usage-entry${entry.error ? " usage-entry--error" : ""}`} key={entry.id}>
-                        <div className="usage-entry-main">
-                          <div className="usage-entry-item">
-                            <label className="usage-field-label">Item</label>
-                            <ItemAutocomplete
-                              options={itemOptions}
-                              value={entry.itemSearch}
-                              selectedId={entry.itemId}
-                              onSelect={(id) => onSelectItem(group.id, entry.id, id)}
-                              onChange={(v) => onItemSearchChange(group.id, entry.id, v)}
-                              onClear={() =>
-                                updateEntry(group.id, entry.id, {
-                                  itemId: "",
-                                  itemSearch: "",
-                                  error: "",
-                                })
-                              }
-                              disabled={submitting || (showLocationPicker ? !group.location : false)}
-                              placeholder="Search items..."
-                            />
-                          </div>
-                          <div className="usage-entry-qty">
-                            <label className="usage-field-label">Qty Used</label>
-                            <QtyStepper
-                              value={entry.quantityUsed}
-                              max={maxQty}
-                              onChange={(v) => updateEntry(group.id, entry.id, { quantityUsed: v, error: "" })}
-                              disabled={submitting}
-                            />
-                          </div>
-                          {group.entries.length > 1 && (
-                            <button
-                              type="button"
-                              className="usage-remove-line-btn"
-                              onClick={() => removeLine(group.id, entry.id)}
-                              disabled={submitting}
-                              aria-label="Remove line"
-                            >
-                              ×
-                            </button>
-                          )}
+                  {group.entries.map((entry) => (
+                    <div className={`usage-entry${entry.error ? " usage-entry--error" : ""}`} key={entry.id}>
+                      <div className="usage-entry-main">
+                        <div className="usage-entry-item">
+                          <label className="usage-field-label">Item</label>
+                          <ItemAutocomplete
+                            options={itemOptions}
+                            value={entry.itemSearch}
+                            selectedId={entry.itemId}
+                            onSelect={(id) => onSelectItem(group.id, entry.id, id)}
+                            onChange={(v) => onItemSearchChange(group.id, entry.id, v)}
+                            onClear={() =>
+                              updateEntry(group.id, entry.id, {
+                                itemId: "",
+                                itemSearch: "",
+                                needsExpiration: false,
+                                expirationDate: "",
+                                error: "",
+                              })
+                            }
+                            disabled={submitting || (showLocationPicker ? !group.location : false)}
+                            placeholder="Search items..."
+                          />
                         </div>
-
-                        {(
-                          <div className="usage-entry-notes">
-                            {!entry.notesOpen && entry.notes.trim().length === 0 ? (
-                              <button
-                                type="button"
-                                className="usage-add-note-btn"
-                                onClick={() => updateEntry(group.id, entry.id, { notesOpen: true })}
-                                disabled={submitting}
-                              >
-                                + Add note
-                              </button>
-                            ) : (
-                              <div className="usage-note-input-wrap">
-                                <input
-                                  type="text"
-                                  className="usage-note-input"
-                                  value={entry.notes}
-                                  onChange={(event) =>
-                                    updateEntry(group.id, entry.id, { notes: event.target.value, notesOpen: true })
-                                  }
-                                  onBlur={() => {
-                                    setTimeout(() => {
-                                      setGroups((prev) =>
-                                        prev.map((g) => {
-                                          if (g.id !== group.id) return g;
-                                          return {
-                                            ...g,
-                                            entries: g.entries.map((row) => {
-                                              if (row.id !== entry.id) return row;
-                                              if (row.notes.trim().length > 0) return row;
-                                              return { ...row, notesOpen: false };
-                                            }),
-                                          };
-                                        }),
-                                      );
-                                    }, 0);
-                                  }}
-                                  disabled={submitting}
-                                  placeholder="Job, room, reason..."
-                                  autoFocus
-                                />
-                                {entry.notes.trim().length > 0 && (
-                                  <button
-                                    type="button"
-                                    className="usage-note-clear"
-                                    onMouseDown={(event) => event.preventDefault()}
-                                    onClick={() =>
-                                      updateEntry(group.id, entry.id, { notes: "", notesOpen: false })
-                                    }
-                                    disabled={submitting}
-                                    aria-label="Clear note"
-                                  >
-                                    ×
-                                  </button>
-                                )}
-                              </div>
-                            )}
+                        <div className="usage-entry-qty">
+                          <label className="usage-field-label">Qty to Add</label>
+                          <QtyStepper
+                            value={entry.quantityToAdd}
+                            onChange={(v) => updateEntry(group.id, entry.id, { quantityToAdd: v, error: "" })}
+                            disabled={submitting}
+                          />
+                        </div>
+                        {entry.needsExpiration && (
+                          <div className="quickadd-entry-expiration">
+                            <label className="usage-field-label">Expiration Date</label>
+                            <input
+                              type="date"
+                              className="quickadd-date-input"
+                              value={entry.expirationDate}
+                              onChange={(e) =>
+                                updateEntry(group.id, entry.id, { expirationDate: e.target.value, error: "" })
+                              }
+                              disabled={submitting}
+                            />
                           </div>
                         )}
-
-                        {entry.error && (
-                          <span className="usage-inline-error">{entry.error}</span>
+                        {group.entries.length > 1 && (
+                          <button
+                            type="button"
+                            className="usage-remove-line-btn"
+                            onClick={() => removeLine(group.id, entry.id)}
+                            disabled={submitting}
+                            aria-label="Remove line"
+                          >
+                            ×
+                          </button>
                         )}
                       </div>
-                    );
-                  })}
+
+                      {entry.error && (
+                        <span className="usage-inline-error">{entry.error}</span>
+                      )}
+                    </div>
+                  ))}
                 </div>
 
                 <button
@@ -901,30 +874,9 @@ export function InventoryUsagePage() {
             onClick={() => void onSubmit()}
             disabled={submitting}
           >
-            {submitting ? "Submitting..." : "Submit Usage"}
+            {submitting ? "Saving..." : "Save Restock"}
           </button>
         </div>
-
-        {recentActivity.length > 0 && (
-          <div className="usage-activity">
-            <h3 className="usage-activity-title">Recent Checkouts</h3>
-            <ul className="usage-activity-list">
-              {recentActivity.map((sub) => {
-                let entries: import("../lib/inventoryApi").PendingEntry[] = [];
-                try { entries = JSON.parse(sub.entriesJson); } catch { entries = []; }
-                const label = entries.map((e) => `${e.itemName} ×${e.quantityUsed}`).join(", ");
-                const when = formatActivityTime(sub.submittedAt);
-                return (
-                  <li key={sub.id} className="usage-activity-row">
-                    <span className="usage-activity-who">{sub.submittedByName || sub.submittedByEmail}</span>
-                    <span className="usage-activity-items">{label}</span>
-                    <span className="usage-activity-when">{when}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
       </div>
     </section>
   );

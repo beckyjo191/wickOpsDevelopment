@@ -8,6 +8,8 @@ import { DashboardPage } from "./components/DashboardPage";
 import { AppToolbar } from "./components/AppToolbar";
 import { InventoryUsagePage } from "./components/InventoryUsagePage";
 import { OnboardingPage } from "./components/OnboardingPage";
+import { InventorySubNav } from "./components/InventorySubNav";
+import { QuickAddPage } from "./components/QuickAddPage";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -15,12 +17,7 @@ import {
   saveThemePreference,
   type ThemePreference,
 } from "./lib/themePreference";
-import {
-  DEFAULT_USAGE_FORM_PREFERENCES,
-  loadUsageFormPreferences,
-  saveUsageFormPreferences,
-  type UsageFormPreferences,
-} from "./lib/usageFormPreferences";
+
 import { normalizeModuleKeys, type AppModuleKey } from "./lib/moduleRegistry";
 import type { InventoryFilter } from "./components/InventoryPage";
 
@@ -28,22 +25,13 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
 const INVITES_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_INVITES_API_BASE_URL);
 const VIEW_STORAGE_KEY = "wickops.activeView";
-const USAGE_FORM_PREFERENCES_STORAGE_KEY = "wickops.usageFormPreferences";
+
 const SUBSCRIPTION_RETRY_MS = 2000;
 const MAX_SUBSCRIPTION_RETRIES = 6;
-const APP_LOADING_LINES = [
-  "Warming up the dashboard hamsters...",
-  "Polishing your seat count...",
-  "Negotiating with the loading bar...",
-  "Counting pixels twice for accuracy...",
-  "Folding business logic into tiny squares...",
-];
-
-const pickRandom = (items: string[]): string =>
-  items[Math.floor(Math.random() * items.length)] ?? "Loading...";
+import { pickAppLine } from "./lib/loadingLines";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
-type AppView = "dashboard" | "inventory" | "usage" | "invite" | "settings";
+type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "invite" | "settings";
 type BreadcrumbItem = {
   label: string;
   onClick?: () => void;
@@ -53,19 +41,22 @@ const isAppView = (value: unknown): value is AppView =>
   value === "dashboard" ||
   value === "inventory" ||
   value === "usage" ||
+  value === "quickadd" ||
   value === "invite" ||
   value === "settings";
 
 export default function App() {
   const { user, authStatus, signOut } = useAuthenticator() as any;
   const [currentUserEmail, setCurrentUserEmail] = useState("");
-  const [view, setView] = useState<AppView>("dashboard");
+  const [view, setViewRaw] = useState<AppView>("dashboard");
   const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);
-  const [loadingLine, setLoadingLine] = useState(() => pickRandom(APP_LOADING_LINES));
+  const setView = (v: AppView) => {
+    if (v !== "inventory") setInventoryInitialFilter(undefined);
+    setViewRaw(v);
+  };
+  const [loadingLine, setLoadingLine] = useState(() => pickAppLine());
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
-  const [usageFormPreferences, setUsageFormPreferences] = useState<UsageFormPreferences>(
-    DEFAULT_USAGE_FORM_PREFERENCES,
-  );
+
   const userViewScope =
     String(user?.attributes?.sub ?? "") ||
     String(user?.username ?? "") ||
@@ -103,8 +94,7 @@ export default function App() {
     onboardingCompleted: true,
     loadError: false,
   });
-  const usagePreferencesScope = `${subState.organizationId || "personal"}.${userViewScope || "anonymous"}`;
-  const scopedUsagePreferencesStorageKey = `${USAGE_FORM_PREFERENCES_STORAGE_KEY}.${usagePreferencesScope}`;
+
 
   useEffect(() => {
     if (authStatus !== "authenticated") return;
@@ -241,13 +231,6 @@ export default function App() {
     saveThemePreference(themePreference);
   }, [themePreference]);
 
-  useEffect(() => {
-    setUsageFormPreferences(loadUsageFormPreferences(scopedUsagePreferencesStorageKey));
-  }, [scopedUsagePreferencesStorageKey]);
-
-  useEffect(() => {
-    saveUsageFormPreferences(scopedUsagePreferencesStorageKey, usageFormPreferences);
-  }, [scopedUsagePreferencesStorageKey, usageFormPreferences]);
 
   useEffect(() => {
     if (authStatus !== "authenticated") {
@@ -304,7 +287,7 @@ export default function App() {
       return;
     }
     const interval = window.setInterval(() => {
-      setLoadingLine(pickRandom(APP_LOADING_LINES));
+      setLoadingLine(pickAppLine());
     }, 2200);
     return () => window.clearInterval(interval);
   }, [authStatus, subState.status, subState.loadError]);
@@ -317,10 +300,18 @@ export default function App() {
     if (view === "usage" && !subState.allowedModules.includes("usage")) {
       setView("dashboard");
     }
+    if (view === "quickadd" && !subState.allowedModules.includes("inventory")) {
+      setView("dashboard");
+    }
   }, [view, subState.allowedModules]);
 
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
-    return <div>{loadingLine}</div>;
+    return (
+      <div className="app-loading-fullscreen">
+        <span className="app-spinner" aria-hidden="true" />
+        <span>{loadingLine}</span>
+      </div>
+    );
   }
 
   if (subState.loadError) {
@@ -383,10 +374,10 @@ export default function App() {
           { label: "Dashboard", onClick: () => setView("dashboard") },
           { label: "Inventory" },
         ]
-      : view === "usage"
+      : view === "usage" || view === "quickadd"
         ? [
             { label: "Dashboard", onClick: () => setView("dashboard") },
-            { label: "Usage Form" },
+            { label: "Inventory" },
           ]
       : view === "settings"
         ? [
@@ -414,8 +405,6 @@ export default function App() {
         canManageInventoryColumns={canManageInventoryColumns}
         themePreference={themePreference}
         onThemePreferenceChange={setThemePreference}
-        usageFormPreferences={usageFormPreferences}
-        onUsageFormPreferencesChange={setUsageFormPreferences}
         onCurrentUserAllowedModulesChange={(allowedModules) =>
           setSubState((prev) => ({ ...prev, allowedModules }))
         }
@@ -450,7 +439,16 @@ export default function App() {
     );
   } else if (view === "usage") {
     content = canAccessUsage ? (
-      <InventoryUsagePage usageFormPreferences={usageFormPreferences} />
+      <InventoryUsagePage />
+    ) : (
+      <DashboardPage
+        accessibleModules={subState.allowedModules}
+        onNavigateToModule={(key) => setView(key as AppView)}
+      />
+    );
+  } else if (view === "quickadd") {
+    content = canAccessInventory && canEditInventory ? (
+      <QuickAddPage />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
@@ -508,11 +506,9 @@ export default function App() {
   return (
     <section className="app-shell">
       <AppToolbar
-        currentView={view}
         userName={userName}
         orgName={subState.orgName}
-        accessibleModules={subState.allowedModules}
-        onNavigateToModule={(key) => setView(key as AppView)}
+        onNavigateToDashboard={() => setView("dashboard")}
         onOpenSettings={() => setView("settings")}
         onLogout={signOut}
       />
@@ -540,6 +536,13 @@ export default function App() {
           </span>
         ))}
       </nav>
+      {(view === "inventory" || view === "usage" || view === "quickadd") && (
+        <InventorySubNav
+          activeView={view}
+          accessibleModules={subState.allowedModules}
+          onNavigate={(v) => setView(v)}
+        />
+      )}
       {content}
     </section>
   );

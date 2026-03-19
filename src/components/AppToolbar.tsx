@@ -1,23 +1,18 @@
 import type { MouseEvent } from "react";
 import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
-import { MODULE_REGISTRY, type AppModuleKey } from "../lib/moduleRegistry";
 
 interface AppToolbarProps {
-  currentView: "dashboard" | "inventory" | "usage" | "invite" | "settings";
   userName: string;
   orgName?: string;
-  accessibleModules: AppModuleKey[];
-  onNavigateToModule: (key: AppModuleKey) => void;
+  onNavigateToDashboard: () => void;
   onOpenSettings: () => void;
   onLogout: () => void;
 }
 
 export function AppToolbar({
-  currentView,
   userName,
   orgName,
-  accessibleModules,
-  onNavigateToModule,
+  onNavigateToDashboard,
   onOpenSettings,
   onLogout,
 }: AppToolbarProps) {
@@ -28,31 +23,14 @@ export function AppToolbar({
 
   return (
     <header className="app-toolbar">
-      <a className="app-toolbar-logo-link" href="/">
+      <button
+        type="button"
+        className="app-toolbar-logo-link"
+        onClick={onNavigateToDashboard}
+      >
         <img className="app-toolbar-logo" src={logoThumb} alt="WickOps" />
         <span className="app-toolbar-brand-text">WickOps</span>
-      </a>
-
-      {accessibleModules.length > 0 ? (
-        <details className="app-module-menu">
-          <summary className="app-module-menu-trigger">Modules</summary>
-          <div className="app-module-menu-panel">
-            {MODULE_REGISTRY.filter((m) => accessibleModules.includes(m.key)).map((m) => (
-              <button
-                key={m.key}
-                className="app-module-menu-item"
-                onClick={(event) => {
-                  closeMenu(event);
-                  onNavigateToModule(m.key);
-                }}
-                aria-current={currentView === m.key ? "page" : undefined}
-              >
-                {m.name}
-              </button>
-            ))}
-          </div>
-        </details>
-      ) : null}
+      </button>
 
       <details className="app-user-menu">
         <summary className="app-user-menu-trigger">

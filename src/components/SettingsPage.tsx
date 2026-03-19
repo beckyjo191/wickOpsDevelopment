@@ -21,15 +21,13 @@ import {
   type InventoryColumn,
 } from "../lib/inventoryApi";
 import type { ThemePreference } from "../lib/themePreference";
-import type { UsageFormPreferences } from "../lib/usageFormPreferences";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "usageFormFields" | "inventoryColumns";
+type DisclosureKey = "appearance" | "userModuleAccess" | "inventoryColumns";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
   userModuleAccess: true,
-  usageFormFields: true,
   inventoryColumns: false,
 };
 
@@ -45,8 +43,6 @@ interface SettingsPageProps {
   currentUserId: string;
   themePreference: ThemePreference;
   onThemePreferenceChange: (preference: ThemePreference) => void;
-  usageFormPreferences: UsageFormPreferences;
-  onUsageFormPreferencesChange: (preferences: UsageFormPreferences) => void;
   onCurrentUserAllowedModulesChange: (allowedModules: AppModuleKey[]) => void;
   onCurrentUserDisplayNameChange: (displayName: string) => void;
   onCurrentUserEmailChange: (email: string) => void;
@@ -66,8 +62,6 @@ export function SettingsPage({
   currentUserId,
   themePreference,
   onThemePreferenceChange,
-  usageFormPreferences,
-  onUsageFormPreferencesChange,
   onCurrentUserAllowedModulesChange,
   onCurrentUserDisplayNameChange,
   onCurrentUserEmailChange,
@@ -82,7 +76,6 @@ export function SettingsPage({
     column.isCore || column.isRequired || nonEditableKeys.has(column.key);
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [newColumnName, setNewColumnName] = useState("");
-  const [usageFieldSearchTerm, setUsageFieldSearchTerm] = useState("");
   const [inventoryColumnSearchTerm, setInventoryColumnSearchTerm] = useState("");
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [savingColumn, setSavingColumn] = useState(false);
@@ -188,10 +181,6 @@ export function SettingsPage({
           typeof parsed.userModuleAccess === "boolean"
             ? parsed.userModuleAccess
             : DEFAULT_DISCLOSURE_STATE.userModuleAccess,
-        usageFormFields:
-          typeof parsed.usageFormFields === "boolean"
-            ? parsed.usageFormFields
-            : DEFAULT_DISCLOSURE_STATE.usageFormFields,
         inventoryColumns:
           typeof parsed.inventoryColumns === "boolean"
             ? parsed.inventoryColumns
@@ -212,60 +201,6 @@ export function SettingsPage({
       // ignore storage failures
     }
   }, [disclosureStorageKey, disclosures, loadedDisclosureKey]);
-
-  const hasLocationColumn = columns.some((column) => {
-    const keyLoose = normalizeLooseKey(String(column.key ?? ""));
-    const labelLoose = normalizeLooseKey(String(column.label ?? ""));
-    return keyLoose === "location" || labelLoose === "location";
-  });
-
-  const hasNotesColumn = columns.some((column) => {
-    const keyLoose = normalizeLooseKey(String(column.key ?? ""));
-    const labelLoose = normalizeLooseKey(String(column.label ?? ""));
-    return (
-      keyLoose === "notes" ||
-      keyLoose === "note" ||
-      labelLoose === "notes" ||
-      labelLoose === "note"
-    );
-  });
-
-  const getColumnPreferenceKey = (column: InventoryColumn): string =>
-    normalizeLooseKey(String(column.key || column.label || ""));
-
-  const isUsageColumnEnabled = (column: InventoryColumn): boolean => {
-    if (usageFormPreferences.mode === "all") return true;
-    const prefKey = getColumnPreferenceKey(column);
-    return usageFormPreferences.enabledColumnKeys.includes(prefKey);
-  };
-
-  const onToggleUsageColumn = (column: InventoryColumn, checked: boolean) => {
-    if (!canManageInventoryColumns) return;
-    const prefKey = getColumnPreferenceKey(column);
-    const allPrefKeys = columns
-      .map((item) => getColumnPreferenceKey(item))
-      .filter((value) => value.length > 0);
-
-    if (usageFormPreferences.mode === "all") {
-      if (checked) return;
-      onUsageFormPreferencesChange({
-        mode: "custom",
-        enabledColumnKeys: allPrefKeys.filter((value) => value !== prefKey),
-      });
-      return;
-    }
-
-    const next = new Set(usageFormPreferences.enabledColumnKeys);
-    if (checked) {
-      next.add(prefKey);
-    } else {
-      next.delete(prefKey);
-    }
-    onUsageFormPreferencesChange({
-      mode: "custom",
-      enabledColumnKeys: Array.from(next),
-    });
-  };
 
   const onAddColumn = async () => {
     if (!canManageInventoryColumns || !newColumnName.trim()) return;
@@ -512,13 +447,6 @@ export function SettingsPage({
     });
   };
 
-  const normalizedUsageFieldSearch = usageFieldSearchTerm.trim().toLowerCase();
-  const filteredUsageColumns = columns.filter((column) => {
-    if (!normalizedUsageFieldSearch) return true;
-    const label = String(column.label ?? "").toLowerCase();
-    const key = String(column.key ?? "").toLowerCase();
-    return label.includes(normalizedUsageFieldSearch) || key.includes(normalizedUsageFieldSearch);
-  });
   const normalizedInventoryColumnSearch = inventoryColumnSearchTerm.trim().toLowerCase();
   const filteredInventoryColumns = columns.filter((column) => {
     if (!normalizedInventoryColumnSearch) return true;
@@ -812,67 +740,6 @@ export function SettingsPage({
               Only administrators can manage module access.
             </p>
           )}
-        </details>
-
-        <details
-          className="settings-section spacer-top"
-          open={disclosures.usageFormFields}
-          onToggle={(event) => onDisclosureToggle("usageFormFields", event.currentTarget.open)}
-        >
-          <summary className="settings-section-title">Usage Form Fields</summary>
-          <p className="settings-section-copy">
-            Admins control which fields are allowed on the Usage Form.
-          </p>
-          <div className="inventory-search-wrap">
-            <input
-              className="inventory-search-input"
-              placeholder="Search usage fields..."
-              value={usageFieldSearchTerm}
-              onChange={(event) => setUsageFieldSearchTerm(event.target.value)}
-            />
-            {usageFieldSearchTerm ? (
-              <button
-                type="button"
-                className="inventory-search-clear"
-                onClick={() => setUsageFieldSearchTerm("")}
-                aria-label="Clear usage field search"
-                title="Clear usage field search"
-              >
-                ×
-              </button>
-            ) : null}
-          </div>
-          <div className="settings-columns-list">
-            {loadingColumns ? <div>Loading columns...</div> : null}
-            {!loadingColumns && columns.length === 0 ? <div>No inventory columns found.</div> : null}
-            {!loadingColumns && columns.length > 0 && filteredUsageColumns.length === 0 ? (
-              <div>No matching usage fields.</div>
-            ) : null}
-            {filteredUsageColumns.map((column) => (
-              <label className="settings-column-row" key={`usage-${column.id}`}>
-                <span className="settings-column-visibility">
-                  <input
-                    type="checkbox"
-                    checked={isUsageColumnEnabled(column)}
-                    disabled={!canManageInventoryColumns}
-                    onChange={(event) => onToggleUsageColumn(column, event.target.checked)}
-                  />
-                  <span>{column.label}</span>
-                </span>
-                {!column.isVisible ? <span className="settings-core-pill">Hidden in Inventory</span> : null}
-              </label>
-            ))}
-            {!canManageInventoryColumns ? (
-              <p className="settings-section-copy">
-                Only administrators can change Usage Form field selections.
-              </p>
-            ) : null}
-            {canManageInventoryColumns && !hasLocationColumn && !hasNotesColumn ? (
-              <p className="settings-section-copy">
-                Add a Location and/or Notes column to enable those optional Usage Form inputs.
-              </p>
-            ) : null}
-          </div>
         </details>
 
         <details

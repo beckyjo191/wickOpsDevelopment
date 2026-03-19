@@ -33,22 +33,7 @@ const AUTOSAVE_DELAY_MS = 20000;
 const UNDO_HISTORY_LIMIT = 80;
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "wickops.inventory.columnWidths:";
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
-const LOADING_LINES = [
-  "Counting bolts and pretending it's fun...",
-  "Teaching the forklift to whisper...",
-  "Dusting shelves for dramatic effect...",
-  "Arguing with barcodes...",
-  "Rehearsing the inventory roll call...",
-];
-const PROVISIONING_LINES = [
-  "Building table legs for your table...",
-  "Aligning columns with the moon phase...",
-  "Applying premium spreadsheet vibes...",
-  "Installing tiny seats for your rows...",
-];
-
-const pickRandom = (items: string[]): string =>
-  items[Math.floor(Math.random() * items.length)] ?? "Loading inventory...";
+import { pickInventoryLine, pickProvisioningLine } from "../lib/loadingLines";
 
 const normalizeHeaderKey = (value: string): string => value.trim().toLowerCase();
 
@@ -104,6 +89,7 @@ type PendingSubmissionCardProps = {
   editedQtys: Record<number, string>;
   buildLabel: (entry: PendingEntry) => string;
   onEditQty: (entryIndex: number, value: string) => void;
+  onApprove: () => Promise<void>;
   onDelete: () => Promise<void>;
 };
 
@@ -113,6 +99,7 @@ function PendingSubmissionCard({
   editedQtys,
   buildLabel,
   onEditQty,
+  onApprove,
   onDelete,
 }: PendingSubmissionCardProps) {
   const [busy, setBusy] = useState(false);
@@ -153,7 +140,12 @@ function PendingSubmissionCard({
         <tbody>
           {merged.map(({ entry, origIndex, totalQty }) => (
             <tr key={entry.itemId}>
-              <td className="inventory-pending-entry-name">{buildLabel(entry)}</td>
+              <td className="inventory-pending-entry-name">
+                {buildLabel(entry)}
+                {entry.notes && (
+                  <span className="inventory-pending-entry-note">{entry.notes}</span>
+                )}
+              </td>
               <td className="inventory-pending-entry-qty">
                 <input
                   type="number"
@@ -178,7 +170,15 @@ function PendingSubmissionCard({
           onClick={() => void handle(onDelete)}
           disabled={busy}
         >
-          {busy ? "Deleting..." : "Delete"}
+          Delete
+        </button>
+        <button
+          type="button"
+          className="button button-primary button-sm"
+          onClick={() => void handle(onApprove)}
+          disabled={busy}
+        >
+          {busy ? "Approving..." : "Approve"}
         </button>
       </div>
     </div>
@@ -212,6 +212,11 @@ export function InventoryPage({
   const activeFilter: InventoryFilter = activeTab === "pendingSubmissions" ? "all" : activeTab;
   const setActiveFilter = (f: InventoryFilter) => setActiveTabRaw(f);
 
+  // When navigating from dashboard with a filter, sync the tab
+  useEffect(() => {
+    if (initialFilter) setActiveTabRaw(initialFilter);
+  }, [initialFilter]);
+
   // Pending submissions state
   const [pendingSubmissions, setPendingSubmissions] = useState<PendingSubmission[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
@@ -240,7 +245,8 @@ export function InventoryPage({
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [editingDateCell, setEditingDateCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [loadError, setLoadError] = useState<string>("");
-  const [loadingMessage, setLoadingMessage] = useState(() => pickRandom(LOADING_LINES));
+  const [loadingMessage, setLoadingMessage] = useState(() => pickInventoryLine());
+  const isProvisioningRef = useRef(false);
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
   const resizeStateRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null);
@@ -394,7 +400,7 @@ export function InventoryPage({
     const load = async () => {
       setLoading(true);
       setLoadError("");
-      setLoadingMessage(pickRandom(LOADING_LINES));
+      setLoadingMessage(pickInventoryLine());
 
       while (!cancelled) {
         try {
@@ -406,7 +412,8 @@ export function InventoryPage({
         } catch (err: any) {
           if (cancelled) return;
           if (isInventoryProvisioningError(err)) {
-            setLoadingMessage(pickRandom(PROVISIONING_LINES));
+            isProvisioningRef.current = true;
+            setLoadingMessage(pickProvisioningLine());
             const retryAfterMs =
               Number(err.retryAfterMs) > 0 ? Number(err.retryAfterMs) : DEFAULT_PROVISIONING_RETRY_MS;
             await new Promise((resolve) => window.setTimeout(resolve, retryAfterMs));
@@ -428,10 +435,9 @@ export function InventoryPage({
   useEffect(() => {
     if (!loading) return;
     const interval = window.setInterval(() => {
-      setLoadingMessage((current) => {
-        const source = PROVISIONING_LINES.includes(current) ? PROVISIONING_LINES : LOADING_LINES;
-        return pickRandom(source);
-      });
+      setLoadingMessage(() =>
+        isProvisioningRef.current ? pickProvisioningLine() : pickInventoryLine(),
+      );
     }, 2200);
     return () => window.clearInterval(interval);
   }, [loading]);
@@ -525,6 +531,30 @@ export function InventoryPage({
   const effectiveCategoryFilter = categoryOptions.includes(categoryFilter)
     ? categoryFilter
     : "All Categories";
+
+  const tabCounts = useMemo(() => {
+    let expired = 0;
+    let exp30 = 0;
+    let exp60 = 0;
+    let lowStock = 0;
+    for (const row of rows) {
+      const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
+      if (daysUntil !== null && daysUntil < 0) expired++;
+      if (daysUntil !== null && daysUntil >= 0 && daysUntil <= 30) exp30++;
+      if (daysUntil !== null && daysUntil >= 0 && daysUntil <= 60) exp60++;
+      const quantityRaw = row.values.quantity;
+      const minQuantityRaw = row.values.minQuantity;
+      const quantity = Number(quantityRaw);
+      const minQuantity = Number(minQuantityRaw);
+      const hasMin =
+        minQuantityRaw !== null &&
+        minQuantityRaw !== undefined &&
+        String(minQuantityRaw).trim() !== "" &&
+        Number.isFinite(minQuantity);
+      if (hasMin && Number.isFinite(quantity) && quantity < minQuantity) lowStock++;
+    }
+    return { expired, exp30, exp60, lowStock };
+  }, [rows]);
 
   const filteredRows = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -1481,6 +1511,9 @@ export function InventoryPage({
                   aria-selected={activeTab === "expired"}
                 >
                   Expired
+                  {tabCounts.expired > 0 && activeTab !== "expired" ? (
+                    <span className="inventory-tab-badge">{tabCounts.expired}</span>
+                  ) : null}
                 </button>
                 <button
                   className={`inventory-tab-btn${activeTab === "exp30" ? " active" : ""}`}
@@ -1489,6 +1522,9 @@ export function InventoryPage({
                   aria-selected={activeTab === "exp30"}
                 >
                   Expiring Within 30 Days
+                  {tabCounts.exp30 > 0 && activeTab !== "exp30" ? (
+                    <span className="inventory-tab-badge">{tabCounts.exp30}</span>
+                  ) : null}
                 </button>
                 <button
                   className={`inventory-tab-btn${activeTab === "exp60" ? " active" : ""}`}
@@ -1497,6 +1533,9 @@ export function InventoryPage({
                   aria-selected={activeTab === "exp60"}
                 >
                   Expiring Within 60 Days
+                  {tabCounts.exp60 > 0 && activeTab !== "exp60" ? (
+                    <span className="inventory-tab-badge">{tabCounts.exp60}</span>
+                  ) : null}
                 </button>
               </>
             ) : null}
@@ -1508,6 +1547,9 @@ export function InventoryPage({
                 aria-selected={activeTab === "lowStock"}
               >
                 Low Stock
+                {tabCounts.lowStock > 0 && activeTab !== "lowStock" ? (
+                  <span className="inventory-tab-badge">{tabCounts.lowStock}</span>
+                ) : null}
               </button>
             ) : null}
             {canReviewSubmissions ? (
@@ -1658,6 +1700,12 @@ export function InventoryPage({
                           [sub.id]: { ...prev[sub.id], [entryIndex]: value },
                         }))
                       }
+                      onApprove={async () => {
+                        const anyEdited = Object.keys(subEdits).length > 0;
+                        await approveUsageSubmission(sub.id, anyEdited ? effectiveEntries : undefined);
+                        setPendingSubmissions((prev) => prev.filter((s) => s.id !== sub.id));
+                        setEditedQtys((prev) => { const next = { ...prev }; delete next[sub.id]; return next; });
+                      }}
                       onDelete={async () => {
                         await deleteUsageSubmission(sub.id);
                         setPendingSubmissions((prev) => prev.filter((s) => s.id !== sub.id));

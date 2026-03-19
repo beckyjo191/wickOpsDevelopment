@@ -400,27 +400,6 @@ export function InventoryUsagePage() {
     return null;
   }, [columns, rows]);
 
-  const notesKey = useMemo(() => {
-    const fromColumns = columns.find((column) => {
-      const keyLoose = normalizeLooseKey(String(column.key ?? ""));
-      const labelLoose = normalizeLooseKey(String(column.label ?? ""));
-      return keyLoose === "notes" || keyLoose === "note" || labelLoose === "notes" || labelLoose === "note";
-    });
-    if (fromColumns) return fromColumns.key;
-
-    const rowKeys = new Set<string>();
-    for (const row of rows) {
-      for (const key of Object.keys(row.values ?? {})) {
-        rowKeys.add(key);
-      }
-    }
-    for (const key of rowKeys) {
-      const loose = normalizeLooseKey(key);
-      if (loose === "notes" || loose === "note") return key;
-    }
-    return null;
-  }, [columns, rows]);
-
   const effectiveLocationKey = locationKey;
 
   const locationValues = useMemo(() => {
@@ -581,7 +560,7 @@ export function InventoryUsagePage() {
     const normalized: InventoryUsageEntryInput[] = [];
     let hasError = false;
 
-    const nextGroups = groups.map((group, g) => {
+    const nextGroups = groups.map((group) => {
       let locationError = "";
 
       if (showLocationPicker && !group.location.trim()) {

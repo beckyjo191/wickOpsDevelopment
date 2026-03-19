@@ -263,7 +263,7 @@ function QtyStepper({
 
 /* ── Main component ────────────────────────────────────────────────────── */
 
-export function QuickAddPage() {
+export function QuickAddPage({ selectedLocation }: { selectedLocation?: string | null }) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -271,7 +271,7 @@ export function QuickAddPage() {
   const [loadingMessage, setLoadingMessage] = useState(() => pickUsageLine());
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
-  const [groups, setGroups] = useState<RestockGroup[]>([createRestockGroup()]);
+  const [groups, setGroups] = useState<RestockGroup[]>([createRestockGroup(selectedLocation ?? "")]);
   const [formError, setFormError] = useState("");
 
   /* ── Data loading ── */

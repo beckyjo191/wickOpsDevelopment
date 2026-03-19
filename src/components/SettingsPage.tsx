@@ -5,6 +5,7 @@ import {
   updateUserAttributes,
 } from "aws-amplify/auth";
 import {
+  addInventoryLocation,
   createBillingPortalSession,
   createInventoryColumn,
   deleteInventoryColumn,
@@ -12,6 +13,8 @@ import {
   loadInventoryBootstrap,
   type ModuleAccessUser,
   type AppModuleKey,
+  removeInventoryLocation,
+  renameInventoryLocation,
   revokeUserAccess,
   syncCurrentUserEmail,
   updateUserModuleAccess,
@@ -19,15 +22,17 @@ import {
   updateInventoryColumnLabel,
   updateInventoryColumnVisibility,
   type InventoryColumn,
+  type InventoryRow,
 } from "../lib/inventoryApi";
 import type { ThemePreference } from "../lib/themePreference";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "inventoryColumns";
+type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
   userModuleAccess: true,
+  locations: true,
   inventoryColumns: false,
 };
 
@@ -100,6 +105,13 @@ export function SettingsPage({
   const [revokingUserId, setRevokingUserId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string>("");
   const [portalLoading, setPortalLoading] = useState(false);
+  const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
+  const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
+  const [newLocationName, setNewLocationName] = useState("");
+  const [savingLocation, setSavingLocation] = useState(false);
+  const [editingLocationName, setEditingLocationName] = useState<string | null>(null);
+  const [editingLocationValue, setEditingLocationValue] = useState("");
+  const [pendingDeleteLocation, setPendingDeleteLocation] = useState<string | null>(null);
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
   const [loadedDisclosureKey, setLoadedDisclosureKey] = useState<string>("");
   const disclosureStorageKey = `${SETTINGS_DISCLOSURES_STORAGE_KEY}.${currentUserId || "anonymous"}`;
@@ -117,6 +129,8 @@ export function SettingsPage({
               (a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0),
             ),
           );
+          setRegisteredLocations(bootstrap.registeredLocations ?? []);
+          setInventoryRows(bootstrap.items ?? []);
         }
       } catch (err) {
         console.error(err);
@@ -183,6 +197,10 @@ export function SettingsPage({
           typeof parsed.userModuleAccess === "boolean"
             ? parsed.userModuleAccess
             : DEFAULT_DISCLOSURE_STATE.userModuleAccess,
+        locations:
+          typeof parsed.locations === "boolean"
+            ? parsed.locations
+            : DEFAULT_DISCLOSURE_STATE.locations,
         inventoryColumns:
           typeof parsed.inventoryColumns === "boolean"
             ? parsed.inventoryColumns
@@ -203,6 +221,75 @@ export function SettingsPage({
       // ignore storage failures
     }
   }, [disclosureStorageKey, disclosures, loadedDisclosureKey]);
+
+  // Derive merged location list: registered + from item data
+  const allLocations = (() => {
+    const fromItems = new Set(
+      inventoryRows
+        .map((r) => String(r.values.location ?? "").trim())
+        .filter((v) => v.length > 0),
+    );
+    const merged = new Set([...registeredLocations, ...fromItems]);
+    return Array.from(merged).sort((a, b) => a.localeCompare(b));
+  })();
+
+  const getItemCountForLocation = (loc: string): number =>
+    inventoryRows.filter((r) => String(r.values.location ?? "").trim() === loc).length;
+
+  const onAddLocation = async () => {
+    const name = newLocationName.trim();
+    if (!name) return;
+    setSavingLocation(true);
+    try {
+      const locs = await addInventoryLocation(name);
+      setRegisteredLocations(locs);
+      setNewLocationName("");
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
+  const onRenameLocation = async (oldName: string) => {
+    const newName = editingLocationValue.trim();
+    if (!newName || newName === oldName) {
+      setEditingLocationName(null);
+      return;
+    }
+    setSavingLocation(true);
+    try {
+      const result = await renameInventoryLocation(oldName, newName);
+      setRegisteredLocations(result.locations);
+      // Update local row data to reflect the rename
+      setInventoryRows((prev) =>
+        prev.map((r) => {
+          if (String(r.values.location ?? "").trim() === oldName) {
+            return { ...r, values: { ...r.values, location: newName } };
+          }
+          return r;
+        }),
+      );
+      setEditingLocationName(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
+  const onRemoveLocation = async (name: string) => {
+    setSavingLocation(true);
+    try {
+      const locs = await removeInventoryLocation(name);
+      setRegisteredLocations(locs);
+      setPendingDeleteLocation(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSavingLocation(false);
+    }
+  };
 
   const onAddColumn = async () => {
     if (!canManageInventoryColumns || !newColumnName.trim()) return;
@@ -751,6 +838,144 @@ export function SettingsPage({
           ) : (
             <p className="settings-section-copy">
               Only administrators can manage module access.
+            </p>
+          )}
+        </details>
+
+        <details
+          className="settings-section spacer-top"
+          open={disclosures.locations}
+          onToggle={(event) => onDisclosureToggle("locations", event.currentTarget.open)}
+        >
+          <summary className="settings-section-title">Locations</summary>
+          {canManageInventoryColumns ? (
+            <>
+              <p className="settings-section-copy">
+                Manage inventory locations. Renaming a location updates all items assigned to it.
+              </p>
+              <div className="settings-columns-add settings-columns-add-inline" style={{ marginBottom: "0.75rem" }}>
+                <input
+                  className="field"
+                  placeholder="New location name"
+                  value={newLocationName}
+                  onChange={(e) => setNewLocationName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") void onAddLocation(); }}
+                />
+                <button
+                  className="button button-secondary"
+                  onClick={() => void onAddLocation()}
+                  disabled={savingLocation || !newLocationName.trim()}
+                >
+                  Add Location
+                </button>
+              </div>
+              <div className="settings-columns-list">
+                {loadingColumns ? <div>Loading locations...</div> : null}
+                {!loadingColumns && allLocations.length === 0 ? (
+                  <div className="settings-section-copy">No locations yet. Add one above.</div>
+                ) : null}
+                {allLocations.map((loc) => {
+                  const itemCount = getItemCountForLocation(loc);
+                  return (
+                    <div key={loc} className="settings-column-row">
+                      <div className="settings-column-visibility">
+                        {editingLocationName === loc ? (
+                          <span className="settings-column-edit">
+                            <input
+                              className="field settings-column-edit-input"
+                              value={editingLocationValue}
+                              onChange={(e) => setEditingLocationValue(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc); if (e.key === "Escape") setEditingLocationName(null); }}
+                              disabled={savingLocation}
+                              autoFocus
+                            />
+                            <button
+                              className="button button-secondary settings-inline-action"
+                              onClick={() => void onRenameLocation(loc)}
+                              disabled={savingLocation || !editingLocationValue.trim()}
+                              type="button"
+                            >
+                              Save
+                            </button>
+                            <button
+                              className="button button-ghost settings-inline-action"
+                              onClick={() => setEditingLocationName(null)}
+                              type="button"
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <span>
+                            {loc}
+                            <span className="settings-location-count">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="settings-column-actions">
+                        <div className="settings-action-wrap">
+                          <button
+                            className="settings-action-icon"
+                            onClick={() => { setEditingLocationName(loc); setEditingLocationValue(loc); }}
+                            disabled={savingLocation}
+                            aria-label="Rename location"
+                            type="button"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
+                            </svg>
+                          </button>
+                          <span className="settings-action-tip" role="tooltip">Rename</span>
+                        </div>
+                        <div className="settings-action-wrap">
+                          <button
+                            className="settings-action-icon"
+                            onClick={() => setPendingDeleteLocation((prev) => prev === loc ? null : loc)}
+                            disabled={savingLocation}
+                            aria-label="Remove location"
+                            type="button"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-1 6h2v9H8V9Zm4 0h2v9h-2V9Zm4 0h2v9h-2V9Z" />
+                            </svg>
+                          </button>
+                          <span className="settings-action-tip" role="tooltip">Remove</span>
+                          {pendingDeleteLocation === loc ? (
+                            <div className="settings-delete-confirm" role="dialog" aria-label="Confirm remove">
+                              {itemCount > 0 ? (
+                                <p>{itemCount} item{itemCount !== 1 ? "s" : ""} will become unassigned.</p>
+                              ) : (
+                                <p>Remove this location?</p>
+                              )}
+                              <div className="settings-delete-confirm-actions">
+                                <button
+                                  className="button button-secondary settings-inline-action"
+                                  onClick={() => setPendingDeleteLocation(null)}
+                                  type="button"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  className="button button-ghost settings-inline-action"
+                                  onClick={() => void onRemoveLocation(loc)}
+                                  disabled={savingLocation}
+                                  type="button"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <p className="settings-section-copy">
+              Only administrators can manage locations.
             </p>
           )}
         </details>

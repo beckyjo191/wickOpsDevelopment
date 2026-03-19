@@ -473,7 +473,45 @@ const listColumns = async (storage: InventoryStorage): Promise<InventoryColumn[]
 const ensureColumns = async (organizationId: string): Promise<InventoryColumn[]> => {
   const storage = await ensureStorageForOrganization(organizationId);
   const existing = await listColumns(storage);
-  if (existing.length > 0) return existing;
+
+  const coreColumnIdForKey = (key: string): string => `inventory-core-${key}`;
+
+  // For existing orgs, ensure the location core column exists (added after initial 4 core columns).
+  // Skip if the org already has a column with key matching "location" (from a template).
+  if (existing.length > 0) {
+    const hasLocationColumn = existing.some(
+      (c) => normalizeLooseKey(c.key) === "location" || normalizeLooseKey(c.label) === "location" || normalizeLooseKey(c.label) === "storagelocation",
+    );
+    if (!hasLocationColumn) {
+      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 40);
+      try {
+        await ddb.send(
+          new PutCommand({
+            TableName: storage.columnTable,
+            Item: {
+              id: coreColumnIdForKey("location"),
+              organizationId,
+              module: "inventory",
+              key: "location",
+              label: "Location",
+              type: "text",
+              isCore: true,
+              isRequired: false,
+              isVisible: true,
+              isEditable: true,
+              sortOrder: maxSort + 10,
+              createdAt: new Date().toISOString(),
+            } satisfies InventoryColumn,
+            ConditionExpression: "attribute_not_exists(id)",
+          }),
+        );
+      } catch (err: any) {
+        if (err?.name !== "ConditionalCheckFailedException") throw err;
+      }
+      return listColumns(storage);
+    }
+    return existing;
+  }
 
   const defaults: Omit<InventoryColumn, "id">[] = [
     {
@@ -528,9 +566,20 @@ const ensureColumns = async (organizationId: string): Promise<InventoryColumn[]>
       sortOrder: 40,
       createdAt: new Date().toISOString(),
     },
+    {
+      organizationId,
+      module: "inventory",
+      key: "location",
+      label: "Location",
+      type: "text",
+      isCore: true,
+      isRequired: false,
+      isVisible: true,
+      isEditable: true,
+      sortOrder: 50,
+      createdAt: new Date().toISOString(),
+    },
   ];
-
-  const coreColumnIdForKey = (key: string): string => `inventory-core-${key}`;
 
   for (const column of defaults) {
     try {
@@ -1319,11 +1368,97 @@ const getDaysUntilExpiration = (raw: string | null | undefined): number | null =
   return Math.floor((targetStart.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24));
 };
 
+/* ── Location Registry ────────────────────────────────────────────────── */
+
+const LOCATIONS_REGISTRY_ID = "inventory-meta-locations";
+
+const getRegisteredLocations = async (storage: InventoryStorage): Promise<string[]> => {
+  try {
+    const result = await ddb.send(
+      new GetCommand({ TableName: storage.columnTable, Key: { id: LOCATIONS_REGISTRY_ID } }),
+    );
+    const locations = result.Item?.locations;
+    if (Array.isArray(locations)) return locations.map((l: unknown) => String(l)).filter((l) => l.length > 0);
+  } catch { /* ignore */ }
+  return [];
+};
+
+const saveRegisteredLocations = async (storage: InventoryStorage, locations: string[]): Promise<void> => {
+  await ddb.send(
+    new PutCommand({
+      TableName: storage.columnTable,
+      Item: { id: LOCATIONS_REGISTRY_ID, locations, updatedAt: new Date().toISOString() },
+    }),
+  );
+};
+
+const handleAddLocation = async (storage: InventoryStorage, access: AccessContext, body: any) => {
+  if (!access.canEditInventory) return json(403, { error: "Insufficient permissions" });
+  const name = String(body?.name ?? "").trim();
+  if (!name) return json(400, { error: "Location name is required" });
+  if (name.length > 100) return json(400, { error: "Location name too long" });
+  const existing = await getRegisteredLocations(storage);
+  if (!existing.includes(name)) {
+    existing.push(name);
+    existing.sort((a, b) => a.localeCompare(b));
+    await saveRegisteredLocations(storage, existing);
+  }
+  return json(200, { locations: existing });
+};
+
+const handleRemoveLocation = async (storage: InventoryStorage, access: AccessContext, body: any) => {
+  if (!access.canEditInventory) return json(403, { error: "Insufficient permissions" });
+  const name = String(body?.name ?? "").trim();
+  if (!name) return json(400, { error: "Location name is required" });
+  const existing = await getRegisteredLocations(storage);
+  const updated = existing.filter((l) => l !== name);
+  await saveRegisteredLocations(storage, updated);
+  return json(200, { locations: updated });
+};
+
+const handleRenameLocation = async (storage: InventoryStorage, access: AccessContext, body: any) => {
+  if (!access.canEditInventory) return json(403, { error: "Insufficient permissions" });
+  const oldName = String(body?.oldName ?? "").trim();
+  const newName = String(body?.newName ?? "").trim();
+  if (!oldName || !newName) return json(400, { error: "Both oldName and newName are required" });
+  if (newName.length > 100) return json(400, { error: "Location name too long" });
+  if (oldName === newName) return json(200, { locations: await getRegisteredLocations(storage), renamedCount: 0 });
+
+  // Update registry
+  const existing = await getRegisteredLocations(storage);
+  const updated = existing.map((l) => (l === oldName ? newName : l));
+  if (!updated.includes(newName)) updated.push(newName);
+  updated.sort((a, b) => a.localeCompare(b));
+  await saveRegisteredLocations(storage, updated);
+
+  // Update all items that have the old location value
+  const items = await listAllItems(storage, "");
+  let renamedCount = 0;
+  for (const item of items) {
+    let values: Record<string, unknown> = {};
+    try { values = JSON.parse(item.valuesJson ?? "{}") ?? {}; } catch { continue; }
+    const loc = String(values.location ?? "").trim();
+    if (loc !== oldName) continue;
+    values.location = newName;
+    renamedCount++;
+    await ddb.send(
+      new PutCommand({
+        TableName: storage.itemTable,
+        Item: { ...item, valuesJson: JSON.stringify(values), updatedAtCustom: new Date().toISOString() },
+      }),
+    );
+  }
+
+  return json(200, { locations: updated, renamedCount });
+};
+
 const handleAlertSummary = async (storage: InventoryStorage) => {
   const items = await listAllItems(storage, "");
   let expiredCount = 0;
   let expiringSoonCount = 0;
   let lowStockCount = 0;
+
+  const byLocationMap = new Map<string, { expiredCount: number; expiringSoonCount: number; lowStockCount: number }>();
 
   for (const item of items) {
     let values: Record<string, unknown> = {};
@@ -1333,10 +1468,21 @@ const handleAlertSummary = async (storage: InventoryStorage) => {
       continue;
     }
 
+    const location = String(values.location ?? "").trim();
+    if (!byLocationMap.has(location)) {
+      byLocationMap.set(location, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
+    }
+    const locCounts = byLocationMap.get(location)!;
+
     const daysUntil = getDaysUntilExpiration(values.expirationDate as string | null | undefined);
     if (daysUntil !== null) {
-      if (daysUntil < 0) expiredCount += 1;
-      else if (daysUntil <= 30) expiringSoonCount += 1;
+      if (daysUntil < 0) {
+        expiredCount += 1;
+        locCounts.expiredCount += 1;
+      } else if (daysUntil <= 30) {
+        expiringSoonCount += 1;
+        locCounts.expiringSoonCount += 1;
+      }
     }
 
     const quantity = Number(values.quantity);
@@ -1348,19 +1494,41 @@ const handleAlertSummary = async (storage: InventoryStorage) => {
       Number.isFinite(minQuantity);
     if (hasMinQty && Number.isFinite(quantity) && quantity < minQuantity) {
       lowStockCount += 1;
+      locCounts.lowStockCount += 1;
     }
   }
 
-  return json(200, { expiredCount, expiringSoonCount, lowStockCount });
+  // Include registered locations that may not have items yet
+  const registeredLocations = await getRegisteredLocations(storage);
+  for (const loc of registeredLocations) {
+    if (!byLocationMap.has(loc)) {
+      byLocationMap.set(loc, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
+    }
+  }
+
+  const byLocation = Array.from(byLocationMap.entries())
+    .map(([location, counts]) => ({ location, ...counts }))
+    .sort((a, b) => {
+      // Empty location (unassigned) goes last
+      if (!a.location && b.location) return 1;
+      if (a.location && !b.location) return -1;
+      return a.location.localeCompare(b.location);
+    });
+
+  return json(200, { expiredCount, expiringSoonCount, lowStockCount, byLocation });
 };
 
 const handleBootstrap = async (storage: InventoryStorage, access: AccessContext) => {
   const columns = await ensureColumns(access.organizationId);
-  const items = await listAllItems(storage, access.organizationId);
+  const [items, registeredLocations] = await Promise.all([
+    listAllItems(storage, access.organizationId),
+    getRegisteredLocations(storage),
+  ]);
   return json(200, {
     access,
     columns,
     items,
+    registeredLocations,
     nextToken: null,
   });
 };
@@ -2275,7 +2443,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
     name: "Fire / EMS",
     description: "Track SCBA, turnout gear, medical supplies, and apparatus equipment",
     columns: [
-      { label: "Location", type: "text" },
       { label: "Vehicle / Unit", type: "text" },
       { label: "Serial Number", type: "text" },
       { label: "Last Inspected", type: "date" },
@@ -2291,7 +2458,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Part Number", type: "text" },
       { label: "Size / Spec", type: "text" },
       { label: "Manufacturer", type: "text" },
-      { label: "Location", type: "text" },
       { label: "Unit Cost", type: "number" },
       { label: "Notes", type: "text" },
     ],
@@ -2304,7 +2470,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Part Number", type: "text" },
       { label: "Voltage / Amperage", type: "text" },
       { label: "Manufacturer", type: "text" },
-      { label: "Location", type: "text" },
       { label: "Unit Cost", type: "number" },
       { label: "Notes", type: "text" },
     ],
@@ -2317,7 +2482,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Part Number", type: "text" },
       { label: "Size / Spec", type: "text" },
       { label: "Manufacturer", type: "text" },
-      { label: "Location", type: "text" },
       { label: "Notes", type: "text" },
     ],
   },
@@ -2329,7 +2493,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Category", type: "text" },
       { label: "Unit", type: "text" },
       { label: "Supplier", type: "text" },
-      { label: "Storage Location", type: "text" },
       { label: "Notes", type: "text" },
     ],
   },
@@ -2340,7 +2503,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
     columns: [
       { label: "Category", type: "text" },
       { label: "Lot Number", type: "text" },
-      { label: "Storage Location", type: "text" },
       { label: "Controlled", type: "boolean" },
       { label: "Notes", type: "text" },
     ],
@@ -2353,7 +2515,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Asset Tag", type: "text" },
       { label: "Serial Number", type: "text" },
       { label: "Assigned To", type: "text" },
-      { label: "Location", type: "text" },
       { label: "Purchase Date", type: "date" },
       { label: "Notes", type: "text" },
     ],
@@ -2364,7 +2525,6 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
     description: "A flexible setup for general supplies and equipment",
     columns: [
       { label: "Category", type: "text" },
-      { label: "Location", type: "text" },
       { label: "Notes", type: "text" },
     ],
   },
@@ -2408,7 +2568,7 @@ const handleApplyOnboardingTemplate = async (
 
   // Only add template columns when the org has just the default core columns.
   const existing = await listColumns(storage);
-  const coreOnlyCount = 4; // itemName, quantity, minQuantity, expirationDate
+  const coreOnlyCount = 5; // itemName, quantity, minQuantity, expirationDate, location
   if (existing.length > coreOnlyCount) {
     return json(200, { ok: true, addedColumns: [], skipped: true });
   }
@@ -2517,6 +2677,27 @@ export const handler = async (event: any) => {
 
     if (method === "POST" && path.endsWith("/inventory/onboarding/apply-template")) {
       return handleApplyOnboardingTemplate(storage, access, parseBody(event));
+    }
+
+    if (method === "POST" && path.endsWith("/inventory/locations")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleAddLocation(storage, access, parseBody(event));
+    }
+
+    if (method === "DELETE" && path.endsWith("/inventory/locations")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleRemoveLocation(storage, access, parseBody(event));
+    }
+
+    if (method === "POST" && path.endsWith("/inventory/locations/rename")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleRenameLocation(storage, access, parseBody(event));
     }
 
     if (method === "GET" && path.endsWith("/inventory/alert-summary")) {

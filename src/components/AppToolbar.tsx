@@ -11,8 +11,6 @@ export function AppToolbar({
   view,
   onNavigate,
 }: AppToolbarProps) {
-  const isInventorySection = view === "inventory" || view === "usage" || view === "quickadd";
-
   return (
     <header className="app-toolbar">
       <button
@@ -31,13 +29,6 @@ export function AppToolbar({
           onClick={() => onNavigate("dashboard")}
         >
           Dashboard
-        </button>
-        <button
-          type="button"
-          className={`app-toolbar-nav-item${isInventorySection ? " active" : ""}`}
-          onClick={() => onNavigate("inventory")}
-        >
-          Inventory
         </button>
         <button
           type="button"

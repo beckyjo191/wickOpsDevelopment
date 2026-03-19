@@ -116,6 +116,7 @@ export const loadInventoryBootstrap = async (): Promise<{
   access: InventoryAccess;
   columns: InventoryColumn[];
   items: InventoryRow[];
+  registeredLocations: string[];
   nextToken: string | null;
 }> => {
   const base = requireBaseUrl();
@@ -149,6 +150,9 @@ export const loadInventoryBootstrap = async (): Promise<{
         createdAt: item.createdAt,
       }))
       .sort((a, b) => a.position - b.position),
+    registeredLocations: Array.isArray(data.registeredLocations)
+      ? (data.registeredLocations as string[]).filter((l: string) => typeof l === "string" && l.length > 0)
+      : [],
     nextToken: data.nextToken ?? null,
   };
 };
@@ -615,10 +619,18 @@ export const applyIndustryTemplate = async (
 
 // ─── Alert Summary ────────────────────────────────────────────────────────────
 
+export type LocationAlertBreakdown = {
+  location: string;
+  expiredCount: number;
+  expiringSoonCount: number;
+  lowStockCount: number;
+};
+
 export type InventoryAlertSummary = {
   expiredCount: number;
   expiringSoonCount: number;
   lowStockCount: number;
+  byLocation?: LocationAlertBreakdown[];
 };
 
 export const fetchInventoryAlertSummary = async (): Promise<InventoryAlertSummary> => {
@@ -627,14 +639,64 @@ export const fetchInventoryAlertSummary = async (): Promise<InventoryAlertSummar
     const res = await authFetch(`${base}/inventory/alert-summary`);
     if (!res.ok) return { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 };
     const data = await res.json();
+    const byLocation = Array.isArray(data.byLocation)
+      ? data.byLocation.map((b: any) => ({
+          location: String(b.location ?? ""),
+          expiredCount: Number(b.expiredCount ?? 0),
+          expiringSoonCount: Number(b.expiringSoonCount ?? 0),
+          lowStockCount: Number(b.lowStockCount ?? 0),
+        }))
+      : undefined;
     return {
       expiredCount: Number(data.expiredCount ?? 0),
       expiringSoonCount: Number(data.expiringSoonCount ?? 0),
       lowStockCount: Number(data.lowStockCount ?? 0),
+      byLocation,
     };
   } catch {
     return { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 };
   }
+};
+
+// ─── Location Registry ───────────────────────────────────────────────────────
+
+export const addInventoryLocation = async (name: string): Promise<string[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/locations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || "Failed to add location");
+  const data = await res.json();
+  return Array.isArray(data.locations) ? data.locations : [];
+};
+
+export const renameInventoryLocation = async (oldName: string, newName: string): Promise<{ locations: string[]; renamedCount: number }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/locations/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ oldName, newName }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || "Failed to rename location");
+  const data = await res.json();
+  return {
+    locations: Array.isArray(data.locations) ? data.locations : [],
+    renamedCount: Number(data.renamedCount ?? 0),
+  };
+};
+
+export const removeInventoryLocation = async (name: string): Promise<string[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/locations`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || "Failed to remove location");
+  const data = await res.json();
+  return Array.isArray(data.locations) ? data.locations : [];
 };
 
 // ─── XLSX Template Generation ─────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import {
   extractCsvHeaders,
   generateAndDownloadInventoryTemplate,
   importInventoryCsv,
+  addInventoryLocation,
   isInventoryProvisioningError,
   listPendingSubmissions,
   loadInventoryBootstrap,
@@ -26,6 +27,8 @@ interface InventoryPageProps {
   canManageInventoryColumns: boolean;
   canReviewSubmissions?: boolean;
   initialFilter?: InventoryFilter;
+  selectedLocation: string | null;
+  onLocationChange: (location: string | null) => void;
 }
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
@@ -202,6 +205,8 @@ export function InventoryPage({
   canManageInventoryColumns,
   canReviewSubmissions,
   initialFilter,
+  selectedLocation,
+  onLocationChange,
 }: InventoryPageProps) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
@@ -228,7 +233,6 @@ export function InventoryPage({
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   const [templateSelectedIds, setTemplateSelectedIds] = useState<Set<string> | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [locationFilter, setLocationFilter] = useState("All Locations");
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [sortState, setSortState] = useState<{ key: string; direction: SortDirection } | null>(null);
   const [organizationId, setOrganizationId] = useState("");
@@ -244,6 +248,9 @@ export function InventoryPage({
   const [redoStack, setRedoStack] = useState<InventorySnapshot[]>([]);
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [editingDateCell, setEditingDateCell] = useState<{ rowId: string; columnKey: string } | null>(null);
+  const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
+  const [addingLocation, setAddingLocation] = useState(false);
+  const [newLocationName, setNewLocationName] = useState("");
   const [loadError, setLoadError] = useState<string>("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickInventoryLine());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
@@ -340,6 +347,7 @@ export function InventoryPage({
     );
     const persistedRows = bootstrap.items;
     setOrganizationId(String(bootstrap.access?.organizationId ?? ""));
+    setRegisteredLocations(bootstrap.registeredLocations ?? []);
     setColumns(resolvedColumns);
     const nextRows =
       persistedRows.length > 0
@@ -463,13 +471,12 @@ export function InventoryPage({
     return () => window.clearInterval(interval);
   }, [loading]);
 
-  const visibleColumns = useMemo(
-    () =>
-      [...columns]
-        .filter((column) => column.isVisible)
-        .sort((a, b) => a.sortOrder - b.sortOrder),
+  // The location column object (from all columns, not just visible)
+  const locationColumn = useMemo(
+    () => columns.find((column) => column.key === "location"),
     [columns],
   );
+
   const allColumns = useMemo(
     () => [...columns].sort((a, b) => a.sortOrder - b.sortOrder),
     [columns],
@@ -479,15 +486,6 @@ export function InventoryPage({
   );
   const hasMinQuantityColumn = columns.some(
     (column) => column.key === "minQuantity" && column.isVisible,
-  );
-
-  const locationColumn = useMemo(
-    () => visibleColumns.find((column) => column.key === "location"),
-    [visibleColumns],
-  );
-  const categoryColumn = useMemo(
-    () => visibleColumns.find((column) => column.key === "category"),
-    [visibleColumns],
   );
 
   const getDaysUntilExpiration = (value: string | number | boolean | null | undefined) => {
@@ -523,20 +521,41 @@ export function InventoryPage({
   };
 
   const locationOptions = useMemo(() => {
-    if (!locationColumn) return ["All Locations"];
-    const options = Array.from(
-      new Set(
-        rows
-          .map((row) => String(row.values[locationColumn.key] ?? "").trim())
-          .filter((value) => value.length > 0),
-      ),
-    ).sort((a, b) => a.localeCompare(b));
-    return ["All Locations", ...options];
-  }, [rows, locationColumn]);
+    const fromItems = locationColumn
+      ? rows.map((row) => String(row.values[locationColumn.key] ?? "").trim()).filter((v) => v.length > 0)
+      : [];
+    return Array.from(new Set([...fromItems, ...registeredLocations])).sort((a, b) => a.localeCompare(b));
+  }, [rows, locationColumn, registeredLocations]);
 
-  const effectiveLocationFilter = locationOptions.includes(locationFilter)
-    ? locationFilter
-    : "All Locations";
+  const showLocationPills = locationOptions.length >= 1;
+
+  // Hide location column from table when location pills are active (redundant info)
+  const visibleColumns = useMemo(
+    () => {
+      const base = [...columns]
+        .filter((column) => column.isVisible)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+      return showLocationPills ? base.filter((c) => c.key !== "location") : base;
+    },
+    [columns, showLocationPills],
+  );
+
+  const categoryColumn = useMemo(
+    () => visibleColumns.find((column) => column.key === "category"),
+    [visibleColumns],
+  );
+
+  // If no location selected yet but locations exist, auto-select the first one
+  useEffect(() => {
+    if (selectedLocation === null && locationOptions.length > 0) {
+      onLocationChange(locationOptions[0]);
+    }
+  }, [selectedLocation, locationOptions, onLocationChange]);
+
+  // Map prop to filter value
+  const effectiveLocationFilter = selectedLocation !== null && locationOptions.includes(selectedLocation)
+    ? selectedLocation
+    : locationOptions.length > 0 ? locationOptions[0] : "All Locations";
   const categoryOptions = useMemo(() => {
     if (!categoryColumn) return ["All Categories"];
     const options = Array.from(
@@ -559,6 +578,10 @@ export function InventoryPage({
     let exp60 = 0;
     let lowStock = 0;
     for (const row of rows) {
+      if (locationColumn && effectiveLocationFilter !== "All Locations") {
+        const rowLocation = String(row.values[locationColumn.key] ?? "").trim();
+        if (rowLocation !== effectiveLocationFilter) continue;
+      }
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
       if (daysUntil !== null && daysUntil < 0) expired++;
       if (daysUntil !== null && daysUntil >= 0 && daysUntil <= 30) exp30++;
@@ -575,7 +598,7 @@ export function InventoryPage({
       if (hasMin && Number.isFinite(quantity) && quantity < minQuantity) lowStock++;
     }
     return { expired, exp30, exp60, lowStock };
-  }, [rows]);
+  }, [rows, locationColumn, effectiveLocationFilter]);
 
   const filteredRows = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -943,6 +966,27 @@ export function InventoryPage({
       return nextRows;
     });
     setSelectedRowIds(new Set());
+  };
+
+  const onMoveSelectedRows = (targetLocation: string) => {
+    if (!canEditTable || !locationColumn) return;
+    const idsToMove = selectedRowIds.size > 0 ? selectedRowIds : (selectedRowId ? new Set([selectedRowId]) : new Set<string>());
+    if (idsToMove.size === 0) return;
+    pushUndoSnapshot();
+    setRows((prev) =>
+      prev.map((row) =>
+        idsToMove.has(row.id)
+          ? { ...row, values: { ...row.values, [locationColumn.key]: targetLocation } }
+          : row,
+      ),
+    );
+    setDirtyRowIds((prev) => {
+      const next = new Set(prev);
+      for (const id of idsToMove) next.add(id);
+      return next;
+    });
+    setSelectedRowIds(new Set());
+    onLocationChange(targetLocation);
   };
 
   function toDateInputValue(value: unknown): string {
@@ -1473,9 +1517,36 @@ export function InventoryPage({
                     </details>
                     )}
                     {!isMobile && rows.length > 1 && selectedRowIds.size > 0 ? (
-                      <button className="button button-secondary" onClick={onRemoveSelectedRows}>
-                        Delete Selected ({selectedRowIds.size})
-                      </button>
+                      <>
+                        {showLocationPills && locationOptions.length > 1 ? (
+                          <details className="inventory-move-menu">
+                            <summary className="button button-secondary">
+                              Move ({selectedRowIds.size})
+                            </summary>
+                            <div className="inventory-move-panel">
+                              {locationOptions
+                                .filter((loc) => loc !== effectiveLocationFilter)
+                                .map((loc) => (
+                                  <button
+                                    key={loc}
+                                    type="button"
+                                    className="inventory-move-option"
+                                    onClick={(e) => {
+                                      onMoveSelectedRows(loc);
+                                      const details = e.currentTarget.closest("details");
+                                      details?.removeAttribute("open");
+                                    }}
+                                  >
+                                    {loc}
+                                  </button>
+                                ))}
+                            </div>
+                          </details>
+                        ) : null}
+                        <button className="button button-secondary" onClick={onRemoveSelectedRows}>
+                          Delete Selected ({selectedRowIds.size})
+                        </button>
+                      </>
                     ) : null}
                   </>
                 ) : null}
@@ -1526,6 +1597,79 @@ export function InventoryPage({
             ) : null}
           </div>
         </header>
+
+        {showLocationPills || canEditInventory ? (
+          <div className="location-pills">
+            {locationOptions.map((loc) => (
+              <button
+                key={loc}
+                type="button"
+                className={`location-pill${selectedLocation === loc ? " active" : ""}`}
+                onClick={() => onLocationChange(loc)}
+              >
+                {loc}
+              </button>
+            ))}
+            {canEditInventory && !addingLocation ? (
+              <button
+                type="button"
+                className="location-pill location-pill--add"
+                onClick={() => setAddingLocation(true)}
+                aria-label="Add location"
+              >
+                +
+              </button>
+            ) : null}
+            {addingLocation ? (
+              <span className="location-pill-add-form">
+                <input
+                  type="text"
+                  className="location-pill-add-input"
+                  value={newLocationName}
+                  onChange={(e) => setNewLocationName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newLocationName.trim()) {
+                      void addInventoryLocation(newLocationName.trim()).then((locs) => {
+                        setRegisteredLocations(locs);
+                        onLocationChange(newLocationName.trim());
+                        setNewLocationName("");
+                        setAddingLocation(false);
+                      });
+                    }
+                    if (e.key === "Escape") {
+                      setNewLocationName("");
+                      setAddingLocation(false);
+                    }
+                  }}
+                  placeholder="Location name..."
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="location-pill-add-confirm"
+                  onClick={() => {
+                    if (!newLocationName.trim()) return;
+                    void addInventoryLocation(newLocationName.trim()).then((locs) => {
+                      setRegisteredLocations(locs);
+                      onLocationChange(newLocationName.trim());
+                      setNewLocationName("");
+                      setAddingLocation(false);
+                    });
+                  }}
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  className="location-pill-add-cancel"
+                  onClick={() => { setNewLocationName(""); setAddingLocation(false); }}
+                >
+                  ×
+                </button>
+              </span>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="inventory-filter-bar">
           {isMobile ? (
@@ -1802,13 +1946,41 @@ export function InventoryPage({
                 {selectMode ? `Cancel (${selectedRowIds.size})` : "Select"}
               </button>
               {selectMode && selectedRowIds.size > 0 && rows.length > 1 && (
-                <button
-                  type="button"
-                  className="button button-secondary button-sm"
-                  onClick={onRemoveSelectedRows}
-                >
-                  Delete ({selectedRowIds.size})
-                </button>
+                <>
+                  {showLocationPills && locationOptions.length > 1 ? (
+                    <details className="inventory-move-menu">
+                      <summary className="button button-secondary button-sm">
+                        Move ({selectedRowIds.size})
+                      </summary>
+                      <div className="inventory-move-panel">
+                        {locationOptions
+                          .filter((loc) => loc !== effectiveLocationFilter)
+                          .map((loc) => (
+                            <button
+                              key={loc}
+                              type="button"
+                              className="inventory-move-option"
+                              onClick={(e) => {
+                                onMoveSelectedRows(loc);
+                                setSelectMode(false);
+                                const details = e.currentTarget.closest("details");
+                                details?.removeAttribute("open");
+                              }}
+                            >
+                              {loc}
+                            </button>
+                          ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="button button-secondary button-sm"
+                    onClick={onRemoveSelectedRows}
+                  >
+                    Delete ({selectedRowIds.size})
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -2051,40 +2223,7 @@ export function InventoryPage({
                   </th>
                 ) : null}
                 {visibleColumns.map((column) =>
-                  column.key === "location" ? (
-                    <th
-                      key={column.id}
-                      className={`inventory-col-${column.key}`}
-                      style={{ minWidth: getColumnMinWidth(column), width: getAppliedColumnWidth(column) }}
-                    >
-                      <details className="inventory-location-menu">
-                        <summary className="inventory-location-trigger">{column.label}</summary>
-                        <div className="inventory-location-panel">
-                          {locationOptions.map((option) => (
-                            <button
-                              key={option}
-                              className={`inventory-location-item${effectiveLocationFilter === option ? " active" : ""}`}
-                              onClick={(event) => {
-                                setLocationFilter(option);
-                                const details = event.currentTarget.closest("details");
-                                details?.removeAttribute("open");
-                              }}
-                              type="button"
-                            >
-                              {option}
-                            </button>
-                          ))}
-                        </div>
-                      </details>
-                      <span
-                        className="inventory-col-resizer"
-                        onMouseDown={(event) => onResizeMouseDown(event, column)}
-                        role="separator"
-                        aria-orientation="vertical"
-                        aria-label={`Resize ${column.label} column`}
-                      />
-                    </th>
-                  ) : column.key === "category" ? (
+                  column.key === "category" ? (
                     <th
                       key={column.id}
                       className={`inventory-col-${column.key}`}

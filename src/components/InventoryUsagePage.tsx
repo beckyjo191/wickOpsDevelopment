@@ -294,7 +294,7 @@ function QtyStepper({
 
 /* ── Main component ────────────────────────────────────────────────────── */
 
-export function InventoryUsagePage() {
+export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: string | null }) {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -302,7 +302,7 @@ export function InventoryUsagePage() {
   const [loadingMessage, setLoadingMessage] = useState(() => pickUsageLine());
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
-  const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup()]);
+  const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup(selectedLocation ?? "")]);
   const [recentSubmissions, setRecentSubmissions] = useState<import("../lib/inventoryApi").PendingSubmission[]>([]);
   const [formError, setFormError] = useState("");
 

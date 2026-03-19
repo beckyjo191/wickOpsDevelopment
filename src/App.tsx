@@ -1,6 +1,6 @@
 import { useAuthenticator } from "@aws-amplify/ui-react";
 import { useEffect, useState } from "react";
-import { LayoutDashboard, Package, Settings as SettingsIcon } from "lucide-react";
+import { LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
 import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
 import { InventoryPage } from "./components/InventoryPage";
@@ -51,6 +51,13 @@ export default function App() {
   const setView = (v: AppView) => {
     if (v !== "inventory") setInventoryInitialFilter(undefined);
     setViewRaw(v);
+  };
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(() => {
+    try { return localStorage.getItem("wickops.selectedLocation") ?? null; } catch { return null; }
+  });
+  const onLocationChange = (loc: string | null) => {
+    setSelectedLocation(loc);
+    try { if (loc === null) localStorage.removeItem("wickops.selectedLocation"); else localStorage.setItem("wickops.selectedLocation", loc); } catch { /* noop */ }
   };
   const [loadingLine, setLoadingLine] = useState(() => pickAppLine());
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
@@ -255,6 +262,7 @@ export default function App() {
       "details.inventory-import-menu[open]",
       "details.inventory-columns-menu[open]",
       "details.inventory-location-menu[open]",
+      "details.inventory-move-menu[open]",
     ].join(", ");
 
     const onPointerDown = (event: PointerEvent) => {
@@ -414,29 +422,40 @@ export default function App() {
         canManageInventoryColumns={canManageInventoryColumns}
         canReviewSubmissions={canReviewUsageSubmissions}
         initialFilter={inventoryInitialFilter}
+        selectedLocation={selectedLocation}
+        onLocationChange={onLocationChange}
       />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
-        onNavigateToModule={(key) => setView(key as AppView)}
+        canEditInventory={canEditInventory}
+        selectedLocation={selectedLocation}
+        onLocationChange={onLocationChange}
+        onNavigate={(v) => setView(v)}
       />
     );
   } else if (view === "usage") {
     content = canAccessUsage ? (
-      <InventoryUsagePage />
+      <InventoryUsagePage selectedLocation={selectedLocation} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
-        onNavigateToModule={(key) => setView(key as AppView)}
+        canEditInventory={canEditInventory}
+        selectedLocation={selectedLocation}
+        onLocationChange={onLocationChange}
+        onNavigate={(v) => setView(v)}
       />
     );
   } else if (view === "quickadd") {
     content = canAccessInventory && canEditInventory ? (
-      <QuickAddPage />
+      <QuickAddPage selectedLocation={selectedLocation} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
-        onNavigateToModule={(key) => setView(key as AppView)}
+        canEditInventory={canEditInventory}
+        selectedLocation={selectedLocation}
+        onLocationChange={onLocationChange}
+        onNavigate={(v) => setView(v)}
       />
     );
   } else if (view === "invite") {
@@ -471,15 +490,22 @@ export default function App() {
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
-        onNavigateToModule={(key) => setView(key as AppView)}
+        canEditInventory={canEditInventory}
+        selectedLocation={selectedLocation}
+        onLocationChange={onLocationChange}
+        onNavigate={(v) => setView(v)}
       />
     );
   } else {
     content = (
       <DashboardPage
         accessibleModules={subState.allowedModules}
-        onNavigateToModule={(key) => setView(key as AppView)}
-        onNavigateToInventoryWithFilter={(filter) => {
+        canEditInventory={canEditInventory}
+        selectedLocation={selectedLocation}
+        onLocationChange={onLocationChange}
+        onNavigate={(v) => setView(v)}
+        onNavigateToInventoryWithFilter={(filter, location) => {
+          if (location !== undefined) onLocationChange(location);
           setInventoryInitialFilter(filter);
           setInventoryKey((k) => k + 1);
           setView("inventory");
@@ -513,14 +539,6 @@ export default function App() {
           >
             <LayoutDashboard size={20} />
             <span>Dashboard</span>
-          </button>
-          <button
-            type="button"
-            className={`app-bottom-bar-item${isInventorySection ? " active" : ""}`}
-            onClick={() => setView("inventory")}
-          >
-            <Package size={20} />
-            <span>Inventory</span>
           </button>
           <button
             type="button"

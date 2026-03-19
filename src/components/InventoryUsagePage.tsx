@@ -422,7 +422,6 @@ export function InventoryUsagePage() {
   }, [columns, rows]);
 
   const effectiveLocationKey = locationKey;
-  const effectiveNotesKey = notesKey;
 
   const locationValues = useMemo(() => {
     if (!effectiveLocationKey) return [] as string[];
@@ -583,7 +582,6 @@ export function InventoryUsagePage() {
     let hasError = false;
 
     const nextGroups = groups.map((group, g) => {
-      const groupLabel = showLocationPicker ? `Location section ${g + 1}` : `Section ${g + 1}`;
       let locationError = "";
 
       if (showLocationPicker && !group.location.trim()) {
@@ -591,7 +589,7 @@ export function InventoryUsagePage() {
         hasError = true;
       }
 
-      const nextEntries = group.entries.map((entry, i) => {
+      const nextEntries = group.entries.map((entry) => {
         const itemId = entry.itemId.trim();
         const quantityUsed = Number(entry.quantityUsed);
         const notes = entry.notes.trim();

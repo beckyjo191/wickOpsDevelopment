@@ -290,18 +290,22 @@ export function InventoryPage({
     );
   }, [pendingSubmissions, activeTab]);
 
+  // Fetch pending submissions on mount (for badge count) and when tab is active
   useEffect(() => {
-    if (activeTab !== "pendingSubmissions" || !canReviewSubmissions) return;
-    setPendingLoading(true);
+    if (!canReviewSubmissions) return;
+    const isOnTab = activeTab === "pendingSubmissions";
+    if (isOnTab) setPendingLoading(true);
     setPendingError("");
     listPendingSubmissions()
       .then((subs) => {
         setPendingSubmissions(subs.filter((s) => s.status === "pending"));
-        setPendingLoading(false);
+        if (isOnTab) setPendingLoading(false);
       })
       .catch((err: any) => {
-        setPendingError(err?.message ?? "Failed to load pending submissions.");
-        setPendingLoading(false);
+        if (isOnTab) {
+          setPendingError(err?.message ?? "Failed to load pending submissions.");
+          setPendingLoading(false);
+        }
       });
   }, [activeTab, canReviewSubmissions]);
 
@@ -665,6 +669,8 @@ export function InventoryPage({
   const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
 
   useEffect(() => {
+    // Don't reset tabs while inventory is still loading — columns aren't available yet
+    if (loading) return;
     if (!hasExpirationColumn && (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60")) {
       setActiveFilter("all");
       return;
@@ -672,7 +678,7 @@ export function InventoryPage({
     if (!hasMinQuantityColumn && activeFilter === "lowStock") {
       setActiveFilter("all");
     }
-  }, [activeFilter, hasExpirationColumn, hasMinQuantityColumn]);
+  }, [activeFilter, hasExpirationColumn, hasMinQuantityColumn, loading]);
 
   useEffect(() => {
     if (!selectAllCheckboxRef.current) return;

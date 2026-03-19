@@ -69,8 +69,6 @@ export function SettingsPage({
   onInviteUsers,
 }: SettingsPageProps) {
   const normalizeEmail = (value: string): string => value.trim().toLowerCase();
-  const normalizeLooseKey = (value: string): string =>
-    value.toLowerCase().replace(/[^a-z0-9]/g, "");
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
   const isLockedColumn = (column: InventoryColumn): boolean =>
     column.isCore || column.isRequired || nonEditableKeys.has(column.key);

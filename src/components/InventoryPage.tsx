@@ -30,7 +30,6 @@ interface InventoryPageProps {
   initialFilter?: InventoryFilter;
   selectedLocation: string | null;
   onLocationChange: (location: string | null) => void;
-  onNavigateToSettings?: () => void;
 }
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
@@ -210,7 +209,6 @@ export function InventoryPage({
   initialFilter,
   selectedLocation,
   onLocationChange,
-  onNavigateToSettings,
 }: InventoryPageProps) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);

@@ -48,8 +48,10 @@ export default function App() {
   const [view, setViewRaw] = useState<AppView>("dashboard");
   const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);
   const [inventoryKey, setInventoryKey] = useState(0);
+  const [dashboardKey, setDashboardKey] = useState(0);
   const setView = (v: AppView) => {
     if (v !== "inventory") setInventoryInitialFilter(undefined);
+    if (v === "dashboard") setDashboardKey((k) => k + 1);
     setViewRaw(v);
   };
   const [selectedLocation, setSelectedLocation] = useState<string | null>(() => {
@@ -519,6 +521,7 @@ export default function App() {
   } else {
     content = (
       <DashboardPage
+        key={dashboardKey}
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
         selectedLocation={selectedLocation}

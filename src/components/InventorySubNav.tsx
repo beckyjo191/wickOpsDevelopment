@@ -5,18 +5,19 @@ type InventorySubView = "inventory" | "usage" | "quickadd";
 interface InventorySubNavProps {
   activeView: InventorySubView;
   accessibleModules: AppModuleKey[];
+  canEditInventory: boolean;
   onNavigate: (view: InventorySubView) => void;
 }
 
 export function InventorySubNav({
   activeView,
   accessibleModules,
+  canEditInventory,
   onNavigate,
 }: InventorySubNavProps) {
   const showInventory = accessibleModules.includes("inventory");
   const showUsage = accessibleModules.includes("usage");
-  // Quick Add requires inventory editing access (same gate as inventory)
-  const showQuickAdd = showInventory;
+  const showQuickAdd = showInventory && canEditInventory;
 
   const visibleCount = (showInventory ? 1 : 0) + (showUsage ? 1 : 0) + (showQuickAdd ? 1 : 0);
   if (visibleCount < 2) return null;

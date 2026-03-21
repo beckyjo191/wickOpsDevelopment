@@ -549,6 +549,7 @@ export default function App() {
         <InventorySubNav
           activeView={view}
           accessibleModules={subState.allowedModules}
+          canEditInventory={canEditInventory}
           onNavigate={(v) => setView(v)}
         />
       )}

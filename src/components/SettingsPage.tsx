@@ -25,6 +25,21 @@ import {
   type InventoryRow,
 } from "../lib/inventoryApi";
 import type { ThemePreference } from "../lib/themePreference";
+import { useCallback } from "react";
+import { Pencil, Trash2 } from "lucide-react";
+
+/* Solid filled icons for mobile — render crisply at small sizes */
+const PencilFilled = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" className="settings-action-svg">
+    <path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25ZM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z" />
+  </svg>
+);
+
+const TrashFilled = () => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" className="settings-action-svg">
+    <path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12ZM8 9h8v10H8V9Zm7.5-5-1-1h-5l-1 1H5v2h14V4h-3.5Z" />
+  </svg>
+);
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
 type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns";
@@ -81,6 +96,14 @@ export function SettingsPage({
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
   const isLockedColumn = (column: InventoryColumn): boolean =>
     column.isCore || column.isRequired || nonEditableKeys.has(column.key);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 780px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
+
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [newColumnName, setNewColumnName] = useState("");
   const [inventoryColumnSearchTerm, setInventoryColumnSearchTerm] = useState("");
@@ -109,8 +132,10 @@ export function SettingsPage({
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [newLocationName, setNewLocationName] = useState("");
   const [savingLocation, setSavingLocation] = useState(false);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const [editingLocationName, setEditingLocationName] = useState<string | null>(null);
   const [editingLocationValue, setEditingLocationValue] = useState("");
+  const [renameLocationError, setRenameLocationError] = useState<string | null>(null);
   const [pendingDeleteLocation, setPendingDeleteLocation] = useState<string | null>(null);
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
   const [loadedDisclosureKey, setLoadedDisclosureKey] = useState<string>("");
@@ -239,13 +264,25 @@ export function SettingsPage({
   const onAddLocation = async () => {
     const name = newLocationName.trim();
     if (!name) return;
+    // Client-side case-insensitive duplicate check
+    const duplicate = allLocations.find((l) => l.toLowerCase() === name.toLowerCase());
+    if (duplicate) {
+      setLocationError(`"${duplicate}" already exists`);
+      return;
+    }
+    setLocationError(null);
     setSavingLocation(true);
     try {
       const locs = await addInventoryLocation(name);
       setRegisteredLocations(locs);
       setNewLocationName("");
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      if (msg.includes("already exists")) {
+        setLocationError(msg);
+      } else {
+        console.error(err);
+      }
     } finally {
       setSavingLocation(false);
     }
@@ -255,8 +292,18 @@ export function SettingsPage({
     const newName = editingLocationValue.trim();
     if (!newName || newName === oldName) {
       setEditingLocationName(null);
+      setRenameLocationError(null);
       return;
     }
+    // Client-side case-insensitive duplicate check (ignore the one being renamed)
+    const duplicate = allLocations.find(
+      (l) => l !== oldName && l.toLowerCase() === newName.toLowerCase(),
+    );
+    if (duplicate) {
+      setRenameLocationError(`"${duplicate}" already exists`);
+      return;
+    }
+    setRenameLocationError(null);
     setSavingLocation(true);
     try {
       const result = await renameInventoryLocation(oldName, newName);
@@ -271,8 +318,13 @@ export function SettingsPage({
         }),
       );
       setEditingLocationName(null);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      if (msg.includes("already exists")) {
+        setRenameLocationError(msg);
+      } else {
+        console.error(err);
+      }
     } finally {
       setSavingLocation(false);
     }
@@ -822,12 +874,12 @@ export function SettingsPage({
           <summary className="settings-section-title">Locations</summary>
           {canManageInventoryColumns ? (
             <>
-              <div className="settings-field-row" style={{ marginBottom: "0.5rem" }}>
+              <div className="settings-field-row" style={{ marginBottom: locationError ? "0.25rem" : "0.5rem" }}>
                 <input
-                  className="field"
+                  className={`field${locationError ? " field--error" : ""}`}
                   placeholder="New location name"
                   value={newLocationName}
-                  onChange={(e) => setNewLocationName(e.target.value)}
+                  onChange={(e) => { setNewLocationName(e.target.value); setLocationError(null); }}
                   onKeyDown={(e) => { if (e.key === "Enter") void onAddLocation(); }}
                 />
                 <button
@@ -838,6 +890,9 @@ export function SettingsPage({
                   Add Location
                 </button>
               </div>
+              {locationError ? (
+                <p className="settings-field-error">{locationError}</p>
+              ) : null}
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading locations...</div> : null}
                 {!loadingColumns && allLocations.length === 0 ? (
@@ -851,10 +906,10 @@ export function SettingsPage({
                         {editingLocationName === loc ? (
                           <span className="settings-column-edit">
                             <input
-                              className="field settings-column-edit-input"
+                              className={`field settings-column-edit-input${renameLocationError ? " field--error" : ""}`}
                               value={editingLocationValue}
-                              onChange={(e) => setEditingLocationValue(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc); if (e.key === "Escape") setEditingLocationName(null); }}
+                              onChange={(e) => { setEditingLocationValue(e.target.value); setRenameLocationError(null); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc); if (e.key === "Escape") { setEditingLocationName(null); setRenameLocationError(null); } }}
                               disabled={savingLocation}
                               autoFocus
                             />
@@ -868,11 +923,14 @@ export function SettingsPage({
                             </button>
                             <button
                               className="button button-ghost settings-inline-action"
-                              onClick={() => setEditingLocationName(null)}
+                              onClick={() => { setEditingLocationName(null); setRenameLocationError(null); }}
                               type="button"
                             >
                               Cancel
                             </button>
+                            {renameLocationError ? (
+                              <span className="settings-field-error" style={{ width: "100%" }}>{renameLocationError}</span>
+                            ) : null}
                           </span>
                         ) : (
                           <span>
@@ -890,57 +948,56 @@ export function SettingsPage({
                             aria-label="Rename location"
                             type="button"
                           >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
-                            </svg>
+                            {isMobile ? "Edit" : <Pencil aria-hidden="true" />}
                           </button>
                           <span className="settings-action-tip" role="tooltip">Rename</span>
                         </div>
                         <div className="settings-action-wrap">
                           <button
-                            className="settings-action-icon"
+                            className="settings-action-icon settings-action-icon--danger"
                             onClick={() => setPendingDeleteLocation((prev) => prev === loc ? null : loc)}
                             disabled={savingLocation}
                             aria-label="Remove location"
                             type="button"
                           >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-1 6h2v9H8V9Zm4 0h2v9h-2V9Zm4 0h2v9h-2V9Z" />
-                            </svg>
+                            {isMobile ? "Delete" : <Trash2 aria-hidden="true" />}
                           </button>
                           <span className="settings-action-tip" role="tooltip">Remove</span>
-                          {pendingDeleteLocation === loc ? (
-                            <div className="settings-delete-confirm" role="dialog" aria-label="Confirm remove">
-                              {itemCount > 0 ? (
-                                <p>{itemCount} item{itemCount !== 1 ? "s" : ""} will become unassigned.</p>
-                              ) : (
-                                <p>Remove this location?</p>
-                              )}
-                              <div className="settings-delete-confirm-actions">
-                                <button
-                                  className="button button-secondary settings-inline-action"
-                                  onClick={() => setPendingDeleteLocation(null)}
-                                  type="button"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  className="button button-ghost settings-inline-action"
-                                  onClick={() => void onRemoveLocation(loc)}
-                                  disabled={savingLocation}
-                                  type="button"
-                                >
-                                  Remove
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
                         </div>
                       </div>
                     </div>
                   );
                 })}
               </div>
+              {pendingDeleteLocation ? (() => {
+                const locName = pendingDeleteLocation;
+                const deleteLocItemCount = getItemCountForLocation(locName);
+                return (
+                  <div className="settings-destructive-overlay">
+                    <div className="settings-destructive-backdrop" onClick={() => setPendingDeleteLocation(null)} />
+                    <div className="settings-destructive-sheet" role="dialog" aria-label="Confirm remove">
+                      <div className="settings-destructive-sheet-body">
+                        <p className="settings-destructive-sheet-title">Remove Location</p>
+                        <p className="settings-destructive-sheet-msg">
+                          {deleteLocItemCount > 0
+                            ? `"${locName}" has ${deleteLocItemCount} item${deleteLocItemCount !== 1 ? "s" : ""} that will become unassigned.`
+                            : `Remove "${locName}"?`}
+                        </p>
+                      </div>
+                      <div className="settings-destructive-sheet-actions">
+                        <button type="button" onClick={() => setPendingDeleteLocation(null)}>Cancel</button>
+                        <button
+                          type="button"
+                          disabled={savingLocation}
+                          onClick={() => { void onRemoveLocation(locName); }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })() : null}
             </>
           ) : (
             <p className="settings-section-copy">
@@ -1050,9 +1107,7 @@ export function SettingsPage({
                             aria-label="Edit column"
                             type="button"
                           >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M4 16.75V20h3.25l9.58-9.58-3.25-3.25L4 16.75Zm12.62-10.87 1.5-1.5a1 1 0 0 1 1.42 0l1.58 1.58a1 1 0 0 1 0 1.42l-1.5 1.5-3-3Z" />
-                            </svg>
+                            {isMobile ? "Edit" : <Pencil aria-hidden="true" />}
                           </button>
                           <span className="settings-action-tip" role="tooltip">Edit</span>
                         </div>
@@ -1060,7 +1115,7 @@ export function SettingsPage({
                       {!isLocked ? (
                         <div className="settings-action-wrap">
                           <button
-                            className="settings-action-icon"
+                            className="settings-action-icon settings-action-icon--danger"
                             onClick={() =>
                               setPendingDeleteColumnId((prev) =>
                                 prev === column.id ? null : column.id,
@@ -1070,33 +1125,9 @@ export function SettingsPage({
                             aria-label="Delete column"
                             type="button"
                           >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                              <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-1 6h2v9H8V9Zm4 0h2v9h-2V9Zm4 0h2v9h-2V9Z" />
-                            </svg>
+                            {isMobile ? "Delete" : <Trash2 aria-hidden="true" />}
                           </button>
                           <span className="settings-action-tip" role="tooltip">Delete</span>
-                          {pendingDeleteColumnId === column.id ? (
-                            <div className="settings-delete-confirm" role="dialog" aria-label="Confirm delete">
-                              <p>Are you sure?</p>
-                              <div className="settings-delete-confirm-actions">
-                                <button
-                                  className="button button-secondary settings-inline-action"
-                                  onClick={() => setPendingDeleteColumnId(null)}
-                                  type="button"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  className="button button-ghost settings-inline-action"
-                                  onClick={() => void onDeleteColumn(column.id)}
-                                  disabled={savingColumn}
-                                  type="button"
-                                >
-                                  OK
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -1105,6 +1136,33 @@ export function SettingsPage({
                   })()
                 ))}
               </div>
+              {pendingDeleteColumnId ? (() => {
+                const colId = pendingDeleteColumnId;
+                const colToDelete = columns.find((c) => c.id === colId);
+                return (
+                  <div className="settings-destructive-overlay">
+                    <div className="settings-destructive-backdrop" onClick={() => setPendingDeleteColumnId(null)} />
+                    <div className="settings-destructive-sheet" role="dialog" aria-label="Confirm delete">
+                      <div className="settings-destructive-sheet-body">
+                        <p className="settings-destructive-sheet-title">Delete Column</p>
+                        <p className="settings-destructive-sheet-msg">
+                          {colToDelete ? `Delete "${colToDelete.label}"? This cannot be undone.` : "Delete this column? This cannot be undone."}
+                        </p>
+                      </div>
+                      <div className="settings-destructive-sheet-actions">
+                        <button type="button" onClick={() => setPendingDeleteColumnId(null)}>Cancel</button>
+                        <button
+                          type="button"
+                          disabled={savingColumn}
+                          onClick={() => { void onDeleteColumn(colId); }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })() : null}
             </>
           ) : (
             <p className="settings-section-copy">

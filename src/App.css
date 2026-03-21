@@ -136,7 +136,7 @@
 
 /* Mobile shell padding for bottom bar */
 .app-shell--mobile {
-  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Settings logged-in section */
@@ -503,6 +503,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+  flex-wrap: wrap;
 }
 
 .location-pill-add-input {
@@ -535,6 +536,173 @@
   padding: 0.2rem 0.4rem;
 }
 
+.location-add-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.25rem 0;
+}
+
+.location-add-row .location-pill-add-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.location-pill-add-error {
+  display: block;
+  width: 100%;
+  color: var(--danger);
+  font-size: 0.78rem;
+  line-height: 1.3;
+  margin-top: 0.15rem;
+}
+
+.location-manage-link {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.3rem 0.4rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.location-manage-link:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.location-empty-state {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0;
+  flex-wrap: wrap;
+}
+
+.location-empty-state-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* ── Location pill overflow "+N more" ── */
+.location-pill--more {
+  border-style: dashed;
+  color: var(--text-soft);
+}
+
+.location-pill--more.active {
+  border-style: solid;
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.location-overflow-sheet {
+  position: relative;
+  z-index: 1;
+  width: min(400px, calc(100% - 2rem));
+  max-height: min(480px, 70vh);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-raised);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: settings-sheet-in 200ms ease;
+}
+
+.location-overflow-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem 0.5rem;
+}
+
+.location-overflow-sheet-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-heading);
+}
+
+.location-overflow-sheet-close {
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 1.3rem;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  line-height: 1;
+  border-radius: 6px;
+}
+
+.location-overflow-sheet-close:hover {
+  background: var(--surface-hover);
+  color: var(--text-heading);
+}
+
+.location-overflow-search {
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--text-heading);
+  font-size: 0.85rem;
+}
+
+.location-overflow-search:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.location-overflow-list {
+  overflow-y: auto;
+  padding: 0 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.location-overflow-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-heading);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+
+.location-overflow-item:hover {
+  background: var(--surface-hover);
+}
+
+.location-overflow-item.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
+.location-overflow-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--text-soft);
+  font-size: 0.85rem;
+}
+
 .inventory-move-menu {
   position: relative;
   display: inline-block;
@@ -543,10 +711,15 @@
 .inventory-move-menu > summary {
   list-style: none;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 
-.inventory-move-menu > summary::-webkit-details-marker {
+.inventory-move-menu > summary::-webkit-details-marker,
+.inventory-move-menu > summary::marker {
   display: none;
+  content: "";
 }
 
 .inventory-move-panel {
@@ -564,6 +737,21 @@
   display: grid;
   gap: 0.2rem;
   z-index: 30;
+}
+
+.inventory-move-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  line-height: 1;
 }
 
 .inventory-move-option {
@@ -836,6 +1024,17 @@ details[open] > .settings-section-title::after {
   transform: rotate(90deg);
 }
 
+.settings-field-error {
+  margin: 0 0 0.5rem;
+  color: var(--danger);
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+.field--error {
+  border-color: var(--danger) !important;
+}
+
 .settings-section-copy {
   margin: 0.45rem 0 0.7rem;
   color: var(--text-muted);
@@ -1102,8 +1301,8 @@ details[open] > .settings-section-title::after {
 }
 
 .settings-action-icon {
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-alt);
@@ -1119,10 +1318,26 @@ details[open] > .settings-section-title::after {
   border-color: var(--border-strong);
 }
 
+/* Desktop: Lucide stroke icons */
 .settings-action-icon svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
+  width: 16px;
+  height: 16px;
+}
+
+/* Mobile: filled SVG icons */
+.settings-action-svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.settings-action-icon--danger {
+  color: var(--danger);
+}
+
+.settings-action-icon--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: var(--danger);
 }
 
 .settings-action-tip {
@@ -1149,30 +1364,104 @@ details[open] > .settings-section-title::after {
   transform: translateY(0);
 }
 
-.settings-delete-confirm {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 0.3rem);
-  min-width: 170px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--shadow-raised);
-  padding: 0.45rem;
-  display: grid;
-  gap: 0.4rem;
-  z-index: 25;
+/* Legacy — keep in case old markup is still referenced somewhere */
+.settings-delete-confirm { display: none; }
+.settings-delete-confirm p { display: none; }
+.settings-delete-confirm-actions { display: none; }
+
+/* ── Destructive confirmation sheet (overlay + card) ── */
+.settings-destructive-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: settings-overlay-in 150ms ease;
 }
 
-.settings-delete-confirm p {
-  font-size: 0.8rem;
+.settings-destructive-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+@keyframes settings-overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.settings-destructive-sheet {
+  position: relative;
+  z-index: 1;
+  width: min(380px, calc(100% - 2rem));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+  animation: settings-sheet-in 200ms ease;
+}
+
+@keyframes settings-sheet-in {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.settings-destructive-sheet-body {
+  padding: 1.25rem 1.25rem 1rem;
+  text-align: center;
+}
+
+.settings-destructive-sheet-title {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 700;
   color: var(--text-heading);
 }
 
-.settings-delete-confirm-actions {
-  display: inline-flex;
-  justify-content: flex-end;
-  gap: 0.35rem;
+.settings-destructive-sheet-msg {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+.settings-destructive-sheet-actions {
+  display: flex;
+  border-top: 1px solid var(--border);
+}
+
+.settings-destructive-sheet-actions button {
+  flex: 1;
+  padding: 0.75rem 0.5rem;
+  border: none;
+  background: transparent;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-destructive-sheet-actions button:first-child {
+  color: var(--text-soft);
+  border-right: 1px solid var(--border);
+}
+
+.settings-destructive-sheet-actions button:first-child:hover {
+  background: var(--surface-hover);
+}
+
+.settings-destructive-sheet-actions button:last-child {
+  color: var(--danger);
+}
+
+.settings-destructive-sheet-actions button:last-child:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.settings-destructive-sheet-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .inventory-table-wrap {
@@ -1631,6 +1920,19 @@ details[open] > .settings-section-title::after {
   content: "▾";
   margin-left: 0.35rem;
   font-size: 0.72rem;
+}
+
+.inventory-delete-trigger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.inventory-delete-trigger::after {
+  content: none;
+}
+
+.inventory-delete-trigger:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .inventory-import-panel {
@@ -3220,6 +3522,7 @@ textarea.inventory-card-input {
 @media (max-width: 780px) {
   .app-shell {
     padding: 0.75rem;
+    padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px));
   }
 
   .app-toolbar {
@@ -3314,6 +3617,14 @@ textarea.inventory-card-input {
     justify-content: flex-end;
   }
 
+  .settings-action-icon {
+    width: auto;
+    height: auto;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
   .inventory-table th,
   .inventory-table td {
     padding: 0.42rem 0.45rem;
@@ -3325,13 +3636,24 @@ textarea.inventory-card-input {
     padding: 0.42rem 0.62rem;
   }
 
+  .inventory-subnav {
+    position: sticky;
+    top: 0;
+    z-index: 11;
+    background: var(--bg);
+    padding-top: 0.35rem;
+  }
+
   .inventory-filter-bar {
     align-items: stretch;
     position: sticky;
-    top: 0;
+    top: 2.35rem;
     z-index: 10;
     background: var(--bg);
-    padding: 0.5rem 0;
+    padding: 0.5rem 0 0.35rem;
+    box-shadow: 0 4px 8px -2px rgba(0, 0, 0, 0.25);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.5rem;
   }
 
   .settings-section {
@@ -3358,6 +3680,8 @@ textarea.inventory-card-input {
 
   .inventory-search-input {
     max-width: 100%;
+    background: var(--surface-alt);
+    border-color: var(--border-strong, var(--border));
   }
 
   input,
@@ -3377,6 +3701,7 @@ textarea.inventory-card-input {
   .inventory-columns-panel {
     right: auto;
     left: 0;
+    max-height: 200px;
   }
 
   .usage-entry-main {
@@ -3405,6 +3730,11 @@ textarea.inventory-card-input {
     text-align: center;
     padding: 0.5rem 0.5rem;
     font-size: 0.8rem;
+    background: var(--surface-alt);
+  }
+
+  .inventory-subnav-item.active {
+    background: var(--surface);
   }
 }
 

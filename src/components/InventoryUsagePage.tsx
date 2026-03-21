@@ -276,6 +276,7 @@ function QtyStepper({
         step="any"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={(e) => e.currentTarget.select()}
         disabled={disabled}
         placeholder="0"
       />

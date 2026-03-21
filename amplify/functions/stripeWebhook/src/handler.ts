@@ -1,6 +1,10 @@
 import Stripe from "stripe";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  DynamoDBDocumentClient,
+  ScanCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {});
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -159,6 +163,88 @@ export const handler = async (event: any) => {
         })
       );
     }
+
+    // 3️⃣ Enforce seat overage on downgrade: if new seatLimit < active users,
+    //    suspend excess non-owner users (most recently created first).
+    if (resolvedPlan && organizationId) {
+      const newSeatLimit = baseSeats + addonSeats;
+      await enforceOrgSeatLimit(organizationId, newSeatLimit);
+    }
+  };
+
+  // Suspend excess non-owner users when seat limit drops below active user count.
+  const enforceOrgSeatLimit = async (
+    organizationId: string,
+    seatLimit: number
+  ): Promise<void> => {
+    const usersRes = await ddb.send(
+      new ScanCommand({
+        TableName: USER_TABLE,
+        FilterExpression: "organizationId = :orgId",
+        ExpressionAttributeValues: { ":orgId": organizationId },
+      })
+    );
+    const users = usersRes.Items ?? [];
+    const activeUsers = users.filter((u) => !u.accessSuspended);
+    if (activeUsers.length <= seatLimit) return;
+
+    // Sort: owners first (protected), then by createdAt ascending (oldest kept).
+    const sorted = [...activeUsers].sort((a, b) => {
+      const aOwner = String(a.role ?? "").toUpperCase() === "OWNER" ? 0 : 1;
+      const bOwner = String(b.role ?? "").toUpperCase() === "OWNER" ? 0 : 1;
+      if (aOwner !== bOwner) return aOwner - bOwner;
+      return String(a.createdAt ?? "").localeCompare(String(b.createdAt ?? ""));
+    });
+
+    const toSuspend = sorted.slice(seatLimit);
+    for (const user of toSuspend) {
+      if (String(user.role ?? "").toUpperCase() === "OWNER") continue; // never suspend owner
+      await ddb.send(
+        new UpdateCommand({
+          TableName: USER_TABLE,
+          Key: { id: user.id },
+          UpdateExpression: "SET accessSuspended = :true",
+          ExpressionAttributeValues: { ":true": true },
+        })
+      );
+      console.log(`[stripeWebhook] Suspended user ${user.id} due to seat overage`);
+    }
+  };
+
+  // Suspend all non-owner users in an org (used on cancellation/payment failure).
+  const suspendOrgUsers = async (organizationId: string): Promise<void> => {
+    const usersRes = await ddb.send(
+      new ScanCommand({
+        TableName: USER_TABLE,
+        FilterExpression: "organizationId = :orgId",
+        ExpressionAttributeValues: { ":orgId": organizationId },
+      })
+    );
+    for (const user of usersRes.Items ?? []) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: USER_TABLE,
+          Key: { id: user.id },
+          UpdateExpression: "SET accessSuspended = :true",
+          ExpressionAttributeValues: { ":true": true },
+        })
+      );
+    }
+  };
+
+  // Resolve org ID from a Stripe customer ID.
+  const resolveOrgByStripeCustomer = async (
+    customerId: string
+  ): Promise<string | undefined> => {
+    const result = await ddb.send(
+      new ScanCommand({
+        TableName: ORG_TABLE,
+        FilterExpression: "stripeCustomerId = :cid",
+        ExpressionAttributeValues: { ":cid": customerId },
+        ProjectionExpression: "id",
+      })
+    );
+    return result.Items?.[0]?.id;
   };
 
   if (stripeEvent.type === "checkout.session.completed") {
@@ -191,6 +277,56 @@ export const handler = async (event: any) => {
   if (stripeEvent.type === "customer.subscription.updated") {
     const subscription = stripeEvent.data.object as Stripe.Subscription;
     await handleSubscription(subscription);
+  }
+
+  // Handle subscription cancellation — revoke access for the entire org.
+  if (stripeEvent.type === "customer.subscription.deleted") {
+    const subscription = stripeEvent.data.object as Stripe.Subscription;
+    const organizationId =
+      subscription.metadata?.organizationId ??
+      (typeof subscription.customer === "string"
+        ? await resolveOrgByStripeCustomer(subscription.customer)
+        : undefined);
+
+    if (organizationId) {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: ORG_TABLE,
+          Key: { id: organizationId },
+          UpdateExpression: "SET paymentStatus = :canceled",
+          ExpressionAttributeValues: { ":canceled": "Canceled" },
+        })
+      );
+      await suspendOrgUsers(organizationId);
+      console.log(`[stripeWebhook] Subscription canceled for org ${organizationId}`);
+    } else {
+      console.error("[stripeWebhook] subscription.deleted: could not resolve organizationId");
+    }
+  }
+
+  // Handle failed payment — mark org as past-due and suspend access.
+  if (stripeEvent.type === "invoice.payment_failed") {
+    const invoice = stripeEvent.data.object as Stripe.Invoice;
+    const customerId =
+      typeof invoice.customer === "string"
+        ? invoice.customer
+        : invoice.customer?.id;
+
+    if (customerId) {
+      const organizationId = await resolveOrgByStripeCustomer(customerId);
+      if (organizationId) {
+        await ddb.send(
+          new UpdateCommand({
+            TableName: ORG_TABLE,
+            Key: { id: organizationId },
+            UpdateExpression: "SET paymentStatus = :pastDue",
+            ExpressionAttributeValues: { ":pastDue": "PastDue" },
+          })
+        );
+        await suspendOrgUsers(organizationId);
+        console.log(`[stripeWebhook] Payment failed for org ${organizationId}, marked PastDue`);
+      }
+    }
   }
 
   return { statusCode: 200, body: "ok" };

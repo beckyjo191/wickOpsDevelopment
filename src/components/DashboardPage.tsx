@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Package, ClipboardList, Zap } from "lucide-react";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
+import { LocationPills } from "./LocationPills";
 
 type InventoryFilter = "expired" | "exp30" | "lowStock";
 type AppView = "inventory" | "usage" | "quickadd";
@@ -38,17 +39,30 @@ export function DashboardPage({
   const locations = alertSummary?.byLocation?.filter((b) => b.location !== "") ?? [];
   const showLocationPills = locations.length >= 1;
 
-  // Auto-select first location if none selected
+  const locationBadges = useMemo(
+    () =>
+      locations.map((loc) => ({
+        location: loc.location,
+        badge: loc.expiredCount + loc.expiringSoonCount + loc.lowStockCount,
+      })),
+    [locations],
+  );
+
+  // Auto-select first location if none selected or selected location isn't a real dashboard location
+  const validSelection = selectedLocation !== null
+    && selectedLocation !== "Unassigned"
+    && locations.some((l) => l.location === selectedLocation);
+
   useEffect(() => {
-    if (selectedLocation === null && locations.length > 0) {
+    if (!validSelection && locations.length > 0) {
       onLocationChange(locations[0].location);
     }
-  }, [selectedLocation, locations, onLocationChange]);
+  }, [validSelection, locations, onLocationChange]);
 
   // Get alert counts for the selected location
   const activeAlerts = (() => {
     if (!alertSummary) return null;
-    if (selectedLocation === null && locations.length > 0) {
+    if (!validSelection && locations.length > 0) {
       // Will auto-select soon, use first location's data in the meantime
       return locations[0];
     }
@@ -81,24 +95,11 @@ export function DashboardPage({
           </div>
 
           {showLocationPills ? (
-            <div className="location-pills">
-              {locations.map((loc) => {
-                const totalAlerts = loc.expiredCount + loc.expiringSoonCount + loc.lowStockCount;
-                return (
-                  <button
-                    key={loc.location}
-                    type="button"
-                    className={`location-pill${selectedLocation === loc.location ? " active" : ""}`}
-                    onClick={() => onLocationChange(loc.location)}
-                  >
-                    {loc.location}
-                    {totalAlerts > 0 ? (
-                      <span className="location-pill-badge">{totalAlerts}</span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
+            <LocationPills
+              locations={locationBadges}
+              selectedLocation={selectedLocation}
+              onLocationChange={(loc) => onLocationChange(loc)}
+            />
           ) : null}
 
           {activeAlerts && !hasAlerts && selectedLocation ? (

@@ -63,12 +63,32 @@ export default function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
 
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 780px)");
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
     mql.addEventListener("change", handler);
     return () => mql.removeEventListener("change", handler);
   }, []);
+
+  // Hide the mobile bottom bar when the virtual keyboard is open (iOS/Android)
+  useEffect(() => {
+    if (!isMobile) return;
+    const onFocus = (e: FocusEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+        setKeyboardOpen(true);
+      }
+    };
+    const onBlur = () => setKeyboardOpen(false);
+    document.addEventListener("focusin", onFocus);
+    document.addEventListener("focusout", onBlur);
+    return () => {
+      document.removeEventListener("focusin", onFocus);
+      document.removeEventListener("focusout", onBlur);
+    };
+  }, [isMobile]);
 
   const userViewScope =
     String(user?.attributes?.sub ?? "") ||
@@ -424,6 +444,7 @@ export default function App() {
         initialFilter={inventoryInitialFilter}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
+        onNavigateToSettings={() => setView("settings")}
       />
     ) : (
       <DashboardPage
@@ -517,7 +538,7 @@ export default function App() {
   const isInventorySection = view === "inventory" || view === "usage" || view === "quickadd";
 
   return (
-    <section className={`app-shell${isMobile ? " app-shell--mobile" : ""}`}>
+    <section className={`app-shell${isMobile && !keyboardOpen ? " app-shell--mobile" : ""}`}>
       <AppToolbar
         view={view}
         onNavigate={(v) => setView(v)}
@@ -530,7 +551,7 @@ export default function App() {
         />
       )}
       {content}
-      {isMobile && (
+      {isMobile && !keyboardOpen && (
         <nav className="app-bottom-bar" aria-label="Main navigation">
           <button
             type="button"

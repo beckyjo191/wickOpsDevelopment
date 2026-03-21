@@ -1398,11 +1398,14 @@ const handleAddLocation = async (storage: InventoryStorage, access: AccessContex
   if (!name) return json(400, { error: "Location name is required" });
   if (name.length > 100) return json(400, { error: "Location name too long" });
   const existing = await getRegisteredLocations(storage);
-  if (!existing.includes(name)) {
-    existing.push(name);
-    existing.sort((a, b) => a.localeCompare(b));
-    await saveRegisteredLocations(storage, existing);
+  // Case-insensitive duplicate check
+  const duplicate = existing.find((l) => l.toLowerCase() === name.toLowerCase());
+  if (duplicate) {
+    return json(409, { error: `A location named "${duplicate}" already exists` });
   }
+  existing.push(name);
+  existing.sort((a, b) => a.localeCompare(b));
+  await saveRegisteredLocations(storage, existing);
   return json(200, { locations: existing });
 };
 
@@ -1413,7 +1416,26 @@ const handleRemoveLocation = async (storage: InventoryStorage, access: AccessCon
   const existing = await getRegisteredLocations(storage);
   const updated = existing.filter((l) => l !== name);
   await saveRegisteredLocations(storage, updated);
-  return json(200, { locations: updated });
+
+  // Clear the location from all items that reference it
+  const items = await listAllItems(storage, "");
+  let clearedCount = 0;
+  for (const item of items) {
+    let values: Record<string, unknown> = {};
+    try { values = JSON.parse(item.valuesJson ?? "{}") ?? {}; } catch { continue; }
+    const loc = String(values.location ?? "").trim();
+    if (loc !== name) continue;
+    values.location = "";
+    clearedCount++;
+    await ddb.send(
+      new PutCommand({
+        TableName: storage.itemTable,
+        Item: { ...item, valuesJson: JSON.stringify(values), updatedAtCustom: new Date().toISOString() },
+      }),
+    );
+  }
+
+  return json(200, { locations: updated, clearedCount });
 };
 
 const handleRenameLocation = async (storage: InventoryStorage, access: AccessContext, body: any) => {
@@ -1426,8 +1448,14 @@ const handleRenameLocation = async (storage: InventoryStorage, access: AccessCon
 
   // Update registry
   const existing = await getRegisteredLocations(storage);
+  // Case-insensitive duplicate check (ignore the location being renamed)
+  const duplicate = existing.find(
+    (l) => l !== oldName && l.toLowerCase() === newName.toLowerCase(),
+  );
+  if (duplicate) {
+    return json(409, { error: `A location named "${duplicate}" already exists` });
+  }
   const updated = existing.map((l) => (l === oldName ? newName : l));
-  if (!updated.includes(newName)) updated.push(newName);
   updated.sort((a, b) => a.localeCompare(b));
   await saveRegisteredLocations(storage, updated);
 

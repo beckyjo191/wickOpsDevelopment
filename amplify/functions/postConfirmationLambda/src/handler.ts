@@ -4,6 +4,7 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
@@ -20,6 +21,35 @@ const cognito = new CognitoIdentityProviderClient({ region: process.env.AWS_REGI
 const isPaidStatus = (value: unknown): boolean => {
   const normalized = String(value ?? "").toLowerCase();
   return normalized === "active" || normalized === "paid" || normalized === "sponsored";
+};
+
+const countOrgUsers = async (organizationId: string, tableName: string): Promise<number> => {
+  const result = await ddb.send(
+    new ScanCommand({
+      TableName: tableName,
+      Select: "COUNT",
+      FilterExpression: "organizationId = :orgId",
+      ExpressionAttributeValues: { ":orgId": organizationId },
+    })
+  );
+  return result.Count ?? 0;
+
+};
+
+const countPendingInvites = async (organizationId: string, tableName: string): Promise<number> => {
+  const result = await ddb.send(
+    new ScanCommand({
+      TableName: tableName,
+      Select: "COUNT",
+      FilterExpression: "organizationId = :orgId AND #status = :pending",
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: {
+        ":orgId": organizationId,
+        ":pending": "PENDING",
+      },
+    })
+  );
+  return result.Count ?? 0;
 };
 
 export const handler: Handler = async (event) => {
@@ -57,6 +87,7 @@ export const handler: Handler = async (event) => {
         role?: string;
         status?: string;
         displayName?: string;
+        expiresAt?: string;
       }
     | undefined;
   try {
@@ -69,6 +100,7 @@ export const handler: Handler = async (event) => {
           role?: string;
           status?: string;
           displayName?: string;
+          expiresAt?: string;
         }
       | undefined;
   } catch (err) {
@@ -77,6 +109,24 @@ export const handler: Handler = async (event) => {
 
   const inviteOrganizationId = invite?.organizationId;
   if (invite?.status === "PENDING" && inviteOrganizationId) {
+    // Reject expired invites
+    if (invite.expiresAt && new Date(invite.expiresAt as string) < new Date()) {
+      console.log(`Invite for ${normalizedEmail} expired at ${invite.expiresAt}`);
+      await ddb.send(
+        new UpdateCommand({
+          TableName: INVITE_TABLE,
+          Key: { id: normalizedEmail },
+          UpdateExpression: "SET #status = :expired",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: { ":expired": "EXPIRED" },
+        })
+      );
+      // Fall through to create a fresh org for this user (same as no-invite path)
+    }
+
+    const inviteExpired = invite.expiresAt && new Date(invite.expiresAt as string) < new Date();
+
+    if (!inviteExpired) {
     const orgResult = await ddb.send(
       new GetCommand({ TableName: ORG_TABLE, Key: { id: inviteOrganizationId } })
     );
@@ -84,6 +134,31 @@ export const handler: Handler = async (event) => {
       throw new Error(`Organization not found for invite: ${inviteOrganizationId}`);
     }
 
+    // Check seat availability before accepting
+    const seatLimit = Number(orgResult.Item.seatLimit ?? 1);
+    const seatsUsed =
+      (await countOrgUsers(inviteOrganizationId, USER_TABLE)) +
+      (await countPendingInvites(inviteOrganizationId, INVITE_TABLE));
+    if (seatsUsed >= seatLimit) {
+      console.error(
+        `Invite acceptance blocked: org ${inviteOrganizationId} has ${seatsUsed}/${seatLimit} seats`
+      );
+      // Mark invite as failed so it doesn't count against seats
+      await ddb.send(
+        new UpdateCommand({
+          TableName: INVITE_TABLE,
+          Key: { id: normalizedEmail },
+          UpdateExpression: "SET #status = :failed",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: { ":failed": "SEAT_LIMIT_REACHED" },
+        })
+      );
+      // Fall through to create a fresh org for this user
+    }
+
+    const seatsFull = seatsUsed >= seatLimit;
+
+    if (!seatsFull) {
     const invitedRole =
       invite.role === "ADMIN" || invite.role === "EDITOR" || invite.role === "VIEWER"
         ? invite.role
@@ -157,7 +232,9 @@ export const handler: Handler = async (event) => {
 
     console.log(`✅ Invited user ${normalizedEmail} created with role=${invitedRole}`);
     return event;
-  }
+    } // end !seatsFull
+    } // end !inviteExpired
+  } // end invite PENDING
 
   // Create a placeholder org for every new user. Plan, seatLimit, and org name are
   // set properly once the user completes checkout:

@@ -660,6 +660,15 @@ export const fetchInventoryAlertSummary = async (): Promise<InventoryAlertSummar
 
 // ─── Location Registry ───────────────────────────────────────────────────────
 
+/** Try to extract a human-readable error from a JSON response body. */
+const extractApiError = async (res: Response, fallback: string): Promise<string> => {
+  try {
+    const body = await res.json();
+    if (typeof body?.error === "string") return body.error;
+  } catch { /* not JSON — fall through */ }
+  return fallback;
+};
+
 export const addInventoryLocation = async (name: string): Promise<string[]> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/locations`, {
@@ -667,7 +676,7 @@ export const addInventoryLocation = async (name: string): Promise<string[]> => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error((await res.text()) || "Failed to add location");
+  if (!res.ok) throw new Error(await extractApiError(res, "Failed to add location"));
   const data = await res.json();
   return Array.isArray(data.locations) ? data.locations : [];
 };
@@ -679,7 +688,7 @@ export const renameInventoryLocation = async (oldName: string, newName: string):
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ oldName, newName }),
   });
-  if (!res.ok) throw new Error((await res.text()) || "Failed to rename location");
+  if (!res.ok) throw new Error(await extractApiError(res, "Failed to rename location"));
   const data = await res.json();
   return {
     locations: Array.isArray(data.locations) ? data.locations : [],

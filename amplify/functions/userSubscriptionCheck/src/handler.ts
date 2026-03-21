@@ -113,21 +113,24 @@ const countPendingInvites = async (organizationId: string): Promise<number> => {
   }
 
   try {
+  // Count only non-expired pending invites
   const result = await ddb.send(
     new ScanCommand({
       TableName: INVITE_TABLE,
-      Select: "COUNT",
-      FilterExpression: "organizationId = :orgId AND #status = :pending",
+      FilterExpression:
+        "organizationId = :orgId AND #status = :pending AND (attribute_not_exists(expiresAt) OR expiresAt > :now)",
       ExpressionAttributeNames: {
         "#status": "status",
       },
       ExpressionAttributeValues: {
         ":orgId": organizationId,
         ":pending": "PENDING",
+        ":now": new Date().toISOString(),
       },
+      ProjectionExpression: "id",
     })
   );
-  return result.Count ?? 0;
+  return result.Items?.length ?? 0;
   } catch (err) {
     console.warn("countPendingInvites failed, defaulting to 0", err);
     return 0;
@@ -600,6 +603,23 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
     const seatsUsed = computedSeatsUsed > 0
       ? computedSeatsUsed
       : Number(org.seatsUsed ?? 0);
+
+    // Reconcile seatsUsed if it has drifted from the stored value
+    const storedSeatsUsed = Number(org.seatsUsed ?? 0);
+    if (computedSeatsUsed > 0 && computedSeatsUsed !== storedSeatsUsed) {
+      try {
+        await ddb.send(
+          new UpdateCommand({
+            TableName: ORG_TABLE,
+            Key: { id: user.organizationId },
+            UpdateExpression: "SET seatsUsed = :seats",
+            ExpressionAttributeValues: { ":seats": computedSeatsUsed },
+          })
+        );
+      } catch (err) {
+        console.warn("seatsUsed reconciliation failed", err);
+      }
+    }
 
     const paymentStatus = String(org.paymentStatus ?? "").toLowerCase();
     const plan = String(org.plan ?? "");

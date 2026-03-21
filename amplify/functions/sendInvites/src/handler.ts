@@ -4,6 +4,7 @@ import {
   GetCommand,
   PutCommand,
   ScanCommand,
+  UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   AdminCreateUserCommand,
@@ -51,21 +52,65 @@ const countOrgUsers = async (organizationId: string): Promise<number> => {
 };
 
 const countPendingInvites = async (organizationId: string): Promise<number> => {
+  // Count only non-expired pending invites
   const result = await ddb.send(
     new ScanCommand({
       TableName: INVITE_TABLE,
-      Select: "COUNT",
-      FilterExpression: "organizationId = :orgId AND #status = :pending",
+      FilterExpression:
+        "organizationId = :orgId AND #status = :pending AND (attribute_not_exists(expiresAt) OR expiresAt > :now)",
       ExpressionAttributeNames: {
         "#status": "status",
       },
       ExpressionAttributeValues: {
         ":orgId": organizationId,
         ":pending": "PENDING",
+        ":now": new Date().toISOString(),
       },
+      ProjectionExpression: "id",
     })
   );
-  return result.Count ?? 0;
+  return result.Items?.length ?? 0;
+};
+
+// Mark expired pending invites as EXPIRED so they stop counting against seats.
+const expireStaleInvites = async (organizationId: string): Promise<number> => {
+  const now = new Date().toISOString();
+  const result = await ddb.send(
+    new ScanCommand({
+      TableName: INVITE_TABLE,
+      FilterExpression:
+        "organizationId = :orgId AND #status = :pending AND expiresAt <= :now",
+      ExpressionAttributeNames: { "#status": "status" },
+      ExpressionAttributeValues: {
+        ":orgId": organizationId,
+        ":pending": "PENDING",
+        ":now": now,
+      },
+      ProjectionExpression: "id",
+    })
+  );
+  let expired = 0;
+  for (const item of result.Items ?? []) {
+    try {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: INVITE_TABLE,
+          Key: { id: item.id },
+          ConditionExpression: "#status = :pending",
+          UpdateExpression: "SET #status = :expired",
+          ExpressionAttributeNames: { "#status": "status" },
+          ExpressionAttributeValues: {
+            ":pending": "PENDING",
+            ":expired": "EXPIRED",
+          },
+        })
+      );
+      expired++;
+    } catch {
+      // Already changed by another process — skip
+    }
+  }
+  return expired;
 };
 
 export const handler = async (event: any) => {
@@ -137,6 +182,9 @@ export const handler = async (event: any) => {
     if (!org) {
       return { statusCode: 404, body: JSON.stringify({ error: "Organization not found" }) };
     }
+
+    // Clean up expired invites first so they don't count against seats
+    await expireStaleInvites(orgId);
 
     const seatLimit = Number(org.seatLimit ?? 1);
     const seatsUsed =

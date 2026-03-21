@@ -17,6 +17,7 @@ import {
   type PendingEntry,
   type PendingSubmission,
 } from "../lib/inventoryApi";
+import { LocationPills } from "./LocationPills";
 
 export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
 type ActiveTab = InventoryFilter | "pendingSubmissions";
@@ -29,6 +30,7 @@ interface InventoryPageProps {
   initialFilter?: InventoryFilter;
   selectedLocation: string | null;
   onLocationChange: (location: string | null) => void;
+  onNavigateToSettings?: () => void;
 }
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
@@ -157,6 +159,7 @@ function PendingSubmissionCard({
                   className="inventory-pending-qty-input"
                   value={editedQtys[origIndex] !== undefined ? editedQtys[origIndex] : String(totalQty)}
                   onChange={(e) => onEditQty(origIndex, e.target.value)}
+                  onFocus={(e) => e.currentTarget.select()}
                   disabled={busy}
                   aria-label={`Quantity for ${entry.itemName}`}
                 />
@@ -207,13 +210,22 @@ export function InventoryPage({
   initialFilter,
   selectedLocation,
   onLocationChange,
+  onNavigateToSettings,
 }: InventoryPageProps) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(true);
   const [importingCsv, setImportingCsv] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [activeTab, setActiveTabRaw] = useState<ActiveTab>(() => initialFilter ?? "all");
+  const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => initialFilter ?? "all");
+  const setActiveTabRaw = (tab: ActiveTab) => {
+    setActiveTabInternal((prev) => {
+      if (prev !== tab) {
+        setSelectedRowIds(new Set());
+      }
+      return tab;
+    });
+  };
   const activeFilter: InventoryFilter = activeTab === "pendingSubmissions" ? "all" : activeTab;
   const setActiveFilter = (f: InventoryFilter) => setActiveTabRaw(f);
 
@@ -244,6 +256,7 @@ export function InventoryPage({
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const [copiedRowValues, setCopiedRowValues] = useState<Record<string, string | number | boolean | null> | null>(null);
+  const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
   const [undoStack, setUndoStack] = useState<InventorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<InventorySnapshot[]>([]);
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
@@ -251,6 +264,7 @@ export function InventoryPage({
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
   const [addingLocation, setAddingLocation] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
+  const [addLocationError, setAddLocationError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickInventoryLine());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
@@ -520,11 +534,19 @@ export function InventoryPage({
     ];
   };
 
+  const UNASSIGNED_LOCATION = "Unassigned";
+
   const locationOptions = useMemo(() => {
     const fromItems = locationColumn
       ? rows.map((row) => String(row.values[locationColumn.key] ?? "").trim()).filter((v) => v.length > 0)
       : [];
-    return Array.from(new Set([...fromItems, ...registeredLocations])).sort((a, b) => a.localeCompare(b));
+    const named = Array.from(new Set([...fromItems, ...registeredLocations])).sort((a, b) => a.localeCompare(b));
+    // If any items have no location assigned, add an "Unassigned" option
+    const hasUnassigned = locationColumn
+      ? rows.some((row) => String(row.values[locationColumn.key] ?? "").trim() === "")
+      : false;
+    if (hasUnassigned && named.length > 0) named.push(UNASSIGNED_LOCATION);
+    return named;
   }, [rows, locationColumn, registeredLocations]);
 
   const showLocationPills = locationOptions.length >= 1;
@@ -556,6 +578,12 @@ export function InventoryPage({
   const effectiveLocationFilter = selectedLocation !== null && locationOptions.includes(selectedLocation)
     ? selectedLocation
     : locationOptions.length > 0 ? locationOptions[0] : "All Locations";
+
+  // Clear selections when switching locations
+  useEffect(() => {
+    setSelectedRowIds(new Set());
+    setSelectedRowId(null);
+  }, [effectiveLocationFilter]);
   const categoryOptions = useMemo(() => {
     if (!categoryColumn) return ["All Categories"];
     const options = Array.from(
@@ -580,7 +608,10 @@ export function InventoryPage({
     for (const row of rows) {
       if (locationColumn && effectiveLocationFilter !== "All Locations") {
         const rowLocation = String(row.values[locationColumn.key] ?? "").trim();
-        if (rowLocation !== effectiveLocationFilter) continue;
+        const matchesLocation = effectiveLocationFilter === UNASSIGNED_LOCATION
+          ? rowLocation === ""
+          : rowLocation === effectiveLocationFilter;
+        if (!matchesLocation) continue;
       }
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
       if (daysUntil !== null && daysUntil < 0) expired++;
@@ -628,8 +659,11 @@ export function InventoryPage({
         if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
         if (!passesTab) return false;
 
-        if (locationColumn && effectiveLocationFilter !== "All Locations" && rowLocation !== effectiveLocationFilter) {
-          return false;
+        if (locationColumn && effectiveLocationFilter !== "All Locations") {
+          const matchesLocation = effectiveLocationFilter === UNASSIGNED_LOCATION
+            ? rowLocation === ""
+            : rowLocation === effectiveLocationFilter;
+          if (!matchesLocation) return false;
         }
         if (categoryColumn && effectiveCategoryFilter !== "All Categories" && rowCategory !== effectiveCategoryFilter) {
           return false;
@@ -781,7 +815,7 @@ export function InventoryPage({
       if (anchorRow && sortState && sortState.key in created.values) {
         created.values[sortState.key] = anchorRow.values?.[sortState.key] ?? created.values[sortState.key];
       }
-      if (locationColumn && effectiveLocationFilter !== "All Locations") {
+      if (locationColumn && effectiveLocationFilter !== "All Locations" && effectiveLocationFilter !== UNASSIGNED_LOCATION) {
         created.values[locationColumn.key] =
           anchorRow?.values?.[locationColumn.key] ?? effectiveLocationFilter;
       }
@@ -915,14 +949,14 @@ export function InventoryPage({
     }
   };
 
-  const onRemoveSelectedRows = () => {
-    if (!canEditTable) return;
-    if (selectedRowIds.size === 0) return;
-    const count = selectedRowIds.size;
-    const confirmed = window.confirm(
-      `Delete ${count} selected ${count === 1 ? "row" : "rows"}?`,
-    );
-    if (!confirmed) return;
+  const onRequestDeleteSelectedRows = () => {
+    if (!canEditTable || selectedRowIds.size === 0) return;
+    setPendingDeleteRows(true);
+  };
+
+  const onConfirmDeleteSelectedRows = () => {
+    setPendingDeleteRows(false);
+    if (!canEditTable || selectedRowIds.size === 0) return;
     pushUndoSnapshot();
     const idsToDelete = new Set(selectedRowIds);
     const persistedIdsToDelete = rows
@@ -986,7 +1020,6 @@ export function InventoryPage({
       return next;
     });
     setSelectedRowIds(new Set());
-    onLocationChange(targetLocation);
   };
 
   function toDateInputValue(value: unknown): string {
@@ -1520,8 +1553,8 @@ export function InventoryPage({
                       <>
                         {showLocationPills && locationOptions.length > 1 ? (
                           <details className="inventory-move-menu">
-                            <summary className="button button-secondary">
-                              Move ({selectedRowIds.size})
+                            <summary className="inventory-import-trigger">
+                              Move to… <span className="inventory-move-count">{selectedRowIds.size}</span>
                             </summary>
                             <div className="inventory-move-panel">
                               {locationOptions
@@ -1543,8 +1576,8 @@ export function InventoryPage({
                             </div>
                           </details>
                         ) : null}
-                        <button className="button button-secondary" onClick={onRemoveSelectedRows}>
-                          Delete Selected ({selectedRowIds.size})
+                        <button className="inventory-import-trigger inventory-delete-trigger" onClick={onRequestDeleteSelectedRows}>
+                          Delete ({selectedRowIds.size})
                         </button>
                       </>
                     ) : null}
@@ -1598,47 +1631,53 @@ export function InventoryPage({
           </div>
         </header>
 
-        {showLocationPills || canEditInventory ? (
-          <div className="location-pills">
-            {locationOptions.map((loc) => (
-              <button
-                key={loc}
-                type="button"
-                className={`location-pill${selectedLocation === loc ? " active" : ""}`}
-                onClick={() => onLocationChange(loc)}
-              >
-                {loc}
-              </button>
-            ))}
+        {showLocationPills ? (
+          <>
+          <LocationPills
+            locations={locationOptions.map((loc) => ({ location: loc }))}
+            selectedLocation={selectedLocation}
+            onLocationChange={onLocationChange}
+          >
             {canEditInventory && !addingLocation ? (
               <button
                 type="button"
                 className="location-pill location-pill--add"
-                onClick={() => setAddingLocation(true)}
+                onClick={() => { setAddingLocation(true); setAddLocationError(null); setSelectMode(false); setSelectedRowIds(new Set()); }}
                 aria-label="Add location"
               >
                 +
               </button>
             ) : null}
-            {addingLocation ? (
+            {addingLocation && !isMobile ? (
               <span className="location-pill-add-form">
                 <input
                   type="text"
-                  className="location-pill-add-input"
+                  className={`location-pill-add-input${addLocationError ? " field--error" : ""}`}
                   value={newLocationName}
-                  onChange={(e) => setNewLocationName(e.target.value)}
+                  onChange={(e) => { setNewLocationName(e.target.value); setAddLocationError(null); }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && newLocationName.trim()) {
-                      void addInventoryLocation(newLocationName.trim()).then((locs) => {
+                      const name = newLocationName.trim();
+                      const dup = locationOptions.find((l) => l.toLowerCase() === name.toLowerCase());
+                      if (dup && dup !== UNASSIGNED_LOCATION) {
+                        setAddLocationError(`"${dup}" already exists`);
+                        return;
+                      }
+                      void addInventoryLocation(name).then((locs) => {
                         setRegisteredLocations(locs);
-                        onLocationChange(newLocationName.trim());
+                        onLocationChange(name);
                         setNewLocationName("");
                         setAddingLocation(false);
+                        setAddLocationError(null);
+                      }).catch((err: any) => {
+                        const msg = err?.message ?? String(err);
+                        setAddLocationError(msg.includes("already exists") ? msg : "Failed to add location");
                       });
                     }
                     if (e.key === "Escape") {
                       setNewLocationName("");
                       setAddingLocation(false);
+                      setAddLocationError(null);
                     }
                   }}
                   placeholder="Location name..."
@@ -1649,11 +1688,21 @@ export function InventoryPage({
                   className="location-pill-add-confirm"
                   onClick={() => {
                     if (!newLocationName.trim()) return;
-                    void addInventoryLocation(newLocationName.trim()).then((locs) => {
+                    const name = newLocationName.trim();
+                    const dup = locationOptions.find((l) => l.toLowerCase() === name.toLowerCase());
+                    if (dup && dup !== UNASSIGNED_LOCATION) {
+                      setAddLocationError(`"${dup}" already exists`);
+                      return;
+                    }
+                    void addInventoryLocation(name).then((locs) => {
                       setRegisteredLocations(locs);
-                      onLocationChange(newLocationName.trim());
+                      onLocationChange(name);
                       setNewLocationName("");
                       setAddingLocation(false);
+                      setAddLocationError(null);
+                    }).catch((err: any) => {
+                      const msg = err?.message ?? String(err);
+                      setAddLocationError(msg.includes("already exists") ? msg : "Failed to add location");
                     });
                   }}
                 >
@@ -1662,12 +1711,166 @@ export function InventoryPage({
                 <button
                   type="button"
                   className="location-pill-add-cancel"
-                  onClick={() => { setNewLocationName(""); setAddingLocation(false); }}
+                  onClick={() => { setNewLocationName(""); setAddingLocation(false); setAddLocationError(null); }}
                 >
                   ×
                 </button>
+                {addLocationError ? (
+                  <span className="location-pill-add-error">{addLocationError}</span>
+                ) : null}
               </span>
             ) : null}
+          </LocationPills>
+          {addingLocation && isMobile ? (
+            <div className="location-add-row">
+              <input
+                type="text"
+                className={`location-pill-add-input${addLocationError ? " field--error" : ""}`}
+                value={newLocationName}
+                onChange={(e) => { setNewLocationName(e.target.value); setAddLocationError(null); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newLocationName.trim()) {
+                    const name = newLocationName.trim();
+                    const dup = locationOptions.find((l) => l.toLowerCase() === name.toLowerCase());
+                    if (dup && dup !== UNASSIGNED_LOCATION) {
+                      setAddLocationError(`"${dup}" already exists`);
+                      return;
+                    }
+                    void addInventoryLocation(name).then((locs) => {
+                      setRegisteredLocations(locs);
+                      onLocationChange(name);
+                      setNewLocationName("");
+                      setAddingLocation(false);
+                      setAddLocationError(null);
+                    }).catch((err: any) => {
+                      const msg = err?.message ?? String(err);
+                      setAddLocationError(msg.includes("already exists") ? msg : "Failed to add location");
+                    });
+                  }
+                  if (e.key === "Escape") {
+                    setNewLocationName("");
+                    setAddingLocation(false);
+                    setAddLocationError(null);
+                  }
+                }}
+                placeholder="Location name..."
+                autoFocus
+              />
+              <button
+                type="button"
+                className="location-pill-add-confirm"
+                onClick={() => {
+                  if (!newLocationName.trim()) return;
+                  const name = newLocationName.trim();
+                  const dup = locationOptions.find((l) => l.toLowerCase() === name.toLowerCase());
+                  if (dup && dup !== UNASSIGNED_LOCATION) {
+                    setAddLocationError(`"${dup}" already exists`);
+                    return;
+                  }
+                  void addInventoryLocation(name).then((locs) => {
+                    setRegisteredLocations(locs);
+                    onLocationChange(name);
+                    setNewLocationName("");
+                    setAddingLocation(false);
+                    setAddLocationError(null);
+                  }).catch((err: any) => {
+                    const msg = err?.message ?? String(err);
+                    setAddLocationError(msg.includes("already exists") ? msg : "Failed to add location");
+                  });
+                }}
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                className="location-pill-add-cancel"
+                onClick={() => { setNewLocationName(""); setAddingLocation(false); setAddLocationError(null); }}
+              >
+                ×
+              </button>
+              {addLocationError ? (
+                <span className="location-pill-add-error">{addLocationError}</span>
+              ) : null}
+            </div>
+          ) : null}
+          </>
+        ) : canEditInventory ? (
+          <div className="location-empty-state">
+            {!addingLocation ? (
+              <>
+                <p className="location-empty-state-text">
+                  Add locations to organize inventory by where it's stored.
+                </p>
+                <button
+                  type="button"
+                  className="button button-secondary button-sm"
+                  onClick={() => { setAddingLocation(true); setAddLocationError(null); }}
+                >
+                  + Add Location
+                </button>
+              </>
+            ) : (
+              <span className="location-pill-add-form">
+                <input
+                  type="text"
+                  className={`location-pill-add-input${addLocationError ? " field--error" : ""}`}
+                  value={newLocationName}
+                  onChange={(e) => { setNewLocationName(e.target.value); setAddLocationError(null); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newLocationName.trim()) {
+                      const name = newLocationName.trim();
+                      void addInventoryLocation(name).then((locs) => {
+                        setRegisteredLocations(locs);
+                        onLocationChange(name);
+                        setNewLocationName("");
+                        setAddingLocation(false);
+                        setAddLocationError(null);
+                      }).catch((err: any) => {
+                        const msg = err?.message ?? String(err);
+                        setAddLocationError(msg.includes("already exists") ? msg : "Failed to add location");
+                      });
+                    }
+                    if (e.key === "Escape") {
+                      setNewLocationName("");
+                      setAddingLocation(false);
+                      setAddLocationError(null);
+                    }
+                  }}
+                  placeholder="Location name..."
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="location-pill-add-confirm"
+                  onClick={() => {
+                    if (!newLocationName.trim()) return;
+                    const name = newLocationName.trim();
+                    void addInventoryLocation(name).then((locs) => {
+                      setRegisteredLocations(locs);
+                      onLocationChange(name);
+                      setNewLocationName("");
+                      setAddingLocation(false);
+                      setAddLocationError(null);
+                    }).catch((err: any) => {
+                      const msg = err?.message ?? String(err);
+                      setAddLocationError(msg.includes("already exists") ? msg : "Failed to add location");
+                    });
+                  }}
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  className="location-pill-add-cancel"
+                  onClick={() => { setNewLocationName(""); setAddingLocation(false); setAddLocationError(null); }}
+                >
+                  ×
+                </button>
+                {addLocationError ? (
+                  <span className="location-pill-add-error">{addLocationError}</span>
+                ) : null}
+              </span>
+            )}
           </div>
         ) : null}
 
@@ -1798,8 +2001,7 @@ export function InventoryPage({
                 </button>
               ) : null}
             </div>
-            {!isMobile && (
-            <details className="inventory-columns-menu">
+            {!isMobile && <details className="inventory-columns-menu">
               <summary className="inventory-columns-trigger">Columns</summary>
               <div className="inventory-columns-panel">
                 {columns
@@ -1822,8 +2024,7 @@ export function InventoryPage({
                     );
                   })}
               </div>
-            </details>
-            )}
+            </details>}
           </div>
         </div>
 
@@ -1939,7 +2140,10 @@ export function InventoryPage({
                 type="button"
                 className={`button button-ghost button-sm${selectMode ? " active" : ""}`}
                 onClick={() => {
-                  setSelectMode((prev) => !prev);
+                  setSelectMode((prev) => {
+                    if (!prev) { setAddingLocation(false); setNewLocationName(""); setAddLocationError(null); }
+                    return !prev;
+                  });
                   if (selectMode) setSelectedRowIds(new Set());
                 }}
               >
@@ -1950,7 +2154,7 @@ export function InventoryPage({
                   {showLocationPills && locationOptions.length > 1 ? (
                     <details className="inventory-move-menu">
                       <summary className="button button-secondary button-sm">
-                        Move ({selectedRowIds.size})
+                        Move to… <span className="inventory-move-count">{selectedRowIds.size}</span>
                       </summary>
                       <div className="inventory-move-panel">
                         {locationOptions
@@ -1962,7 +2166,6 @@ export function InventoryPage({
                               className="inventory-move-option"
                               onClick={(e) => {
                                 onMoveSelectedRows(loc);
-                                setSelectMode(false);
                                 const details = e.currentTarget.closest("details");
                                 details?.removeAttribute("open");
                               }}
@@ -1976,7 +2179,7 @@ export function InventoryPage({
                   <button
                     type="button"
                     className="button button-secondary button-sm"
-                    onClick={onRemoveSelectedRows}
+                    onClick={onRequestDeleteSelectedRows}
                   >
                     Delete ({selectedRowIds.size})
                   </button>
@@ -2132,7 +2335,8 @@ export function InventoryPage({
                               className="inventory-card-input"
                               min={0}
                               value={String(row.values[column.key] ?? "")}
-                              onFocus={() => {
+                              onFocus={(e) => {
+                                e.currentTarget.select();
                                 setSelectedRowId(row.id);
                                 beginCellEditSession(row.id, column.key);
                               }}
@@ -2491,7 +2695,8 @@ export function InventoryPage({
                           type={column.type === "number" ? "number" : "text"}
                           min={column.type === "number" ? 0 : undefined}
                           value={String(row.values[column.key] ?? "")}
-                          onFocus={() => {
+                          onFocus={(event) => {
+                            if (column.type === "number") event.currentTarget.select();
                             setSelectedRowId(row.id);
                             beginCellEditSession(row.id, column.key);
                           }}
@@ -2632,6 +2837,24 @@ export function InventoryPage({
               >
                 Download
               </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingDeleteRows && selectedRowIds.size > 0 ? (
+        <div className="settings-destructive-overlay">
+          <div className="settings-destructive-backdrop" onClick={() => setPendingDeleteRows(false)} />
+          <div className="settings-destructive-sheet" role="dialog" aria-label="Confirm delete">
+            <div className="settings-destructive-sheet-body">
+              <p className="settings-destructive-sheet-title">Delete Items</p>
+              <p className="settings-destructive-sheet-msg">
+                Delete {selectedRowIds.size} selected {selectedRowIds.size === 1 ? "item" : "items"}? This cannot be undone after saving.
+              </p>
+            </div>
+            <div className="settings-destructive-sheet-actions">
+              <button type="button" onClick={() => setPendingDeleteRows(false)}>Cancel</button>
+              <button type="button" onClick={onConfirmDeleteSelectedRows}>Delete</button>
             </div>
           </div>
         </div>

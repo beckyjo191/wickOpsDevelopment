@@ -444,7 +444,6 @@ export default function App() {
         initialFilter={inventoryInitialFilter}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
-        onNavigateToSettings={() => setView("settings")}
       />
     ) : (
       <DashboardPage

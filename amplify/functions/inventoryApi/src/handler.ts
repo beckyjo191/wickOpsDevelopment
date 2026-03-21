@@ -808,7 +808,7 @@ const parseNumberOrBlank = (
 ): { ok: true; value: number | "" } | { ok: false; error: string } => {
   const trimmed = value.trim();
   if (!trimmed) return { ok: true, value: "" };
-  const parsed = Number(trimmed);
+  const parsed = Number(trimmed.replace(/,/g, ""));
   if (!Number.isFinite(parsed)) {
     return { ok: false, error: "must be a number" };
   }
@@ -846,7 +846,7 @@ const parseNonNegativeNumberOrBlank = (
 ): { ok: true; value: number | "" } | { ok: false; error: string } => {
   const trimmed = value.trim();
   if (!trimmed) return { ok: true, value: "" };
-  const parsed = Number(trimmed);
+  const parsed = Number(trimmed.replace(/,/g, ""));
   if (!Number.isFinite(parsed)) {
     return { ok: false, error: "must be a number" };
   }

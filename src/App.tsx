@@ -43,7 +43,11 @@ const isAppView = (value: unknown): value is AppView =>
   value === "settings";
 
 export default function App() {
-  const { user, authStatus, signOut } = useAuthenticator() as any;
+  const { user, authStatus, signOut: rawSignOut } = useAuthenticator() as any;
+  const signOut = () => {
+    try { localStorage.removeItem("wickops.selectedLocation"); } catch { /* noop */ }
+    rawSignOut();
+  };
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [view, setViewRaw] = useState<AppView>("dashboard");
   const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);

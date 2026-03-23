@@ -119,6 +119,7 @@ addInventoryRoute("/inventory/import-csv", [HttpMethod.POST]);
 addInventoryRoute("/inventory/locations", [HttpMethod.POST, HttpMethod.DELETE]);
 addInventoryRoute("/inventory/locations/rename", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns", [HttpMethod.POST]);
+addInventoryRoute("/inventory/column-visibility", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}/visibility", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}/label", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}/type", [HttpMethod.POST]);

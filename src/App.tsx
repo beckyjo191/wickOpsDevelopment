@@ -441,7 +441,6 @@ export default function App() {
       <InventoryPage
         key={inventoryKey}
         canEditInventory={canEditInventory}
-        canManageInventoryColumns={canManageInventoryColumns}
         canReviewSubmissions={canReviewUsageSubmissions}
         initialFilter={inventoryInitialFilter}
         selectedLocation={selectedLocation}

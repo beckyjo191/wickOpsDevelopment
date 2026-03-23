@@ -25,7 +25,6 @@ type SortDirection = "asc" | "desc";
 
 interface InventoryPageProps {
   canEditInventory: boolean;
-  canManageInventoryColumns: boolean;
   canReviewSubmissions?: boolean;
   initialFilter?: InventoryFilter;
   selectedLocation: string | null;
@@ -204,7 +203,6 @@ const formatPendingTime = (isoString: string): string => {
 
 export function InventoryPage({
   canEditInventory,
-  canManageInventoryColumns,
   canReviewSubmissions,
   initialFilter,
   selectedLocation,

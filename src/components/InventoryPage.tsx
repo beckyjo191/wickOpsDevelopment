@@ -11,7 +11,7 @@ import {
   listPendingSubmissions,
   loadInventoryBootstrap,
   saveInventoryItems,
-  updateInventoryColumnVisibility,
+  type ColumnVisibilityOverrides,
   type InventoryColumn,
   type InventoryRow,
   type PendingEntry,
@@ -258,6 +258,7 @@ export function InventoryPage({
   const [undoStack, setUndoStack] = useState<InventorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<InventorySnapshot[]>([]);
   const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
+  const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
   const [editingDateCell, setEditingDateCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
   const [addingLocation, setAddingLocation] = useState(false);
@@ -361,6 +362,7 @@ export function InventoryPage({
     setOrganizationId(String(bootstrap.access?.organizationId ?? ""));
     setRegisteredLocations(bootstrap.registeredLocations ?? []);
     setColumns(resolvedColumns);
+    setUserColumnOverrides(bootstrap.columnVisibilityOverrides ?? {});
     const nextRows =
       persistedRows.length > 0
         ? persistedRows
@@ -553,11 +555,14 @@ export function InventoryPage({
   const visibleColumns = useMemo(
     () => {
       const base = [...columns]
-        .filter((column) => column.isVisible)
+        .filter((column) => {
+          const override = userColumnOverrides[column.id];
+          return override !== undefined ? override : column.isVisible;
+        })
         .sort((a, b) => a.sortOrder - b.sortOrder);
       return showLocationPills ? base.filter((c) => c.key !== "location") : base;
     },
-    [columns, showLocationPills],
+    [columns, userColumnOverrides, showLocationPills],
   );
 
   const categoryColumn = useMemo(
@@ -648,6 +653,9 @@ export function InventoryPage({
         const rowLocation = String(row.values.location ?? "").trim();
         const rowCategory = String(row.values.category ?? "").trim();
 
+        // Don't filter out a row while it's being actively edited
+        const isBeingEdited = editSessionCellRef.current?.startsWith(`${row.id}:`) ?? false;
+
         let passesTab = true;
         if (activeFilter === "lowStock") {
           passesTab = hasMinQuantity && Number.isFinite(quantity) && quantity < minQuantity;
@@ -661,13 +669,14 @@ export function InventoryPage({
           const matchesLocation = effectiveLocationFilter === UNASSIGNED_LOCATION
             ? rowLocation === ""
             : rowLocation === effectiveLocationFilter;
-          if (!matchesLocation) return false;
+          if (!matchesLocation && !isBeingEdited) return false;
         }
         if (categoryColumn && effectiveCategoryFilter !== "All Categories" && rowCategory !== effectiveCategoryFilter) {
-          return false;
+          if (!isBeingEdited) return false;
         }
 
         if (!normalizedSearch) return true;
+        if (isBeingEdited) return true;
         return visibleColumns.some((column) => {
           if (column.type === "date" || column.key === "expirationDate") {
             return normalizeDateForSearch(row.values[column.key]).some((value) =>
@@ -834,23 +843,6 @@ export function InventoryPage({
       });
       return nextRows;
     });
-  };
-
-  const onToggleQuickColumn = async (column: InventoryColumn) => {
-    if (!canManageInventoryColumns) return;
-    const visibleCount = columns.filter((item) => item.isVisible).length;
-    if (column.isVisible && visibleCount <= 1) return;
-    try {
-      await updateInventoryColumnVisibility(column.id, !column.isVisible);
-      setColumns((prev) =>
-        prev.map((item) =>
-          item.id === column.id ? { ...item, isVisible: !item.isVisible } : item,
-        ),
-      );
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to update column visibility";
-      alert(message);
-    }
   };
 
   const onToggleRowSelection = (rowId: string) => {
@@ -1999,30 +1991,6 @@ export function InventoryPage({
                 </button>
               ) : null}
             </div>
-            {!isMobile && <details className="inventory-columns-menu">
-              <summary className="inventory-columns-trigger">Columns</summary>
-              <div className="inventory-columns-panel">
-                {columns
-                  .slice()
-                  .sort((a, b) => a.sortOrder - b.sortOrder)
-                  .map((column) => {
-                    const checked = column.isVisible;
-                    return (
-                      <label key={column.id} className="inventory-columns-item">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            void onToggleQuickColumn(column);
-                          }}
-                          disabled={!canManageInventoryColumns}
-                        />
-                        <span>{column.label}</span>
-                      </label>
-                    );
-                  })}
-              </div>
-            </details>}
           </div>
         </div>
 

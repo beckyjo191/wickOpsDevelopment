@@ -406,6 +406,41 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
     );
   }, [singleLocation]);
 
+  // Prune duplicate zero-qty expiration rows on load/refresh.
+  // For each item name+location, keep only one zero-qty expiration row.
+  useEffect(() => {
+    if (loading || !expirationDateKey || rows.length === 0) return;
+
+    const zeroGroups = new Map<string, InventoryRow[]>();
+    for (const r of rows) {
+      const qty = Number(r.values.quantity ?? 0);
+      const hasExp = r.values[expirationDateKey] != null && String(r.values[expirationDateKey]).trim() !== "";
+      if (qty === 0 && hasExp) {
+        const name = String(r.values.itemName ?? "").trim();
+        const loc = locationKey ? String(r.values[locationKey] ?? "").trim() : "";
+        const key = `${name}||${loc}`;
+        const group = zeroGroups.get(key) ?? [];
+        group.push(r);
+        zeroGroups.set(key, group);
+      }
+    }
+
+    const idsToDelete: string[] = [];
+    for (const group of zeroGroups.values()) {
+      if (group.length > 1) {
+        for (let i = 1; i < group.length; i++) {
+          idsToDelete.push(group[i].id);
+        }
+      }
+    }
+
+    if (idsToDelete.length > 0) {
+      void saveInventoryItems([], idsToDelete).then(() => {
+        void refreshInventoryRows({ silent: true });
+      });
+    }
+  }, [loading, rows, expirationDateKey, locationKey, refreshInventoryRows]);
+
   const getItemOptionsForLocation = useCallback(
     (location: string): AutocompleteOption[] =>
       rows
@@ -649,20 +684,52 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       });
     }
 
-    // Expiration: create new rows
+    // Expiration: reuse a zero-qty row when available, otherwise create new
+    const reusedRowIds = new Set<string>();
+
     for (const entry of expirationEntries) {
       const originalRow = rowById.get(entry.itemId);
       if (!originalRow) continue;
-      newRowOffset++;
-      rowsToSave.push({
-        id: crypto.randomUUID(),
-        position: maxPosition + newRowOffset,
-        values: {
-          ...originalRow.values,
-          quantity: entry.quantityToAdd,
-          ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
-        },
+      const itemName = String(originalRow.values.itemName ?? "").trim();
+      const itemLocation = locationKey ? String(originalRow.values[locationKey] ?? "").trim() : "";
+
+      // Find a zero-qty row with the same name+location that we haven't already reused
+      const zeroRow = rows.find((r) => {
+        if (reusedRowIds.has(r.id)) return false;
+        if (r.id === entry.itemId) return false;
+        const rName = String(r.values.itemName ?? "").trim();
+        const rQty = Number(r.values.quantity ?? 0);
+        if (rName !== itemName || rQty !== 0) return false;
+        if (locationKey) {
+          const rLoc = String(r.values[locationKey] ?? "").trim();
+          if (rLoc !== itemLocation) return false;
+        }
+        return true;
       });
+
+      if (zeroRow) {
+        // Overwrite the zero-qty row with new quantity + expiration
+        reusedRowIds.add(zeroRow.id);
+        rowsToSave.push({
+          ...zeroRow,
+          values: {
+            ...zeroRow.values,
+            quantity: entry.quantityToAdd,
+            ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
+          },
+        });
+      } else {
+        newRowOffset++;
+        rowsToSave.push({
+          id: crypto.randomUUID(),
+          position: maxPosition + newRowOffset,
+          values: {
+            ...originalRow.values,
+            quantity: entry.quantityToAdd,
+            ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
+          },
+        });
+      }
     }
 
     // Build summary for feedback

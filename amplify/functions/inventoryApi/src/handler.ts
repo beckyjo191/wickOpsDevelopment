@@ -119,6 +119,7 @@ type UserRecord = {
   role?: string;
   accessSuspended?: boolean;
   allowedModules?: unknown;
+  columnVisibility?: string;
 };
 
 type InventoryColumn = {
@@ -158,6 +159,7 @@ type AccessContext = {
   allowedModules: ModuleKey[];
   canEditInventory: boolean;
   canManageColumns: boolean;
+  columnVisibilityOverrides: Record<string, boolean>;
 };
 
 type InventoryStorage = {
@@ -762,6 +764,9 @@ const normalizeLinkForImport = (value: string): string => {
 const isPhoneHeader = (header: string): boolean =>
   /(phone|mobile|cell|tel|fax)/i.test(header);
 
+const isLinkHeader = (header: string): boolean =>
+  /^(link|url|website|webpage|site|web\s*link|hyperlink)$/i.test(header.trim());
+
 const isLikelyPhoneValue = (value: string): boolean => {
   const trimmed = value.trim();
   if (!trimmed) return false;
@@ -833,7 +838,7 @@ const inferColumnType = (
     .filter((value) => value.length > 0);
   if (values.length === 0) return "text";
 
-  if (values.every((value) => isLikelyUrlValue(value))) return "link";
+  if (isLinkHeader(header) || values.every((value) => isLikelyUrlValue(value))) return "link";
   if (values.every((value) => parseBooleanOrBlank(value).ok)) return "boolean";
   if (values.every((value) => isDateValue(value))) return "date";
   if (isPhoneHeader(header) || values.every((value) => isLikelyPhoneValue(value))) return "text";
@@ -1013,6 +1018,19 @@ const getAccessContext = async (event: any): Promise<AccessContext> => {
   const orgEnabledModules = normalizeModuleSubset(org?.enabledModules, orgAvailable);
   const allowedModules = getUserAllowedModules(user.allowedModules, orgEnabledModules);
 
+  let columnVisibilityOverrides: Record<string, boolean> = {};
+  if (user.columnVisibility) {
+    try {
+      const parsed = JSON.parse(user.columnVisibility);
+      const orgOverrides = parsed?.[organizationId];
+      if (orgOverrides && typeof orgOverrides === "object") {
+        columnVisibilityOverrides = orgOverrides;
+      }
+    } catch {
+      // ignore malformed JSON
+    }
+  }
+
   return {
     userId,
     email: claimEmail,
@@ -1023,6 +1041,7 @@ const getAccessContext = async (event: any): Promise<AccessContext> => {
     allowedModules,
     canEditInventory: EDIT_ROLES.has(role),
     canManageColumns: COLUMN_ADMIN_ROLES.has(role),
+    columnVisibilityOverrides,
   };
 };
 
@@ -1357,6 +1376,49 @@ const handleSyncCurrentUserEmail = async (access: AccessContext) => {
   });
 };
 
+const handleSaveUserColumnVisibility = async (access: AccessContext, body: any) => {
+  const overrides = body?.overrides;
+  if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
+    return json(400, { error: "overrides object is required" });
+  }
+  for (const [key, val] of Object.entries(overrides)) {
+    if (typeof key !== "string" || typeof val !== "boolean") {
+      return json(400, { error: "overrides must be a map of columnId to boolean" });
+    }
+  }
+
+  // Read current columnVisibility JSON from user record
+  const userRes = await ddb.send(
+    new GetCommand({ TableName: USER_TABLE, Key: { id: access.userId } }),
+  );
+  const existing = userRes.Item?.columnVisibility;
+  let allOrgs: Record<string, Record<string, boolean>> = {};
+  if (existing) {
+    try {
+      allOrgs = JSON.parse(existing);
+    } catch {
+      // reset if malformed
+    }
+  }
+
+  allOrgs[access.organizationId] = overrides as Record<string, boolean>;
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: USER_TABLE,
+      Key: { id: access.userId },
+      ConditionExpression: "organizationId = :org",
+      UpdateExpression: "SET columnVisibility = :cv",
+      ExpressionAttributeValues: {
+        ":org": access.organizationId,
+        ":cv": JSON.stringify(allOrgs),
+      },
+    }),
+  );
+
+  return json(200, { ok: true });
+};
+
 const getDaysUntilExpiration = (raw: string | null | undefined): number | null => {
   const str = String(raw ?? "").trim();
   if (!str) return null;
@@ -1557,6 +1619,7 @@ const handleBootstrap = async (storage: InventoryStorage, access: AccessContext)
     columns,
     items,
     registeredLocations,
+    columnVisibilityOverrides: access.columnVisibilityOverrides,
     nextToken: null,
   });
 };
@@ -2116,6 +2179,54 @@ const handleUpdateColumnLabel = async (
   );
 
   return json(200, { ok: true, columnId, label });
+};
+
+const handleUpdateColumnType = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  path: string,
+  body: any,
+) => {
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can manage inventory columns" });
+  }
+
+  const match = path.match(/\/inventory\/columns\/([^/]+)\/type$/);
+  const columnId = match?.[1];
+  if (!columnId) return json(400, { error: "Column id is required" });
+
+  const type = String(body?.type ?? "").trim() as InventoryColumnType;
+  if (!["text", "number", "date", "link", "boolean"].includes(type)) {
+    return json(400, { error: "Invalid column type" });
+  }
+
+  const columnRes = await ddb.send(
+    new GetCommand({ TableName: storage.columnTable, Key: { id: columnId } }),
+  );
+  const column = columnRes.Item as InventoryColumn | undefined;
+  if (!column) return json(404, { error: "Column not found" });
+  if (normalizeOrgId(column.organizationId) !== access.organizationId) {
+    return json(403, { error: "Column does not belong to organization" });
+  }
+  if (column.isCore) {
+    return json(400, { error: "Core column type cannot be changed" });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: storage.columnTable,
+      Key: { id: columnId },
+      UpdateExpression: "SET #type = :type",
+      ExpressionAttributeNames: {
+        "#type": "type",
+      },
+      ExpressionAttributeValues: {
+        ":type": type,
+      },
+    }),
+  );
+
+  return json(200, { ok: true, columnId, type });
 };
 
 const handleDeleteOrganizationStorage = async (
@@ -2697,6 +2808,10 @@ export const handler = async (event: any) => {
       return handleSyncCurrentUserEmail(access);
     }
 
+    if (method === "POST" && path.endsWith("/inventory/column-visibility")) {
+      return handleSaveUserColumnVisibility(access, parseBody(event));
+    }
+
     if (method === "GET" && path.endsWith("/inventory/onboarding/templates")) {
       return handleListOnboardingTemplates();
     }
@@ -2817,6 +2932,13 @@ export const handler = async (event: any) => {
         return json(403, { error: "Module access denied" });
       }
       return handleUpdateColumnLabel(storage, access, path, parseBody(event));
+    }
+
+    if (method === "POST" && /\/inventory\/columns\/[^/]+\/type$/.test(path)) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleUpdateColumnType(storage, access, path, parseBody(event));
     }
 
     if (method === "DELETE" && /\/inventory\/columns\/[^/]+$/.test(path)) {

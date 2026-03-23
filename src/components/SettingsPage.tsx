@@ -20,7 +20,9 @@ import {
   updateUserModuleAccess,
   updateCurrentUserDisplayName,
   updateInventoryColumnLabel,
-  updateInventoryColumnVisibility,
+  updateInventoryColumnType,
+  saveUserColumnVisibility,
+  type ColumnVisibilityOverrides,
   type InventoryColumn,
   type InventoryRow,
 } from "../lib/inventoryApi";
@@ -123,6 +125,7 @@ export function SettingsPage({
   const [editingLocationValue, setEditingLocationValue] = useState("");
   const [renameLocationError, setRenameLocationError] = useState<string | null>(null);
   const [pendingDeleteLocation, setPendingDeleteLocation] = useState<string | null>(null);
+  const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
   const [loadedDisclosureKey, setLoadedDisclosureKey] = useState<string>("");
   const disclosureStorageKey = `${SETTINGS_DISCLOSURES_STORAGE_KEY}.${currentUserId || "anonymous"}`;
@@ -142,6 +145,7 @@ export function SettingsPage({
           );
           setRegisteredLocations(bootstrap.registeredLocations ?? []);
           setInventoryRows(bootstrap.items ?? []);
+          setUserColumnOverrides(bootstrap.columnVisibilityOverrides ?? {});
         }
       } catch (err) {
         console.error(err);
@@ -360,16 +364,23 @@ export function SettingsPage({
   };
 
   const onToggleColumnVisibility = async (column: InventoryColumn) => {
-    if (!canManageInventoryColumns) return;
+    const currentlyVisible = userColumnOverrides[column.id] !== undefined
+      ? userColumnOverrides[column.id]
+      : column.isVisible;
+    // Prevent hiding all columns
+    const visibleCount = columns.filter((c) => {
+      const ov = userColumnOverrides[c.id];
+      return ov !== undefined ? ov : c.isVisible;
+    }).length;
+    if (currentlyVisible && visibleCount <= 1) return;
+
+    const newOverrides = { ...userColumnOverrides, [column.id]: !currentlyVisible };
     setSavingColumn(true);
+    setUserColumnOverrides(newOverrides);
     try {
-      await updateInventoryColumnVisibility(column.id, !column.isVisible);
-      setColumns((prev) =>
-        prev.map((item) =>
-          item.id === column.id ? { ...item, isVisible: !item.isVisible } : item,
-        ),
-      );
+      await saveUserColumnVisibility(newOverrides);
     } catch (err: any) {
+      setUserColumnOverrides(userColumnOverrides);
       alert(err?.message ?? "Failed to update column visibility");
     } finally {
       setSavingColumn(false);
@@ -403,6 +414,23 @@ export function SettingsPage({
       onCancelEditColumn();
     } catch (err: any) {
       alert(err?.message ?? "Failed to update column label");
+    } finally {
+      setSavingColumn(false);
+    }
+  };
+
+  const onChangeColumnType = async (column: InventoryColumn, newType: InventoryColumn["type"]) => {
+    if (!canManageInventoryColumns || column.isCore || column.type === newType) return;
+    setSavingColumn(true);
+    try {
+      await updateInventoryColumnType(column.id, newType);
+      setColumns((prev) =>
+        prev.map((item) =>
+          item.id === column.id ? { ...item, type: newType } : item,
+        ),
+      );
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to update column type");
     } finally {
       setSavingColumn(false);
     }
@@ -1000,6 +1028,9 @@ export function SettingsPage({
           <summary className="settings-section-title">Columns</summary>
           {canManageInventoryColumns ? (
             <>
+              <p className="settings-section-copy">
+                Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date) are required and cannot be deleted.
+              </p>
               <div className="settings-columns-toolbar">
                 <div className="inventory-search-wrap settings-columns-toolbar-search">
                   <input
@@ -1049,7 +1080,7 @@ export function SettingsPage({
                     <div className="settings-column-visibility">
                       <input
                         type="checkbox"
-                        checked={column.isVisible}
+                        checked={userColumnOverrides[column.id] !== undefined ? userColumnOverrides[column.id] : column.isVisible}
                         onChange={() => onToggleColumnVisibility(column)}
                         disabled={savingColumn}
                       />
@@ -1081,6 +1112,22 @@ export function SettingsPage({
                         <span>{column.label}</span>
                       )}
                     </div>
+                    {!isLocked && (
+                      <select
+                        className="settings-column-type-select"
+                        value={column.type}
+                        onChange={(e) => {
+                          void onChangeColumnType(column, e.target.value as InventoryColumn["type"]);
+                        }}
+                        disabled={savingColumn}
+                      >
+                        <option value="text">Text</option>
+                        <option value="number">Number</option>
+                        <option value="date">Date</option>
+                        <option value="link">Link</option>
+                        <option value="boolean">Yes/No</option>
+                      </select>
+                    )}
                     <div className="settings-column-actions">
                       {isLocked ? (
                         <span className="settings-core-pill">*Required</span>

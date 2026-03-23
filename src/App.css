@@ -1135,6 +1135,22 @@ details[open] > .settings-section-title::after {
   gap: 0.45rem;
 }
 
+.settings-column-type-select {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text-soft);
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.settings-column-type-select:focus {
+  outline: none;
+  border-color: var(--focus);
+}
+
 .settings-column-select {
   display: inline-flex;
   align-items: center;

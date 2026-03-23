@@ -45,6 +45,7 @@ export type InventoryAccess = {
 // The re-export above keeps this file as the import point for existing consumers.
 
 export type InventoryColumn = ApiColumn;
+export type ColumnVisibilityOverrides = Record<string, boolean>;
 
 export type ModuleAccessUser = {
   userId: string;
@@ -117,6 +118,7 @@ export const loadInventoryBootstrap = async (): Promise<{
   columns: InventoryColumn[];
   items: InventoryRow[];
   registeredLocations: string[];
+  columnVisibilityOverrides: ColumnVisibilityOverrides;
   nextToken: string | null;
 }> => {
   const base = requireBaseUrl();
@@ -153,8 +155,23 @@ export const loadInventoryBootstrap = async (): Promise<{
     registeredLocations: Array.isArray(data.registeredLocations)
       ? (data.registeredLocations as string[]).filter((l: string) => typeof l === "string" && l.length > 0)
       : [],
+    columnVisibilityOverrides: (data.columnVisibilityOverrides ?? {}) as ColumnVisibilityOverrides,
     nextToken: data.nextToken ?? null,
   };
+};
+
+export const saveUserColumnVisibility = async (
+  overrides: ColumnVisibilityOverrides,
+): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/column-visibility`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ overrides }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to save column visibility preferences");
+  }
 };
 
 export const saveInventoryItems = async (
@@ -456,6 +473,21 @@ export const updateInventoryColumnLabel = async (
   });
   if (!res.ok) {
     throw new Error((await res.text()) || "Failed to update column label");
+  }
+};
+
+export const updateInventoryColumnType = async (
+  columnId: string,
+  type: "text" | "number" | "date" | "link" | "boolean",
+): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/columns/${encodeURIComponent(columnId)}/type`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to update column type");
   }
 };
 

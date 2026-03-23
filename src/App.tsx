@@ -509,7 +509,7 @@ export default function App() {
             throw new Error(data?.failed?.[0]?.error ?? "No invites were sent");
           }
 
-          setView("dashboard");
+          setView("settings");
         }}
       />
     ) : (

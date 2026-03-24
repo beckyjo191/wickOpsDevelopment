@@ -280,7 +280,7 @@ export function InventoryPage({
   const selectedRowIdRef = useRef(selectedRowId);
   const restoringSnapshotRef = useRef(false);
   const editSessionCellRef = useRef<string | null>(null);
-  const canEditTable = canEditInventory && activeFilter === "all";
+  const canEditTable = canEditInventory && activeTab !== "pendingSubmissions";
 
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 780px)");
@@ -2313,6 +2313,24 @@ export function InventoryPage({
                             );
                           }
 
+                          /* Link column – show item name as hyperlink */
+                          if (col.type === "link") {
+                            const normalizedLink = normalizeLinkValue(String(val ?? ""));
+                            const itemName = String(row.values.itemName ?? "").trim();
+                            return normalizedLink ? (
+                              <a
+                                key={col.id}
+                                className="inventory-card-field-link"
+                                href={normalizedLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {itemName || normalizedLink}
+                              </a>
+                            ) : null;
+                          }
+
                           /* Generic column badge */
                           return (
                             <span key={col.id} className="inventory-card-tag">
@@ -2401,18 +2419,24 @@ export function InventoryPage({
                               )}
                             </div>
                           ) : column.type === "link" ? (
-                            (() => {
-                              const linkVal = String(row.values[column.key] ?? "").trim();
-                              const normalizedLink = normalizeLinkValue(linkVal);
-                              const itemName = String(row.values.itemName ?? "").trim();
-                              return normalizedLink ? (
-                                <a className="inventory-card-field-link" href={normalizedLink} target="_blank" rel="noreferrer">
-                                  {itemName || normalizedLink}
-                                </a>
-                              ) : (
-                                <span className="inventory-card-field-value">--</span>
-                              );
-                            })()
+                            <input
+                              type="url"
+                              className="inventory-card-input"
+                              value={String(row.values[column.key] ?? "")}
+                              placeholder="Paste link"
+                              onFocus={() => {
+                                setSelectedRowId(row.id);
+                                beginCellEditSession(row.id, column.key);
+                              }}
+                              onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
+                              onBlur={(e) => {
+                                const normalized = normalizeLinkValue(e.target.value);
+                                if (normalized !== e.target.value) {
+                                  onCellChange(row.id, column, normalized);
+                                }
+                                endCellEditSession();
+                              }}
+                            />
                           ) : (
                             <input
                               type="text"

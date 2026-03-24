@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ExternalLink, X } from "lucide-react";
 
 type ChecklistItem = {
@@ -12,13 +12,11 @@ type ChecklistItem = {
 
 type ChecklistData = {
   domain: string;
-  openVendorUrl?: string;
   items: ChecklistItem[];
 };
 
 export function ReorderChecklist() {
   const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
-  const vendorOpenedRef = useRef(false);
 
   const data = useMemo<ChecklistData | null>(() => {
     try {
@@ -38,17 +36,6 @@ export function ReorderChecklist() {
       return null;
     }
   }, []);
-
-  // Open the vendor site automatically on first load, then refocus this popup
-  useEffect(() => {
-    if (data?.openVendorUrl && !vendorOpenedRef.current) {
-      vendorOpenedRef.current = true;
-      const vendorTabName = `wickops-vendor-${data.domain}`;
-      window.open(data.openVendorUrl, vendorTabName);
-      // Refocus this checklist popup so it stays on top
-      setTimeout(() => window.focus(), 300);
-    }
-  }, [data]);
 
   useEffect(() => {
     if (data) {
@@ -106,6 +93,9 @@ export function ReorderChecklist() {
         </div>
         <p className="checklist-subtitle">
           {checkedItems.size}/{data.items.length} items checked off
+        </p>
+        <p className="checklist-instructions">
+          Click an item to open it on {data.domain}. Items are checked off as you go.
         </p>
         <div className="checklist-progress">
           <div

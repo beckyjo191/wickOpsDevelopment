@@ -988,7 +988,7 @@ export function SettingsPage({
                             aria-label="Rename location"
                             type="button"
                           >
-                            {isMobile ? "Edit" : <Pencil aria-hidden="true" />}
+                            <Pencil aria-hidden="true" />
                           </button>
                           <span className="settings-action-tip" role="tooltip">Rename</span>
                         </div>
@@ -1000,7 +1000,7 @@ export function SettingsPage({
                             aria-label="Remove location"
                             type="button"
                           >
-                            {isMobile ? "Delete" : <Trash2 aria-hidden="true" />}
+                            <Trash2 aria-hidden="true" />
                           </button>
                           <span className="settings-action-tip" role="tooltip">Remove</span>
                         </div>
@@ -1055,7 +1055,7 @@ export function SettingsPage({
           {canManageInventoryColumns ? (
             <>
               <p className="settings-section-copy">
-                Use the arrows to reorder columns. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date) are required and cannot be deleted.
+                Use the arrows to move columns up or down. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date, Reorder Link) are required and cannot be deleted.
               </p>
               <div className="settings-columns-toolbar">
                 <div className="inventory-search-wrap settings-columns-toolbar-search">
@@ -1108,112 +1108,114 @@ export function SettingsPage({
                     const reorderDisabled = savingColumn || reorderingColumns || isSearching;
                     return (
                   <div key={column.id} className="settings-column-row">
-                    <div className="settings-column-reorder">
-                      <button
-                        className="settings-action-icon"
-                        onClick={() => void onMoveColumn(column.id, "up")}
-                        disabled={reorderDisabled || isFirst}
-                        aria-label="Move column up"
-                        type="button"
-                      >
-                        {isMobile ? "Up" : <ChevronUp aria-hidden="true" />}
-                      </button>
-                      <button
-                        className="settings-action-icon"
-                        onClick={() => void onMoveColumn(column.id, "down")}
-                        disabled={reorderDisabled || isLast}
-                        aria-label="Move column down"
-                        type="button"
-                      >
-                        {isMobile ? "Down" : <ChevronDown aria-hidden="true" />}
-                      </button>
+                    <div className="settings-column-top">
+                      <div className="settings-column-reorder">
+                        <button
+                          className="settings-action-icon"
+                          onClick={() => void onMoveColumn(column.id, "up")}
+                          disabled={reorderDisabled || isFirst}
+                          aria-label="Move column up"
+                          type="button"
+                        >
+                          <ChevronUp aria-hidden="true" />
+                        </button>
+                        <button
+                          className="settings-action-icon"
+                          onClick={() => void onMoveColumn(column.id, "down")}
+                          disabled={reorderDisabled || isLast}
+                          aria-label="Move column down"
+                          type="button"
+                        >
+                          <ChevronDown aria-hidden="true" />
+                        </button>
+                      </div>
+                      <div className="settings-column-visibility">
+                        <input
+                          type="checkbox"
+                          checked={userColumnOverrides[column.id] !== undefined ? userColumnOverrides[column.id] : column.isVisible}
+                          onChange={() => onToggleColumnVisibility(column)}
+                          disabled={savingColumn}
+                        />
+                        {editingColumnId === column.id ? (
+                          <span className="settings-column-edit">
+                            <input
+                              className="field settings-column-edit-input"
+                              value={editingLabel}
+                              onChange={(event) => setEditingLabel(event.target.value)}
+                              disabled={savingColumn}
+                            />
+                            <button
+                              className="button button-secondary settings-inline-action"
+                              onClick={() => void onSaveEditColumn(column)}
+                              disabled={savingColumn || !editingLabel.trim()}
+                              type="button"
+                            >
+                              Save
+                            </button>
+                            <button
+                              className="button button-ghost settings-inline-action"
+                              onClick={onCancelEditColumn}
+                              type="button"
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <span>{column.label}</span>
+                        )}
+                      </div>
                     </div>
-                    <div className="settings-column-visibility">
-                      <input
-                        type="checkbox"
-                        checked={userColumnOverrides[column.id] !== undefined ? userColumnOverrides[column.id] : column.isVisible}
-                        onChange={() => onToggleColumnVisibility(column)}
-                        disabled={savingColumn}
-                      />
-                      {editingColumnId === column.id ? (
-                        <span className="settings-column-edit">
-                          <input
-                            className="field settings-column-edit-input"
-                            value={editingLabel}
-                            onChange={(event) => setEditingLabel(event.target.value)}
-                            disabled={savingColumn}
-                          />
-                          <button
-                            className="button button-secondary settings-inline-action"
-                            onClick={() => void onSaveEditColumn(column)}
-                            disabled={savingColumn || !editingLabel.trim()}
-                            type="button"
-                          >
-                            Save
-                          </button>
-                          <button
-                            className="button button-ghost settings-inline-action"
-                            onClick={onCancelEditColumn}
-                            type="button"
-                          >
-                            Cancel
-                          </button>
-                        </span>
-                      ) : (
-                        <span>{column.label}</span>
-                      )}
-                    </div>
-                    {!isLocked && (
-                      <select
-                        className="settings-column-type-select"
-                        value={column.type}
-                        onChange={(e) => {
-                          void onChangeColumnType(column, e.target.value as InventoryColumn["type"]);
-                        }}
-                        disabled={savingColumn}
-                      >
-                        <option value="text">Text</option>
-                        <option value="number">Number</option>
-                        <option value="date">Date</option>
-                        <option value="link">Link</option>
-                        <option value="boolean">Yes/No</option>
-                      </select>
-                    )}
-                    <div className="settings-column-actions">
+                    <div className="settings-column-bottom">
                       {isLocked ? (
                         <span className="settings-core-pill">*Required</span>
                       ) : (
-                        <div className="settings-action-wrap">
-                          <button
-                            className="settings-action-icon"
-                            onClick={() => onStartEditColumn(column)}
+                        <>
+                          <select
+                            className="settings-column-type-select"
+                            value={column.type}
+                            onChange={(e) => {
+                              void onChangeColumnType(column, e.target.value as InventoryColumn["type"]);
+                            }}
                             disabled={savingColumn}
-                            aria-label="Edit column"
-                            type="button"
                           >
-                            {isMobile ? "Edit" : <Pencil aria-hidden="true" />}
-                          </button>
-                          <span className="settings-action-tip" role="tooltip">Edit</span>
-                        </div>
+                            <option value="text">Text</option>
+                            <option value="number">Number</option>
+                            <option value="date">Date</option>
+                            <option value="link">Link</option>
+                            <option value="boolean">Yes/No</option>
+                          </select>
+                          <div className="settings-column-actions">
+                            <div className="settings-action-wrap">
+                              <button
+                                className="settings-action-icon"
+                                onClick={() => onStartEditColumn(column)}
+                                disabled={savingColumn}
+                                aria-label="Edit column"
+                                type="button"
+                              >
+                                <Pencil aria-hidden="true" />
+                              </button>
+                              <span className="settings-action-tip" role="tooltip">Edit</span>
+                            </div>
+                            <div className="settings-action-wrap">
+                              <button
+                                className="settings-action-icon settings-action-icon--danger"
+                                onClick={() =>
+                                  setPendingDeleteColumnId((prev) =>
+                                    prev === column.id ? null : column.id,
+                                  )
+                                }
+                                disabled={savingColumn}
+                                aria-label="Delete column"
+                                type="button"
+                              >
+                                <Trash2 aria-hidden="true" />
+                              </button>
+                              <span className="settings-action-tip" role="tooltip">Delete</span>
+                            </div>
+                          </div>
+                        </>
                       )}
-                      {!isLocked ? (
-                        <div className="settings-action-wrap">
-                          <button
-                            className="settings-action-icon settings-action-icon--danger"
-                            onClick={() =>
-                              setPendingDeleteColumnId((prev) =>
-                                prev === column.id ? null : column.id,
-                              )
-                            }
-                            disabled={savingColumn}
-                            aria-label="Delete column"
-                            type="button"
-                          >
-                            {isMobile ? "Delete" : <Trash2 aria-hidden="true" />}
-                          </button>
-                          <span className="settings-action-tip" role="tooltip">Delete</span>
-                        </div>
-                      ) : null}
                     </div>
                   </div>
                     );

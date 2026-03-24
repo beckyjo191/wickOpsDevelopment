@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useRef, useEffect } from "react";
+import { useCallback, useMemo, useState, useRef } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
 import { ShoppingCart, ExternalLink, Link2Off, Package, PackageCheck, Undo2, Check, X, ChevronUp, ChevronDown, AlertTriangle } from "lucide-react";
 
@@ -114,7 +114,7 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
 
       const status = isExpired ? "expired" : "lowStock";
       const statusLabel = isExpired
-        ? `Expired ${Math.abs(daysUntil!)}d ago · ${quantity} in stock`
+        ? `Expired ${Math.abs(daysUntil!)}d ago · ${quantity}${hasMin ? `/${minQuantity}` : ""} in stock`
         : `Low: ${quantity}/${minQuantity}`;
 
       const item: ReorderItem = {

@@ -85,14 +85,6 @@ export function SettingsPage({
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
   const isLockedColumn = (column: InventoryColumn): boolean =>
     column.isCore || column.isRequired || nonEditableKeys.has(column.key);
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
-  useEffect(() => {
-    const mql = window.matchMedia("(max-width: 780px)");
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
-  }, []);
-
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [newColumnName, setNewColumnName] = useState("");
   const [inventoryColumnSearchTerm, setInventoryColumnSearchTerm] = useState("");

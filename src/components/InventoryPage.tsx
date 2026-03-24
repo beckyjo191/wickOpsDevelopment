@@ -32,11 +32,11 @@ interface InventoryPageProps {
 }
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
-const AUTOSAVE_DELAY_MS = 20000;
+const AUTOSAVE_DELAY_MS = 3000;
 const UNDO_HISTORY_LIMIT = 80;
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "wickops.inventory.columnWidths:";
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
-import { pickInventoryLine, pickProvisioningLine } from "../lib/loadingLines";
+import { pickLoadingLine } from "../lib/loadingLines";
 
 const normalizeHeaderKey = (value: string): string => value.trim().toLowerCase();
 
@@ -213,6 +213,7 @@ export function InventoryPage({
   const [loading, setLoading] = useState(true);
   const [importingCsv, setImportingCsv] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showSaved, setShowSaved] = useState(false);
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => initialFilter ?? "all");
   const setActiveTabRaw = (tab: ActiveTab) => {
     setActiveTabInternal((prev) => {
@@ -264,7 +265,7 @@ export function InventoryPage({
   const [addLocationError, setAddLocationError] = useState<string | null>(null);
   const pendingNewLocationRef = useRef<string | null>(null);
   const [loadError, setLoadError] = useState<string>("");
-  const [loadingMessage, setLoadingMessage] = useState(() => pickInventoryLine());
+  const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
   const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
   const [selectMode, setSelectMode] = useState(false);
@@ -434,6 +435,9 @@ export function InventoryPage({
 
   const endCellEditSession = () => {
     editSessionCellRef.current = null;
+    if (canEditInventory && (dirtyRowIds.size > 0 || deletedRowIds.size > 0)) {
+      void onSave(true);
+    }
   };
 
   useEffect(() => {
@@ -442,7 +446,7 @@ export function InventoryPage({
     const load = async () => {
       setLoading(true);
       setLoadError("");
-      setLoadingMessage(pickInventoryLine());
+      setLoadingMessage(pickLoadingLine());
 
       while (!cancelled) {
         try {
@@ -455,7 +459,7 @@ export function InventoryPage({
           if (cancelled) return;
           if (isInventoryProvisioningError(err)) {
             isProvisioningRef.current = true;
-            setLoadingMessage(pickProvisioningLine());
+            setLoadingMessage(pickLoadingLine());
             const retryAfterMs =
               Number(err.retryAfterMs) > 0 ? Number(err.retryAfterMs) : DEFAULT_PROVISIONING_RETRY_MS;
             await new Promise((resolve) => window.setTimeout(resolve, retryAfterMs));
@@ -478,7 +482,7 @@ export function InventoryPage({
     if (!loading) return;
     const interval = window.setInterval(() => {
       setLoadingMessage(() =>
-        isProvisioningRef.current ? pickProvisioningLine() : pickInventoryLine(),
+        pickLoadingLine(),
       );
     }, 2200);
     return () => window.clearInterval(interval);
@@ -1251,6 +1255,8 @@ export function InventoryPage({
       editSessionCellRef.current = null;
       // Allow the pruning effect to re-evaluate after save
       pruningRef.current = false;
+      setShowSaved(true);
+      window.setTimeout(() => setShowSaved(false), 2000);
     } catch (err: any) {
       if (!silent) {
         alert(err?.message ?? "Failed to save inventory");
@@ -1666,9 +1672,9 @@ export function InventoryPage({
                 <button
                   className="button button-primary"
                   onClick={() => void onSave()}
-                  disabled={saving || (dirtyRowIds.size === 0 && deletedRowIds.size === 0)}
+                  disabled={saving || (dirtyRowIds.size === 0 && deletedRowIds.size === 0 && !showSaved)}
                 >
-                  {saving ? "Saving..." : "Save Changes"}
+                  {saving ? "Saving..." : showSaved ? "Saved ✓" : "Save Changes"}
                 </button>
               </div>
             ) : null}
@@ -2395,24 +2401,18 @@ export function InventoryPage({
                               )}
                             </div>
                           ) : column.type === "link" ? (
-                            <input
-                              type="url"
-                              className="inventory-card-input"
-                              value={String(row.values[column.key] ?? "")}
-                              placeholder="Paste link"
-                              onFocus={() => {
-                                setSelectedRowId(row.id);
-                                beginCellEditSession(row.id, column.key);
-                              }}
-                              onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
-                              onBlur={(e) => {
-                                const normalized = normalizeLinkValue(e.target.value);
-                                if (normalized !== e.target.value) {
-                                  onCellChange(row.id, column, normalized);
-                                }
-                                endCellEditSession();
-                              }}
-                            />
+                            (() => {
+                              const linkVal = String(row.values[column.key] ?? "").trim();
+                              const normalizedLink = normalizeLinkValue(linkVal);
+                              const itemName = String(row.values.itemName ?? "").trim();
+                              return normalizedLink ? (
+                                <a className="inventory-card-field-link" href={normalizedLink} target="_blank" rel="noreferrer">
+                                  {itemName || normalizedLink}
+                                </a>
+                              ) : (
+                                <span className="inventory-card-field-value">--</span>
+                              );
+                            })()
                           ) : (
                             <input
                               type="text"

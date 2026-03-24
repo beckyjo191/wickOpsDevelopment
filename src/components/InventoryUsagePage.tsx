@@ -27,7 +27,7 @@ type UsageGroup = {
 };
 
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
-import { pickUsageLine, pickProvisioningLine } from "../lib/loadingLines";
+import { pickLoadingLine } from "../lib/loadingLines";
 
 const formatActivityTime = (isoString: string): string => {
   const date = new Date(isoString);
@@ -300,7 +300,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
-  const [loadingMessage, setLoadingMessage] = useState(() => pickUsageLine());
+  const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup(selectedLocation ?? "")]);
@@ -314,7 +314,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
       if (initial) {
         setLoading(true);
         setLoadError("");
-        setLoadingMessage(pickUsageLine());
+        setLoadingMessage(pickLoadingLine());
       }
 
       while (true) {
@@ -327,7 +327,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
         } catch (err: any) {
           if (isInventoryProvisioningError(err)) {
             if (initial) {
-              setLoadingMessage(pickProvisioningLine());
+              setLoadingMessage(pickLoadingLine());
             }
             const retryAfterMs =
               Number(err.retryAfterMs) > 0 ? Number(err.retryAfterMs) : DEFAULT_PROVISIONING_RETRY_MS;

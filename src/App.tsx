@@ -29,7 +29,7 @@ const VIEW_STORAGE_KEY = "wickops.activeView";
 
 const SUBSCRIPTION_RETRY_MS = 2000;
 const MAX_SUBSCRIPTION_RETRIES = 6;
-import { pickAppLine } from "./lib/loadingLines";
+import { pickLoadingLine } from "./lib/loadingLines";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
 type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "invite" | "settings";
@@ -65,7 +65,7 @@ export default function App() {
     setSelectedLocation(loc);
     try { if (loc === null) localStorage.removeItem("wickops.selectedLocation"); else localStorage.setItem("wickops.selectedLocation", loc); } catch { /* noop */ }
   };
-  const [loadingLine, setLoadingLine] = useState(() => pickAppLine());
+  const [loadingLine, setLoadingLine] = useState(() => pickLoadingLine());
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
 
@@ -326,7 +326,7 @@ export default function App() {
       return;
     }
     const interval = window.setInterval(() => {
-      setLoadingLine(pickAppLine());
+      setLoadingLine(pickLoadingLine());
     }, 2200);
     return () => window.clearInterval(interval);
   }, [authStatus, subState.status, subState.loadError]);

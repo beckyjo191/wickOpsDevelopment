@@ -3,6 +3,7 @@ import { AlertTriangle, Package, ClipboardList, Zap } from "lucide-react";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
 import { LocationPills } from "./LocationPills";
+import { pickLoadingLine } from "../lib/loadingLines";
 
 type InventoryFilter = "expired" | "exp30" | "lowStock";
 type AppView = "inventory" | "usage" | "quickadd";
@@ -25,15 +26,30 @@ export function DashboardPage({
   onNavigateToInventoryWithFilter,
 }: DashboardPageProps) {
   const [alertSummary, setAlertSummary] = useState<InventoryAlertSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
 
   const hasInventory = accessibleModules.includes("inventory");
   const hasUsage = accessibleModules.includes("usage");
   const canSeeAlerts = !!onNavigateToInventoryWithFilter && hasInventory;
 
   useEffect(() => {
-    if (!canSeeAlerts) return;
-    void fetchInventoryAlertSummary().then(setAlertSummary);
+    if (!canSeeAlerts) {
+      setLoading(false);
+      return;
+    }
+    void fetchInventoryAlertSummary()
+      .then(setAlertSummary)
+      .finally(() => setLoading(false));
   }, [canSeeAlerts]);
+
+  useEffect(() => {
+    if (!loading) return;
+    const interval = window.setInterval(() => {
+      setLoadingMessage(pickLoadingLine());
+    }, 2200);
+    return () => window.clearInterval(interval);
+  }, [loading]);
 
   // Derive locations from byLocation (only non-empty location names)
   const locations = alertSummary?.byLocation?.filter((b) => b.location !== "") ?? [];
@@ -75,6 +91,17 @@ export function DashboardPage({
     (activeAlerts.expiredCount > 0 ||
       activeAlerts.expiringSoonCount > 0 ||
       activeAlerts.lowStockCount > 0);
+
+  if (loading) {
+    return (
+      <section className="app-content">
+        <div className="app-card app-loading-card">
+          <span className="app-spinner" aria-hidden="true" />
+          <span>{loadingMessage}</span>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="app-content">

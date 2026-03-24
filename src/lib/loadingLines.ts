@@ -1,8 +1,9 @@
 // ── Shared loading messages ──────────────────────────────────────────
-// Each category is shuffled independently so no message repeats until
-// the full deck has been shown.
+// One big pool of silly loading messages. The shuffle-bag ensures no
+// message repeats until every line has been shown once.
 
-const APP_LINES = [
+const ALL_LINES = [
+  // app / dashboard
   "Warming up the dashboard hamsters...",
   "Polishing your seat count...",
   "Negotiating with the loading bar...",
@@ -18,9 +19,7 @@ const APP_LINES = [
   "Placing your widgets with surgical precision...",
   "Waking up the notification bell...",
   "Feeding data to the charts...",
-];
-
-const INVENTORY_LINES = [
+  // inventory
   "Counting bolts and pretending it's fun...",
   "Teaching the forklift to whisper...",
   "Dusting shelves for dramatic effect...",
@@ -46,9 +45,7 @@ const INVENTORY_LINES = [
   "Cross-referencing every serial number ever...",
   "Warming up the clipboard...",
   "Reminding items they have a purpose...",
-];
-
-const PROVISIONING_LINES = [
+  // provisioning
   "Building table legs for your table...",
   "Aligning columns with the moon phase...",
   "Applying premium spreadsheet vibes...",
@@ -64,9 +61,7 @@ const PROVISIONING_LINES = [
   "Warming up the row factory...",
   "Teaching columns to stand up straight...",
   "Reserving premium shelf space...",
-];
-
-const USAGE_LINES = [
+  // usage
   "Gathering usage form parts...",
   "Counting what can be used...",
   "Lining up item bins...",
@@ -101,7 +96,4 @@ function createShuffleBag(source: string[]): () => string {
   };
 }
 
-export const pickAppLine = createShuffleBag(APP_LINES);
-export const pickInventoryLine = createShuffleBag(INVENTORY_LINES);
-export const pickProvisioningLine = createShuffleBag(PROVISIONING_LINES);
-export const pickUsageLine = createShuffleBag(USAGE_LINES);
+export const pickLoadingLine = createShuffleBag(ALL_LINES);

@@ -2340,7 +2340,6 @@ export function InventoryPage({
                 : visibleColumns.length > 0
                   ? String(row.values[visibleColumns[0].key] ?? "").trim() || "Untitled"
                   : "Untitled";
-              const titleKey = nameCol ? nameCol.key : visibleColumns[0]?.key;
 
               /* Collapsed card only shows quantity and expiration date */
               const previewCols = visibleColumns

@@ -215,6 +215,10 @@ export function SettingsPage({
           typeof parsed.inventoryColumns === "boolean"
             ? parsed.inventoryColumns
             : DEFAULT_DISCLOSURE_STATE.inventoryColumns,
+        help:
+          typeof parsed.help === "boolean"
+            ? parsed.help
+            : DEFAULT_DISCLOSURE_STATE.help,
       });
       setLoadedDisclosureKey(disclosureStorageKey);
     } catch {
@@ -615,6 +619,7 @@ export function SettingsPage({
   };
 
   const onDisclosureToggle = (key: DisclosureKey, isOpen: boolean) => {
+    if (loadedDisclosureKey !== disclosureStorageKey) return;
     setDisclosures((prev) => {
       if (prev[key] === isOpen) return prev;
       return { ...prev, [key]: isOpen };
@@ -1253,13 +1258,7 @@ export function SettingsPage({
         <details
           className="settings-section"
           open={disclosures.help}
-          onToggle={(e) =>
-            setDisclosures((prev) => {
-              const next = { ...prev, help: (e.target as HTMLDetailsElement).open };
-              try { localStorage.setItem(SETTINGS_DISCLOSURES_STORAGE_KEY, JSON.stringify(next)); } catch {}
-              return next;
-            })
-          }
+          onToggle={(event) => onDisclosureToggle("help", event.currentTarget.open)}
         >
           <summary className="settings-section-title">Help</summary>
           <p className="settings-section-copy">Color guide used throughout the app.</p>

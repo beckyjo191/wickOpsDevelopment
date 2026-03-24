@@ -156,7 +156,7 @@ export function DashboardPage({
               {activeAlerts.expiringSoonCount > 0 ? (
                 <button
                   type="button"
-                  className="app-alert-card app-alert-card--warning"
+                  className="app-alert-card app-alert-card--caution"
                   onClick={() => onNavigateToInventoryWithFilter("exp30", selectedLocation)}
                 >
                   <span className="app-alert-card__icon">
@@ -171,7 +171,7 @@ export function DashboardPage({
               {activeAlerts.lowStockCount > 0 ? (
                 <button
                   type="button"
-                  className="app-alert-card app-alert-card--info"
+                  className="app-alert-card app-alert-card--warning"
                   onClick={() => onNavigateToInventoryWithFilter("lowStock", selectedLocation)}
                 >
                   <span className="app-alert-card__icon">

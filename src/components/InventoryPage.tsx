@@ -2342,10 +2342,9 @@ export function InventoryPage({
                   : "Untitled";
               const titleKey = nameCol ? nameCol.key : visibleColumns[0]?.key;
 
-              /* Remaining visible columns (skip the title column), up to 4 */
+              /* Collapsed card only shows quantity and expiration date */
               const previewCols = visibleColumns
-                .filter((c) => c.key !== titleKey)
-                .slice(0, 4);
+                .filter((c) => c.key === "quantity" || c.key === "expirationDate");
 
               /* Expiration status for card border styling */
               const expValue = row.values.expirationDate;
@@ -2410,31 +2409,19 @@ export function InventoryPage({
                             );
                           }
 
-                          /* Special styling for expiration date */
-                          if (col.key === "expirationDate" && daysUntil !== null) {
+                          /* Expiration date as badge with exp color styling */
+                          if (col.key === "expirationDate") {
+                            if (daysUntil === null) return null;
                             return (
-                              <span key={col.id} className={`inventory-card-exp ${expClass}`}>
-                                {displayText}
+                              <span key={col.id} className={`inventory-card-badge ${expClass}`}>
+                                Exp: {displayText}
                               </span>
                             );
                           }
 
-                          /* Link column – show item name as hyperlink */
+                          /* Link column – skip from preview (item name already shown as card title) */
                           if (col.type === "link") {
-                            const normalizedLink = normalizeLinkValue(String(val ?? ""));
-                            const itemName = String(row.values.itemName ?? "").trim();
-                            return normalizedLink ? (
-                              <a
-                                key={col.id}
-                                className="inventory-card-field-link"
-                                href={normalizedLink}
-                                target="_blank"
-                                rel="noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                              >
-                                {itemName || normalizedLink}
-                              </a>
-                            ) : null;
+                            return null;
                           }
 
                           /* Generic column badge */

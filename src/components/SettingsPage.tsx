@@ -31,13 +31,14 @@ import type { ThemePreference } from "../lib/themePreference";
 import { ChevronUp, ChevronDown, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns";
+type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns" | "help";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
   userModuleAccess: true,
   locations: true,
   inventoryColumns: false,
+  help: false,
 };
 
 interface SettingsPageProps {
@@ -1247,6 +1248,39 @@ export function SettingsPage({
               Only administrators can manage inventory columns.
             </p>
           )}
+        </details>
+
+        <details
+          className="settings-section"
+          open={disclosures.help}
+          onToggle={(e) =>
+            setDisclosures((prev) => {
+              const next = { ...prev, help: (e.target as HTMLDetailsElement).open };
+              try { localStorage.setItem(SETTINGS_DISCLOSURES_STORAGE_KEY, JSON.stringify(next)); } catch {}
+              return next;
+            })
+          }
+        >
+          <summary className="settings-section-title">Help</summary>
+          <p className="settings-section-copy">Color guide used throughout the app.</p>
+          <div className="settings-legend">
+            <div className="settings-legend-item">
+              <span className="settings-legend-dot" style={{ background: "var(--danger)" }} />
+              <span>Expired</span>
+            </div>
+            <div className="settings-legend-item">
+              <span className="settings-legend-dot" style={{ background: "var(--caution)" }} />
+              <span>Expiring within 30 days</span>
+            </div>
+            <div className="settings-legend-item">
+              <span className="settings-legend-dot" style={{ background: "var(--notice)" }} />
+              <span>Expiring within 60 days</span>
+            </div>
+            <div className="settings-legend-item">
+              <span className="settings-legend-dot" style={{ background: "var(--warning)" }} />
+              <span>Low stock</span>
+            </div>
+          </div>
         </details>
       </div>
     </section>

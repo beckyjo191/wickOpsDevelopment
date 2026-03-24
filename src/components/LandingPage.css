@@ -308,41 +308,6 @@
   color: var(--lp-copy);
 }
 
-.lp-modules {
-  background: var(--lp-pill-bg);
-  border: 1px solid var(--lp-pill-border);
-  border-radius: 8px;
-  padding: 0.95rem;
-  display: grid;
-  gap: 0.7rem;
-}
-
-.lp-modules h2 {
-  margin: 0;
-  font-size: 1.12rem;
-  color: var(--text-heading);
-}
-
-.lp-modules p {
-  margin: 0;
-  color: var(--lp-copy);
-}
-
-.lp-module-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-}
-
-.lp-module-tags span {
-  border: 1px solid var(--lp-tag-border);
-  background: var(--lp-tag-bg);
-  border-radius: 4px;
-  padding: 0.32rem 0.6rem;
-  color: var(--lp-tag-text);
-  font-size: 0.8rem;
-  font-weight: 500;
-}
 
 @keyframes lp-rise {
   from {

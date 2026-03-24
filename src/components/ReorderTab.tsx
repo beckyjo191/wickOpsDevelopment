@@ -1,11 +1,15 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
-import { ShoppingCart, ExternalLink, Link2Off, Package } from "lucide-react";
+import { ShoppingCart, ExternalLink, Link2Off, Package, PackageCheck, Undo2, Check, X } from "lucide-react";
 
 interface ReorderTabProps {
   rows: InventoryRow[];
   onEditReorderLink?: (rowId: string) => void;
+  onClearOrderedAt?: (rowIds: string[]) => void;
+  onMarkOrdered?: (rowIds: string[]) => void;
 }
+
+const isMobile = () => window.innerWidth <= 780;
 
 type ReorderItem = {
   row: InventoryRow;
@@ -55,6 +59,7 @@ const handleReorderVendor = (group: VendorGroup) => {
     domain: group.domain,
     openVendorUrl: group.items[0].reorderLink,
     items: group.items.map((item) => ({
+      rowId: item.row.id,
       name: item.itemName,
       link: item.reorderLink,
       status: item.statusLabel,
@@ -72,12 +77,14 @@ const handleReorderVendor = (group: VendorGroup) => {
   );
 };
 
-export function ReorderTab({ rows, onEditReorderLink }: ReorderTabProps) {
+export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOrdered }: ReorderTabProps) {
   const [reorderedVendors, setReorderedVendors] = useState<Set<string>>(new Set());
+  const [mobileChecklist, setMobileChecklist] = useState<{ group: VendorGroup; checkedItems: Set<number> } | null>(null);
 
-  const { vendorGroups, noLinkItems } = useMemo(() => {
+  const { vendorGroups, noLinkItems, orderedItems } = useMemo(() => {
     const reorderItems: ReorderItem[] = [];
     const noLink: ReorderItem[] = [];
+    const ordered: ReorderItem[] = [];
 
     for (const row of rows) {
       const quantityRaw = row.values.quantity;
@@ -114,7 +121,10 @@ export function ReorderTab({ rows, onEditReorderLink }: ReorderTabProps) {
         minQuantity,
       };
 
-      if (reorderLink) {
+      // Items with orderedAt go to the ordered section
+      if (row.values.orderedAt) {
+        ordered.push(item);
+      } else if (reorderLink) {
         reorderItems.push(item);
       } else {
         noLink.push(item);
@@ -137,18 +147,28 @@ export function ReorderTab({ rows, onEditReorderLink }: ReorderTabProps) {
       .map(([domain, items]) => ({ domain, items }))
       .sort((a, b) => b.items.length - a.items.length);
 
-    return { vendorGroups: groups, noLinkItems: noLink };
+    return { vendorGroups: groups, noLinkItems: noLink, orderedItems: ordered };
   }, [rows]);
 
   const totalReorderItems = vendorGroups.reduce((sum, g) => sum + g.items.length, 0);
 
+  const handleReorder = useCallback((group: VendorGroup) => {
+    if (isMobile()) {
+      // On mobile: show inline checklist, open vendor in new tab
+      setMobileChecklist({ group, checkedItems: new Set() });
+      window.open(group.items[0].reorderLink, "_blank");
+    } else {
+      handleReorderVendor(group);
+    }
+  }, []);
+
   const handleReorderAll = () => {
     for (const group of vendorGroups) {
-      handleReorderVendor(group);
+      handleReorder(group);
     }
   };
 
-  if (totalReorderItems === 0 && noLinkItems.length === 0) {
+  if (totalReorderItems === 0 && noLinkItems.length === 0 && orderedItems.length === 0) {
     return (
       <div className="reorder-empty">
         <Package size={48} strokeWidth={1.5} />
@@ -198,7 +218,7 @@ export function ReorderTab({ rows, onEditReorderLink }: ReorderTabProps) {
               type="button"
               className={`button ${reorderedVendors.has(group.domain) ? "button-secondary" : "button-primary"} button-sm`}
               onClick={() => {
-                handleReorderVendor(group);
+                handleReorder(group);
                 setReorderedVendors((prev) => new Set(prev).add(group.domain));
               }}
             >
@@ -252,6 +272,136 @@ export function ReorderTab({ rows, onEditReorderLink }: ReorderTabProps) {
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {mobileChecklist && (
+        <div className="reorder-mobile-checklist">
+          <div className="reorder-mobile-checklist-header">
+            <div>
+              <h4 className="reorder-mobile-checklist-title">{mobileChecklist.group.domain}</h4>
+              <p className="reorder-mobile-checklist-subtitle">
+                {mobileChecklist.checkedItems.size}/{mobileChecklist.group.items.length} items
+              </p>
+            </div>
+            <button
+              type="button"
+              className="reorder-mobile-checklist-close"
+              onClick={() => setMobileChecklist(null)}
+              aria-label="Close checklist"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <div className="reorder-mobile-checklist-progress">
+            <div
+              className="reorder-mobile-checklist-progress-fill"
+              style={{ width: `${mobileChecklist.group.items.length > 0 ? (mobileChecklist.checkedItems.size / mobileChecklist.group.items.length) * 100 : 0}%` }}
+            />
+          </div>
+          <div className="reorder-mobile-checklist-items">
+            {mobileChecklist.group.items.map((item, index) => {
+              const isChecked = mobileChecklist.checkedItems.has(index);
+              return (
+                <div key={item.row.id} className={`reorder-mobile-checklist-item${isChecked ? " checked" : ""}`}>
+                  <button
+                    type="button"
+                    className={`reorder-mobile-checkbox${isChecked ? " checked" : ""}`}
+                    onClick={() => {
+                      setMobileChecklist((prev) => {
+                        if (!prev) return null;
+                        const next = new Set(prev.checkedItems);
+                        if (next.has(index)) next.delete(index);
+                        else next.add(index);
+                        return { ...prev, checkedItems: next };
+                      });
+                    }}
+                  >
+                    {isChecked && <Check size={14} />}
+                  </button>
+                  <div className="reorder-mobile-checklist-item-info">
+                    <a
+                      href={item.reorderLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="reorder-mobile-checklist-item-name"
+                      onClick={() => {
+                        setMobileChecklist((prev) => {
+                          if (!prev) return null;
+                          const next = new Set(prev.checkedItems);
+                          next.add(index);
+                          return { ...prev, checkedItems: next };
+                        });
+                      }}
+                    >
+                      {item.itemName}
+                      <ExternalLink size={12} />
+                    </a>
+                    <span className="reorder-mobile-checklist-item-detail">{item.statusLabel}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {mobileChecklist.checkedItems.size > 0 && onMarkOrdered && (
+            <div className="reorder-mobile-checklist-footer">
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => {
+                  const checkedRowIds = mobileChecklist.group.items
+                    .filter((_, i) => mobileChecklist.checkedItems.has(i))
+                    .map((item) => item.row.id);
+                  onMarkOrdered(checkedRowIds);
+                  setMobileChecklist(null);
+                }}
+              >
+                Mark as Ordered
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {orderedItems.length > 0 && (
+        <div className="reorder-vendor-card reorder-ordered-card app-card">
+          <div className="reorder-vendor-header">
+            <div className="reorder-vendor-info">
+              <PackageCheck size={18} />
+              <h4 className="reorder-vendor-name">Ordered</h4>
+              <span className="reorder-vendor-count">
+                {orderedItems.length} item{orderedItems.length !== 1 ? "s" : ""}
+              </span>
+            </div>
+          </div>
+          <div className="reorder-item-list">
+            {orderedItems.map((item) => {
+              const orderedAt = String(item.row.values.orderedAt ?? "");
+              const daysAgo = orderedAt
+                ? Math.floor((Date.now() - new Date(orderedAt).getTime()) / (1000 * 60 * 60 * 24))
+                : null;
+              return (
+                <div key={item.row.id} className="reorder-item-row">
+                  <span className="reorder-item-name">{item.itemName}</span>
+                  <span className="reorder-item-ordered-info">
+                    {daysAgo !== null && daysAgo > 0
+                      ? `Ordered ${daysAgo}d ago`
+                      : "Ordered today"}
+                    {onClearOrderedAt && (
+                      <button
+                        type="button"
+                        className="reorder-undo-btn"
+                        title="Move back to reorder list"
+                        onClick={() => onClearOrderedAt([item.row.id])}
+                      >
+                        <Undo2 size={14} />
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

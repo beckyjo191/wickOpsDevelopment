@@ -22,7 +22,7 @@ export function LandingPage() {
           <p className="lp-kicker">Practical systems for busy people.</p>
           <h1>Know what you have.<br />Reorder in two clicks.</h1>
           <p className="lp-sub">
-            From homes to field teams, WickOps tracks inventory, supplies, and operational gear
+            From homes to field teams, WickOps tracks inventory and supplies
             so you spend less time searching and more time doing.
           </p>
           <div className="lp-cta-row">
@@ -95,18 +95,6 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section className="lp-modules" aria-label="Module flexibility">
-          <h2>Use as many modules as you need, or as few as you want.</h2>
-          <div className="lp-module-tags">
-            <span>Inventory & Reorder</span>
-            <span>Gear Tracking</span>
-            <span>Truck Checks</span>
-            <span>Mobile Forms</span>
-            <span>Expense Tracking (MoM / YoY)</span>
-            <span>Custom Workflows</span>
-          </div>
-          <p>Built for real life operations.</p>
-        </section>
 
       </main>
     </div>

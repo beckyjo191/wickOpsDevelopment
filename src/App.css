@@ -3444,9 +3444,9 @@ details[open] > .settings-section-title::after {
 }
 
 .inventory-card-badge--low {
-  background: var(--warning-surface);
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
   color: var(--warning);
-  border: 1px solid var(--warning-border);
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
 }
 
 .inventory-card-exp {
@@ -4482,13 +4482,15 @@ textarea.inventory-card-input {
 }
 
 .reorder-status-expired {
-  background: var(--danger-surface);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
   color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .reorder-status-lowStock {
-  background: var(--warning-surface);
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
   color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 25%, transparent);
 }
 
 .reorder-nolink-card {
@@ -4544,6 +4546,35 @@ textarea.inventory-card-input {
   background: var(--surface-soft);
   border-color: var(--primary);
   color: var(--primary);
+}
+
+.reorder-ordered-card {
+  opacity: 0.7;
+}
+
+.reorder-item-ordered-info {
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.reorder-undo-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.reorder-undo-btn:hover {
+  color: var(--text);
+  background: var(--surface-soft);
 }
 
 /* ── Reorder Checklist Popup ────────────────────────────────────── */
@@ -4685,11 +4716,164 @@ textarea.inventory-card-input {
 
 .checklist-done-banner {
   padding: 0.75rem;
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
   background: var(--surface-alt);
   color: var(--primary);
   font-weight: 600;
   font-size: 0.9rem;
+}
+
+.checklist-done-banner p {
+  margin: 0;
+}
+
+/* ── Mobile Inline Checklist ────────────────────────────────────── */
+
+.reorder-mobile-checklist {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 70vh;
+  background: var(--surface);
+  border-top: 2px solid var(--primary);
+  border-radius: 12px 12px 0 0;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideUp 0.25s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.reorder-mobile-checklist-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem 1rem 0.5rem;
+}
+
+.reorder-mobile-checklist-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.reorder-mobile-checklist-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-soft);
+}
+
+.reorder-mobile-checklist-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.reorder-mobile-checklist-close:hover {
+  color: var(--text);
+  background: var(--surface-soft);
+}
+
+.reorder-mobile-checklist-progress {
+  height: 3px;
+  background: var(--surface-soft);
+  margin: 0 1rem;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.reorder-mobile-checklist-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.reorder-mobile-checklist-items {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0;
+}
+
+.reorder-mobile-checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+}
+
+.reorder-mobile-checklist-item.checked {
+  opacity: 0.5;
+}
+
+.reorder-mobile-checkbox {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  border-radius: 4px;
+  border: 2px solid var(--border-strong);
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  padding: 0;
+  margin-top: 2px;
+}
+
+.reorder-mobile-checkbox.checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.reorder-mobile-checklist-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.reorder-mobile-checklist-item-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--link);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.reorder-mobile-checklist-item-name:hover {
+  text-decoration: underline;
+}
+
+.reorder-mobile-checklist-item-detail {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  margin-top: 2px;
+}
+
+.reorder-mobile-checklist-footer {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: center;
+}
+
+.reorder-mobile-checklist-footer .button {
+  width: 100%;
 }
 
 @media (max-width: 780px) {

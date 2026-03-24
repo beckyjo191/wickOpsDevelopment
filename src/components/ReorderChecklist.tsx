@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ExternalLink, X } from "lucide-react";
 
 type ChecklistItem = {
+  rowId: string;
   name: string;
   link: string;
   status: string;
@@ -38,12 +39,14 @@ export function ReorderChecklist() {
     }
   }, []);
 
-  // Open the vendor site automatically on first load
+  // Open the vendor site automatically on first load, then refocus this popup
   useEffect(() => {
     if (data?.openVendorUrl && !vendorOpenedRef.current) {
       vendorOpenedRef.current = true;
       const vendorTabName = `wickops-vendor-${data.domain}`;
       window.open(data.openVendorUrl, vendorTabName);
+      // Refocus this checklist popup so it stays on top
+      setTimeout(() => window.focus(), 300);
     }
   }, [data]);
 
@@ -145,9 +148,29 @@ export function ReorderChecklist() {
         })}
       </div>
 
-      {allChecked && data.items.length > 0 && (
+      {checkedItems.size > 0 && (
         <div className="checklist-done-banner">
-          All items checked off!
+          <p>{allChecked ? "All items checked off!" : `${checkedItems.size} item${checkedItems.size !== 1 ? "s" : ""} checked`}</p>
+          <button
+            type="button"
+            className="button button-primary button-sm"
+            onClick={() => {
+              const checkedRowIds = data.items
+                .filter((_, i) => checkedItems.has(i))
+                .map((item) => item.rowId);
+              // Broadcast to main app to stamp orderedAt
+              const channel = new BroadcastChannel("wickops-reorder");
+              channel.postMessage({
+                type: "mark-ordered",
+                rowIds: checkedRowIds,
+                domain: data.domain,
+              });
+              channel.close();
+              window.close();
+            }}
+          >
+            Mark as Ordered
+          </button>
         </div>
       )}
     </div>

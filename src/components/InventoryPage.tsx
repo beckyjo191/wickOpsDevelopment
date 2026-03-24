@@ -644,6 +644,30 @@ export function InventoryPage({
     }
   }, [effectiveLocationFilter]);
 
+  // Listen for "mark as ordered" messages from the reorder checklist popup
+  useEffect(() => {
+    const channel = new BroadcastChannel("wickops-reorder");
+    channel.onmessage = (event) => {
+      if (event.data?.type === "mark-ordered" && Array.isArray(event.data.rowIds)) {
+        const orderedIds = new Set<string>(event.data.rowIds);
+        const now = new Date().toISOString();
+        setRows((prev) =>
+          prev.map((row) =>
+            orderedIds.has(row.id)
+              ? { ...row, values: { ...row.values, orderedAt: now } }
+              : row,
+          ),
+        );
+        setDirtyRowIds((prev) => {
+          const next = new Set(prev);
+          for (const id of orderedIds) next.add(id);
+          return next;
+        });
+      }
+    };
+    return () => channel.close();
+  }, []);
+
   const categoryOptions = useMemo(() => {
     if (!categoryColumn) return ["All Categories"];
     const options = Array.from(
@@ -690,7 +714,8 @@ export function InventoryPage({
         Number.isFinite(minQuantity);
       const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
       if (isLowStock) lowStock++;
-      if (isExpired || isLowStock) reorder++;
+      const hasOrderedAt = !!row.values.orderedAt;
+      if ((isExpired || isLowStock) && !hasOrderedAt) reorder++;
     }
     return { expired, exp30, exp60, lowStock, reorder };
   }, [rows, locationColumn, effectiveLocationFilter]);
@@ -1189,6 +1214,9 @@ export function InventoryPage({
     window.addEventListener("mouseup", onMouseUp);
   };
 
+  // Keys that, when edited, indicate an order has arrived — auto-clear orderedAt
+  const ORDERED_CLEAR_KEYS = new Set(["quantity", "expirationDate"]);
+
   const onCellChange = (rowId: string, column: InventoryColumn, value: string) => {
     if (!canEditTable) return;
     let changedRowId: string | null = null;
@@ -1196,28 +1224,32 @@ export function InventoryPage({
       prev.map((row) => {
         if (row.id !== rowId) return row;
         const currentValue = row.values[column.key];
+        // Auto-clear orderedAt when restocking fields are updated
+        const shouldClearOrdered = ORDERED_CLEAR_KEYS.has(column.key) && !!row.values.orderedAt;
         if (NUMBER_COLUMN_KEYS.has(column.key)) {
           const parsed = Number(value);
           const nextValue = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
-          if (currentValue === nextValue) return row;
+          if (currentValue === nextValue && !shouldClearOrdered) return row;
           changedRowId = row.id;
           return {
             ...row,
             values: {
               ...row.values,
               [column.key]: nextValue,
+              ...(shouldClearOrdered ? { orderedAt: null } : {}),
             },
           };
         }
         if (column.type === "date") {
           const nextValue = toDateInputValue(value);
-          if (String(currentValue ?? "") === nextValue) return row;
+          if (String(currentValue ?? "") === nextValue && !shouldClearOrdered) return row;
           changedRowId = row.id;
           return {
             ...row,
             values: {
               ...row.values,
               [column.key]: nextValue,
+              ...(shouldClearOrdered ? { orderedAt: null } : {}),
             },
           };
         }
@@ -2084,11 +2116,53 @@ export function InventoryPage({
             rows={rows}
             onEditReorderLink={(rowId) => {
               setActiveTabRaw("all");
+              setSelectedRowId(rowId);
               setEditingLinkCell({ rowId, columnKey: "reorderLink" });
-              // Scroll to the row after the tab switches
-              requestAnimationFrame(() => {
-                const el = document.querySelector(`[data-row-id="${rowId}"]`);
-                if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+              // Wait for tab switch to render, then scroll and focus the input
+              setTimeout(() => {
+                const row = document.querySelector(`[data-row-id="${rowId}"]`);
+                if (row) {
+                  row.scrollIntoView({ behavior: "smooth", block: "center" });
+                  // Find and focus the link input within this row
+                  setTimeout(() => {
+                    const input = row.querySelector<HTMLInputElement>('input[type="url"]');
+                    if (input) {
+                      input.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+                      input.focus();
+                    }
+                  }, 100);
+                }
+              }, 50);
+            }}
+            onClearOrderedAt={(rowIds) => {
+              const idSet = new Set(rowIds);
+              setRows((prev) =>
+                prev.map((row) =>
+                  idSet.has(row.id)
+                    ? { ...row, values: { ...row.values, orderedAt: null } }
+                    : row,
+                ),
+              );
+              setDirtyRowIds((prev) => {
+                const next = new Set(prev);
+                for (const id of rowIds) next.add(id);
+                return next;
+              });
+            }}
+            onMarkOrdered={(rowIds) => {
+              const idSet = new Set(rowIds);
+              const now = new Date().toISOString();
+              setRows((prev) =>
+                prev.map((row) =>
+                  idSet.has(row.id)
+                    ? { ...row, values: { ...row.values, orderedAt: now } }
+                    : row,
+                ),
+              );
+              setDirtyRowIds((prev) => {
+                const next = new Set(prev);
+                for (const id of rowIds) next.add(id);
+                return next;
               });
             }}
           />

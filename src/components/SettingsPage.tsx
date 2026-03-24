@@ -445,7 +445,7 @@ export function SettingsPage({
     const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
     if (targetIndex < 0 || targetIndex >= columns.length) return;
 
-    const newColumns = [...columns];
+    const newColumns = columns.map((col) => ({ ...col }));
     [newColumns[currentIndex], newColumns[targetIndex]] = [newColumns[targetIndex], newColumns[currentIndex]];
     newColumns.forEach((col, i) => { col.sortOrder = (i + 1) * 10; });
     setColumns(newColumns);

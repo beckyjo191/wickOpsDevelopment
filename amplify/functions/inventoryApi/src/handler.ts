@@ -47,7 +47,7 @@ const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
 
 const EDIT_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"]);
 const COLUMN_ADMIN_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
-const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate"]);
+const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate", "reorderLink"]);
 const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROVISIONING_RETRY_AFTER_MS = 2000;
 // ── MODULE SYNC NOTE ────────────────────────────────────────────────────────
@@ -510,6 +510,41 @@ const ensureColumns = async (organizationId: string): Promise<InventoryColumn[]>
       } catch (err: any) {
         if (err?.name !== "ConditionalCheckFailedException") throw err;
       }
+    }
+
+    // Ensure the reorderLink core column exists (added after location).
+    const hasReorderLinkColumn = existing.some(
+      (c) => normalizeLooseKey(c.key) === "reorderlink",
+    );
+    if (!hasReorderLinkColumn) {
+      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 50);
+      try {
+        await ddb.send(
+          new PutCommand({
+            TableName: storage.columnTable,
+            Item: {
+              id: coreColumnIdForKey("reorderLink"),
+              organizationId,
+              module: "inventory",
+              key: "reorderLink",
+              label: "Reorder Link",
+              type: "link",
+              isCore: true,
+              isRequired: false,
+              isVisible: true,
+              isEditable: true,
+              sortOrder: maxSort + 10,
+              createdAt: new Date().toISOString(),
+            } satisfies InventoryColumn,
+            ConditionExpression: "attribute_not_exists(id)",
+          }),
+        );
+      } catch (err: any) {
+        if (err?.name !== "ConditionalCheckFailedException") throw err;
+      }
+    }
+
+    if (!hasLocationColumn || !hasReorderLinkColumn) {
       return listColumns(storage);
     }
     return existing;
@@ -579,6 +614,19 @@ const ensureColumns = async (organizationId: string): Promise<InventoryColumn[]>
       isVisible: true,
       isEditable: true,
       sortOrder: 50,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      organizationId,
+      module: "inventory",
+      key: "reorderLink",
+      label: "Reorder Link",
+      type: "link",
+      isCore: true,
+      isRequired: false,
+      isVisible: true,
+      isEditable: true,
+      sortOrder: 60,
       createdAt: new Date().toISOString(),
     },
   ];

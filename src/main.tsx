@@ -7,6 +7,7 @@ import './index.css';
 import './App.css';
 import '@aws-amplify/ui-react/styles.css';
 import { LandingPage } from './components/LandingPage';
+import { ReorderChecklist } from './components/ReorderChecklist';
 import { applyThemePreference, loadThemePreference } from './lib/themePreference';
 
 Amplify.configure(outputs);
@@ -15,11 +16,12 @@ applyThemePreference(loadThemePreference());
 const pathname = window.location.pathname;
 const search = new URLSearchParams(window.location.search);
 const checkoutSuccess = search.get("checkout") === "success";
-const showLanding = pathname === "/" && !checkoutSuccess;
+const isReorderChecklist = search.has("reorder-checklist");
+const showLanding = pathname === "/" && !checkoutSuccess && !isReorderChecklist;
 const authInitialState = pathname === "/signup" ? "signUp" : "signIn";
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {showLanding ? <LandingPage /> : <AppWrapper initialState={authInitialState} />}
+    {isReorderChecklist ? <ReorderChecklist /> : showLanding ? <LandingPage /> : <AppWrapper initialState={authInitialState} />}
   </React.StrictMode>
 );

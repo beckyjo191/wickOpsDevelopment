@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Package, ClipboardList, Zap } from "lucide-react";
+import { AlertTriangle, Package, ClipboardList, Zap, ShoppingCart } from "lucide-react";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
 import { LocationPills } from "./LocationPills";
 import { pickLoadingLine } from "../lib/loadingLines";
 
-type InventoryFilter = "expired" | "exp30" | "lowStock";
+type InventoryFilter = "expired" | "exp30" | "lowStock" | "reorder";
 type AppView = "inventory" | "usage" | "quickadd";
 
 interface DashboardPageProps {
@@ -181,6 +181,21 @@ export function DashboardPage({
                     {activeAlerts.lowStockCount} item{activeAlerts.lowStockCount !== 1 ? "s" : ""} low on stock
                   </span>
                   <span className="app-alert-card__action">View →</span>
+                </button>
+              ) : null}
+              {(activeAlerts.expiredCount > 0 || activeAlerts.lowStockCount > 0) ? (
+                <button
+                  type="button"
+                  className="app-alert-card app-alert-card--reorder"
+                  onClick={() => onNavigateToInventoryWithFilter("reorder", selectedLocation)}
+                >
+                  <span className="app-alert-card__icon">
+                    <ShoppingCart size={16} strokeWidth={2} />
+                  </span>
+                  <span className="app-alert-card__text">
+                    Reorder items
+                  </span>
+                  <span className="app-alert-card__action">Open →</span>
                 </button>
               ) : null}
             </div>

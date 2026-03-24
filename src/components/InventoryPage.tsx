@@ -18,8 +18,9 @@ import {
   type PendingSubmission,
 } from "../lib/inventoryApi";
 import { LocationPills } from "./LocationPills";
+import { ReorderTab } from "./ReorderTab";
 
-export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
+export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock" | "reorder";
 type ActiveTab = InventoryFilter | "pendingSubmissions";
 type SortDirection = "asc" | "desc";
 
@@ -223,7 +224,7 @@ export function InventoryPage({
       return tab;
     });
   };
-  const activeFilter: InventoryFilter = activeTab === "pendingSubmissions" ? "all" : activeTab;
+  const activeFilter: InventoryFilter = (activeTab === "pendingSubmissions" || activeTab === "reorder") ? "all" : activeTab;
   const setActiveFilter = (f: InventoryFilter) => setActiveTabRaw(f);
 
   // When navigating from dashboard with a filter, sync the tab
@@ -664,6 +665,7 @@ export function InventoryPage({
     let exp30 = 0;
     let exp60 = 0;
     let lowStock = 0;
+    let reorder = 0;
     for (const row of rows) {
       if (locationColumn && effectiveLocationFilter !== "All Locations") {
         const rowLocation = String(row.values[locationColumn.key] ?? "").trim();
@@ -673,7 +675,8 @@ export function InventoryPage({
         if (!matchesLocation) continue;
       }
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
-      if (daysUntil !== null && daysUntil < 0) expired++;
+      const isExpired = daysUntil !== null && daysUntil < 0;
+      if (isExpired) expired++;
       if (daysUntil !== null && daysUntil >= 0 && daysUntil <= 30) exp30++;
       if (daysUntil !== null && daysUntil >= 0 && daysUntil <= 60) exp60++;
       const quantityRaw = row.values.quantity;
@@ -685,9 +688,11 @@ export function InventoryPage({
         minQuantityRaw !== undefined &&
         String(minQuantityRaw).trim() !== "" &&
         Number.isFinite(minQuantity);
-      if (hasMin && Number.isFinite(quantity) && quantity < minQuantity) lowStock++;
+      const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
+      if (isLowStock) lowStock++;
+      if (isExpired || isLowStock) reorder++;
     }
-    return { expired, exp30, exp60, lowStock };
+    return { expired, exp30, exp60, lowStock, reorder };
   }, [rows, locationColumn, effectiveLocationFilter]);
 
   const filteredRows = useMemo(() => {
@@ -1956,6 +1961,9 @@ export function InventoryPage({
                   Low Stock{tabCounts.lowStock > 0 ? ` (${tabCounts.lowStock})` : ""}
                 </option>
               )}
+              <option value="reorder">
+                Reorder{tabCounts.reorder > 0 ? ` (${tabCounts.reorder})` : ""}
+              </option>
               {canReviewSubmissions && (
                 <option value="pendingSubmissions">
                   Pending{pendingSubmissions.length > 0 ? ` (${pendingSubmissions.length})` : ""}
@@ -2022,6 +2030,17 @@ export function InventoryPage({
                 ) : null}
               </button>
             ) : null}
+            <button
+              className={`inventory-tab-btn inventory-tab-btn-reorder${activeTab === "reorder" ? " active" : ""}`}
+              onClick={() => setActiveTabRaw("reorder")}
+              role="tab"
+              aria-selected={activeTab === "reorder"}
+            >
+              Reorder
+              {tabCounts.reorder > 0 && activeTab !== "reorder" ? (
+                <span className="inventory-tab-badge">{tabCounts.reorder}</span>
+              ) : null}
+            </button>
             {canReviewSubmissions ? (
               <button
                 className={`inventory-tab-btn${activeTab === "pendingSubmissions" ? " active" : ""}`}
@@ -2060,7 +2079,9 @@ export function InventoryPage({
           </div>
         </div>
 
-        {activeTab === "pendingSubmissions" ? (
+        {activeTab === "reorder" ? (
+          <ReorderTab rows={rows} columns={columns} />
+        ) : activeTab === "pendingSubmissions" ? (
           <div className="inventory-pending-wrap">
             {pendingLoading ? (
               <div className="app-loading-card" style={{ padding: "2rem", textAlign: "center" }}>

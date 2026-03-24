@@ -491,6 +491,20 @@ export const updateInventoryColumnType = async (
   }
 };
 
+export const reorderInventoryColumns = async (
+  columnOrder: string[],
+): Promise<void> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/columns/reorder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ columnOrder }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to reorder columns");
+  }
+};
+
 export const listModuleAccessUsers = async (): Promise<{
   modules: AppModuleKey[];
   users: ModuleAccessUser[];

@@ -1129,6 +1129,28 @@ details[open] > .settings-section-title::after {
   padding: 0.5rem 0.65rem;
 }
 
+.settings-column-reorder {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+}
+
+.settings-column-reorder .settings-action-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.settings-column-reorder .settings-action-icon:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.settings-column-reorder .settings-action-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
 .settings-column-actions {
   display: inline-flex;
   align-items: center;
@@ -1183,6 +1205,8 @@ details[open] > .settings-section-title::after {
   gap: 0.5rem;
   color: var(--text-heading);
   font-size: 0.9rem;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .settings-column-visibility input[type="checkbox"] {
@@ -3628,6 +3652,17 @@ textarea.inventory-card-input {
     gap: 0.4rem;
   }
 
+  .settings-column-reorder {
+    gap: 0.35rem;
+  }
+
+  .settings-column-reorder .settings-action-icon {
+    width: auto;
+    height: auto;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.78rem;
+  }
+
   .settings-column-actions {
     width: 100%;
     justify-content: flex-end;
@@ -4458,6 +4493,19 @@ textarea.inventory-card-input {
 
 .reorder-nolink-card {
   opacity: 0.8;
+}
+
+.reorder-item-name-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--primary);
+  text-align: left;
+}
+
+.reorder-item-name-btn:hover {
+  text-decoration: underline;
 }
 
 .reorder-nolink-hint {

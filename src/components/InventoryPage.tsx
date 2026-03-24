@@ -2080,7 +2080,18 @@ export function InventoryPage({
         </div>
 
         {activeTab === "reorder" ? (
-          <ReorderTab rows={rows} />
+          <ReorderTab
+            rows={rows}
+            onEditReorderLink={(rowId) => {
+              setActiveTabRaw("all");
+              setEditingLinkCell({ rowId, columnKey: "reorderLink" });
+              // Scroll to the row after the tab switches
+              requestAnimationFrame(() => {
+                const el = document.querySelector(`[data-row-id="${rowId}"]`);
+                if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+              });
+            }}
+          />
         ) : activeTab === "pendingSubmissions" ? (
           <div className="inventory-pending-wrap">
             {pendingLoading ? (
@@ -2568,6 +2579,7 @@ export function InventoryPage({
               {filteredRows.map(({ row, index: rowIndex }) => (
                 <tr
                   key={row.id}
+                  data-row-id={row.id}
                   className={row.id === selectedRowId ? "inventory-row-selected" : undefined}
                   onClick={() => setSelectedRowId(row.id)}
                 >

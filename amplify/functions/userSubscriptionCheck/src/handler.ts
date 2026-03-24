@@ -6,6 +6,7 @@ import {
   KeyType,
   ProjectionType,
   ScalarAttributeType,
+  UpdateContinuousBackupsCommand,
 } from "@aws-sdk/client-dynamodb";
 import {
   DynamoDBDocumentClient,
@@ -209,6 +210,19 @@ const isResourceInUse = (err: any): boolean =>
   err?.name === "ResourceInUseException" ||
   String(err?.__type ?? "").includes("ResourceInUseException");
 
+const enablePitr = async (tableName: string): Promise<void> => {
+  try {
+    await rawDdb.send(
+      new UpdateContinuousBackupsCommand({
+        TableName: tableName,
+        PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+      }),
+    );
+  } catch {
+    // best-effort — table is usable without PITR
+  }
+};
+
 const createOrgTableIfMissing = async (
   tableName: string,
   gsiName: string,
@@ -223,6 +237,7 @@ const createOrgTableIfMissing = async (
         throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
       }
     }
+    await enablePitr(tableName);
     return;
   }
 
@@ -255,6 +270,7 @@ const createOrgTableIfMissing = async (
 
   try {
     await waitForTableActive(tableName);
+    await enablePitr(tableName);
   } catch {
     throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
   }

@@ -7,6 +7,7 @@ import {
   KeyType,
   ProjectionType,
   ScalarAttributeType,
+  UpdateContinuousBackupsCommand,
 } from "@aws-sdk/client-dynamodb";
 import {
   DeleteCommand,
@@ -310,6 +311,19 @@ const isResourceInUse = (err: any): boolean =>
   err?.name === "ResourceInUseException" ||
   String(err?.__type ?? "").includes("ResourceInUseException");
 
+const enablePitr = async (tableName: string): Promise<void> => {
+  try {
+    await rawDdb.send(
+      new UpdateContinuousBackupsCommand({
+        TableName: tableName,
+        PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
+      }),
+    );
+  } catch {
+    // best-effort — table is usable without PITR
+  }
+};
+
 const createOrgTableIfMissing = async (
   tableName: string,
   gsiName: string,
@@ -324,6 +338,7 @@ const createOrgTableIfMissing = async (
         throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
       }
     }
+    await enablePitr(tableName);
     return { created: false };
   }
 
@@ -358,6 +373,7 @@ const createOrgTableIfMissing = async (
 
   try {
     await waitForTableActive(tableName);
+    await enablePitr(tableName);
     return { created: true };
   } catch {
     throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
@@ -374,6 +390,7 @@ const createOrgPendingTableIfMissing = async (tableName: string): Promise<{ crea
         throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
       }
     }
+    await enablePitr(tableName);
     return { created: false };
   }
 
@@ -396,6 +413,7 @@ const createOrgPendingTableIfMissing = async (tableName: string): Promise<{ crea
 
   try {
     await waitForTableActive(tableName);
+    await enablePitr(tableName);
     return { created: true };
   } catch {
     throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
@@ -2277,6 +2295,55 @@ const handleUpdateColumnType = async (
   return json(200, { ok: true, columnId, type });
 };
 
+const handleReorderColumns = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  body: any,
+) => {
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can manage inventory columns" });
+  }
+
+  const columnOrder = body?.columnOrder;
+  if (!Array.isArray(columnOrder) || columnOrder.length === 0) {
+    return json(400, { error: "columnOrder must be a non-empty array of column IDs" });
+  }
+  if (!columnOrder.every((id: unknown) => typeof id === "string")) {
+    return json(400, { error: "columnOrder must contain only string IDs" });
+  }
+
+  const existing = await ensureColumns(access.organizationId);
+  const existingIds = new Set(existing.map((c) => c.id));
+  const requestedIds = new Set(columnOrder as string[]);
+
+  if (requestedIds.size !== columnOrder.length) {
+    return json(400, { error: "columnOrder contains duplicate IDs" });
+  }
+  for (const id of columnOrder) {
+    if (!existingIds.has(id)) {
+      return json(400, { error: `Column ID not found: ${id}` });
+    }
+  }
+  if (requestedIds.size !== existingIds.size) {
+    return json(400, { error: "columnOrder must include all column IDs" });
+  }
+
+  await Promise.all(
+    (columnOrder as string[]).map((id, index) =>
+      ddb.send(
+        new UpdateCommand({
+          TableName: storage.columnTable,
+          Key: { id },
+          UpdateExpression: "SET sortOrder = :s",
+          ExpressionAttributeValues: { ":s": (index + 1) * 10 },
+        }),
+      ),
+    ),
+  );
+
+  return json(200, { ok: true });
+};
+
 const handleDeleteOrganizationStorage = async (
   access: AccessContext,
   query: Record<string, string | undefined>,
@@ -2987,6 +3054,13 @@ export const handler = async (event: any) => {
         return json(403, { error: "Module access denied" });
       }
       return handleUpdateColumnType(storage, access, path, parseBody(event));
+    }
+
+    if (method === "POST" && path.endsWith("/inventory/columns/reorder")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleReorderColumns(storage, access, parseBody(event));
     }
 
     if (method === "DELETE" && /\/inventory\/columns\/[^/]+$/.test(path)) {

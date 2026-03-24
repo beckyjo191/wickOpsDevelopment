@@ -21,13 +21,14 @@ import {
   updateCurrentUserDisplayName,
   updateInventoryColumnLabel,
   updateInventoryColumnType,
+  reorderInventoryColumns,
   saveUserColumnVisibility,
   type ColumnVisibilityOverrides,
   type InventoryColumn,
   type InventoryRow,
 } from "../lib/inventoryApi";
 import type { ThemePreference } from "../lib/themePreference";
-import { Pencil, Trash2 } from "lucide-react";
+import { ChevronUp, ChevronDown, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
 type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns";
@@ -97,6 +98,7 @@ export function SettingsPage({
   const [inventoryColumnSearchTerm, setInventoryColumnSearchTerm] = useState("");
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [savingColumn, setSavingColumn] = useState(false);
+  const [reorderingColumns, setReorderingColumns] = useState(false);
   const [pendingDeleteColumnId, setPendingDeleteColumnId] = useState<string | null>(null);
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState("");
@@ -433,6 +435,30 @@ export function SettingsPage({
       alert(err?.message ?? "Failed to update column type");
     } finally {
       setSavingColumn(false);
+    }
+  };
+
+  const onMoveColumn = async (columnId: string, direction: "up" | "down") => {
+    if (!canManageInventoryColumns || reorderingColumns) return;
+    const currentIndex = columns.findIndex((c) => c.id === columnId);
+    if (currentIndex < 0) return;
+    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= columns.length) return;
+
+    const newColumns = [...columns];
+    [newColumns[currentIndex], newColumns[targetIndex]] = [newColumns[targetIndex], newColumns[currentIndex]];
+    newColumns.forEach((col, i) => { col.sortOrder = (i + 1) * 10; });
+    setColumns(newColumns);
+
+    setReorderingColumns(true);
+    try {
+      await reorderInventoryColumns(newColumns.map((c) => c.id));
+    } catch (err) {
+      console.error("Failed to reorder columns:", err);
+      const bootstrap = await loadInventoryBootstrap();
+      setColumns([...bootstrap.columns].sort((a, b) => a.sortOrder - b.sortOrder));
+    } finally {
+      setReorderingColumns(false);
     }
   };
 
@@ -1029,7 +1055,7 @@ export function SettingsPage({
           {canManageInventoryColumns ? (
             <>
               <p className="settings-section-copy">
-                Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date) are required and cannot be deleted.
+                Use the arrows to reorder columns. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date) are required and cannot be deleted.
               </p>
               <div className="settings-columns-toolbar">
                 <div className="inventory-search-wrap settings-columns-toolbar-search">
@@ -1075,8 +1101,33 @@ export function SettingsPage({
                 {filteredInventoryColumns.map((column) => (
                   (() => {
                     const isLocked = isLockedColumn(column);
+                    const colIndex = columns.indexOf(column);
+                    const isFirst = colIndex === 0;
+                    const isLast = colIndex === columns.length - 1;
+                    const isSearching = normalizedInventoryColumnSearch.length > 0;
+                    const reorderDisabled = savingColumn || reorderingColumns || isSearching;
                     return (
                   <div key={column.id} className="settings-column-row">
+                    <div className="settings-column-reorder">
+                      <button
+                        className="settings-action-icon"
+                        onClick={() => void onMoveColumn(column.id, "up")}
+                        disabled={reorderDisabled || isFirst}
+                        aria-label="Move column up"
+                        type="button"
+                      >
+                        {isMobile ? "Up" : <ChevronUp aria-hidden="true" />}
+                      </button>
+                      <button
+                        className="settings-action-icon"
+                        onClick={() => void onMoveColumn(column.id, "down")}
+                        disabled={reorderDisabled || isLast}
+                        aria-label="Move column down"
+                        type="button"
+                      >
+                        {isMobile ? "Down" : <ChevronDown aria-hidden="true" />}
+                      </button>
+                    </div>
                     <div className="settings-column-visibility">
                       <input
                         type="checkbox"

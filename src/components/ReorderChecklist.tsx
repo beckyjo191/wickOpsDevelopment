@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ExternalLink, X } from "lucide-react";
 
 type ChecklistItem = {
@@ -11,22 +11,41 @@ type ChecklistItem = {
 
 type ChecklistData = {
   domain: string;
+  openVendorUrl?: string;
   items: ChecklistItem[];
 };
 
 export function ReorderChecklist() {
   const [checkedItems, setCheckedItems] = useState<Set<number>>(new Set());
+  const vendorOpenedRef = useRef(false);
 
   const data = useMemo<ChecklistData | null>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
-      const raw = params.get("reorder-checklist");
-      if (!raw) return null;
-      return JSON.parse(decodeURIComponent(raw)) as ChecklistData;
+      const domainKey = params.get("reorder-checklist");
+      if (!domainKey) return null;
+      // Read from sessionStorage (set by ReorderTab before opening this popup)
+      const stored = sessionStorage.getItem(`wickops-reorder-${domainKey}`);
+      if (stored) return JSON.parse(stored) as ChecklistData;
+      // Fallback: try parsing the param as JSON directly (legacy/test URLs)
+      try {
+        return JSON.parse(decodeURIComponent(domainKey)) as ChecklistData;
+      } catch {
+        return null;
+      }
     } catch {
       return null;
     }
   }, []);
+
+  // Open the vendor site automatically on first load
+  useEffect(() => {
+    if (data?.openVendorUrl && !vendorOpenedRef.current) {
+      vendorOpenedRef.current = true;
+      const vendorTabName = `wickops-vendor-${data.domain}`;
+      window.open(data.openVendorUrl, vendorTabName);
+    }
+  }, [data]);
 
   useEffect(() => {
     if (data) {

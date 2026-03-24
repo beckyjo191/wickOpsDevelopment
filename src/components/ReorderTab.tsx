@@ -4,6 +4,7 @@ import { ShoppingCart, ExternalLink, Link2Off, Package } from "lucide-react";
 
 interface ReorderTabProps {
   rows: InventoryRow[];
+  onEditReorderLink?: (rowId: string) => void;
 }
 
 type ReorderItem = {
@@ -47,10 +48,13 @@ const getDaysUntilExpiration = (value: string | number | boolean | null | undefi
   return Math.floor((targetStart - todayStart) / (1000 * 60 * 60 * 24));
 };
 
-const openReorderChecklist = (vendorGroup: VendorGroup) => {
+const handleReorderVendor = (group: VendorGroup) => {
+  // Store checklist data in sessionStorage so we avoid URL length limits
+  // and only need to open ONE window (avoids popup blocker on second window.open)
   const data = {
-    domain: vendorGroup.domain,
-    items: vendorGroup.items.map((item) => ({
+    domain: group.domain,
+    openVendorUrl: group.items[0].reorderLink,
+    items: group.items.map((item) => ({
       name: item.itemName,
       link: item.reorderLink,
       status: item.statusLabel,
@@ -58,24 +62,17 @@ const openReorderChecklist = (vendorGroup: VendorGroup) => {
       minQuantity: item.minQuantity,
     })),
   };
-  const encoded = encodeURIComponent(JSON.stringify(data));
-  const checklistUrl = `${window.location.origin}/?reorder-checklist=${encoded}`;
+  const storageKey = `wickops-reorder-${group.domain}`;
+  sessionStorage.setItem(storageKey, JSON.stringify(data));
+  const checklistUrl = `${window.location.origin}/?reorder-checklist=${encodeURIComponent(group.domain)}`;
   window.open(
     checklistUrl,
-    `wickops-checklist-${vendorGroup.domain}`,
+    `wickops-checklist-${group.domain}`,
     "width=400,height=620,scrollbars=yes,resizable=yes",
   );
 };
 
-const handleReorderVendor = (group: VendorGroup) => {
-  // Open the first item's link in a named tab (checklist reuses this same tab)
-  const vendorTabName = `wickops-vendor-${group.domain}`;
-  window.open(group.items[0].reorderLink, vendorTabName);
-  // Open the checklist popup
-  openReorderChecklist(group);
-};
-
-export function ReorderTab({ rows }: ReorderTabProps) {
+export function ReorderTab({ rows, onEditReorderLink }: ReorderTabProps) {
   const [reorderedVendors, setReorderedVendors] = useState<Set<string>>(new Set());
 
   const { vendorGroups, noLinkItems } = useMemo(() => {
@@ -104,7 +101,7 @@ export function ReorderTab({ rows }: ReorderTabProps) {
 
       const status = isExpired ? "expired" : "lowStock";
       const statusLabel = isExpired
-        ? `Expired ${Math.abs(daysUntil!)}d ago`
+        ? `Expired ${Math.abs(daysUntil!)}d ago · ${quantity} in stock`
         : `Low: ${quantity}/${minQuantity}`;
 
       const item: ReorderItem = {
@@ -234,12 +231,22 @@ export function ReorderTab({ rows }: ReorderTabProps) {
             </div>
           </div>
           <p className="reorder-nolink-hint">
-            Add a reorder link to these items so they appear in vendor groups.
+            Click an item name to jump to its reorder link field.
           </p>
           <div className="reorder-item-list">
             {noLinkItems.map((item) => (
               <div key={item.row.id} className="reorder-item-row">
-                <span className="reorder-item-name">{item.itemName}</span>
+                {onEditReorderLink ? (
+                  <button
+                    type="button"
+                    className="reorder-item-name reorder-item-name-btn"
+                    onClick={() => onEditReorderLink(item.row.id)}
+                  >
+                    {item.itemName}
+                  </button>
+                ) : (
+                  <span className="reorder-item-name">{item.itemName}</span>
+                )}
                 <span className={`reorder-item-status reorder-status-${item.status}`}>
                   {item.statusLabel}
                 </span>

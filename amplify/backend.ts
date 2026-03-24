@@ -123,6 +123,7 @@ addInventoryRoute("/inventory/column-visibility", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}/visibility", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}/label", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}/type", [HttpMethod.POST]);
+addInventoryRoute("/inventory/columns/reorder", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}", [HttpMethod.DELETE]);
 addInventoryRoute("/inventory/organization-storage", [HttpMethod.DELETE]);
 

@@ -154,9 +154,8 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
 
   const handleReorder = useCallback((group: VendorGroup) => {
     if (isMobile()) {
-      // On mobile: show inline checklist, open vendor in new tab
+      // On mobile: show inline checklist only — user taps item links from there
       setMobileChecklist({ group, checkedItems: new Set() });
-      window.open(group.items[0].reorderLink, "_blank");
     } else {
       handleReorderVendor(group);
     }

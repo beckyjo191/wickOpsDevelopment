@@ -2080,7 +2080,7 @@ export function InventoryPage({
         </div>
 
         {activeTab === "reorder" ? (
-          <ReorderTab rows={rows} columns={columns} />
+          <ReorderTab rows={rows} />
         ) : activeTab === "pendingSubmissions" ? (
           <div className="inventory-pending-wrap">
             {pendingLoading ? (

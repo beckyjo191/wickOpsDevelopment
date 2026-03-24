@@ -1,10 +1,9 @@
 import { useMemo, useState } from "react";
-import type { InventoryColumn, InventoryRow } from "../lib/inventoryApi";
+import type { InventoryRow } from "../lib/inventoryApi";
 import { ShoppingCart, ExternalLink, Link2Off, Package } from "lucide-react";
 
 interface ReorderTabProps {
   rows: InventoryRow[];
-  columns: InventoryColumn[];
 }
 
 type ReorderItem = {
@@ -76,7 +75,7 @@ const handleReorderVendor = (group: VendorGroup) => {
   openReorderChecklist(group);
 };
 
-export function ReorderTab({ rows, columns }: ReorderTabProps) {
+export function ReorderTab({ rows }: ReorderTabProps) {
   const [reorderedVendors, setReorderedVendors] = useState<Set<string>>(new Set());
 
   const { vendorGroups, noLinkItems } = useMemo(() => {

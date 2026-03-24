@@ -345,10 +345,13 @@ export default function App() {
   }, [view, subState.allowedModules]);
 
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
+    const hideMessage = view === "inventory" && (() => {
+      try { return localStorage.getItem("wickops.inventory.activeTab") === "reorder"; } catch { return false; }
+    })();
     return (
       <div className="app-loading-fullscreen">
         <span className="app-spinner" aria-hidden="true" />
-        <span>{loadingLine}</span>
+        {!hideMessage && <span>{loadingLine}</span>}
       </div>
     );
   }

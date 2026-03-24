@@ -215,12 +215,22 @@ export function InventoryPage({
   const [importingCsv, setImportingCsv] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
-  const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => initialFilter ?? "all");
+  const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => {
+    if (initialFilter) return initialFilter;
+    try {
+      const saved = localStorage.getItem("wickops.inventory.activeTab");
+      if (saved && ["all", "expired", "exp30", "exp60", "lowStock", "reorder", "pendingSubmissions"].includes(saved)) {
+        return saved as ActiveTab;
+      }
+    } catch {}
+    return "all";
+  });
   const setActiveTabRaw = (tab: ActiveTab) => {
     setActiveTabInternal((prev) => {
       if (prev !== tab) {
         setSelectedRowIds(new Set());
       }
+      try { localStorage.setItem("wickops.inventory.activeTab", tab); } catch {}
       return tab;
     });
   };
@@ -1556,11 +1566,12 @@ export function InventoryPage({
   }, [organizationId, columnWidths]);
 
   if (loading) {
+    const hideMessage = activeTab === "reorder";
     return (
       <section className="app-content">
         <div className="app-card app-card--inventory app-loading-card">
           <span className="app-spinner" aria-hidden="true" />
-          <span>{loadingMessage}</span>
+          {!hideMessage && <span>{loadingMessage}</span>}
         </div>
       </section>
     );
@@ -2155,7 +2166,7 @@ export function InventoryPage({
               setRows((prev) =>
                 prev.map((row) =>
                   idSet.has(row.id)
-                    ? { ...row, values: { ...row.values, orderedAt: now } }
+                    ? { ...row, values: { ...row.values, orderedAt: now, reorderCheckedAt: null } }
                     : row,
                 ),
               );
@@ -2164,6 +2175,26 @@ export function InventoryPage({
                 for (const id of rowIds) next.add(id);
                 return next;
               });
+            }}
+            onReorderCheck={async (rowId, checked) => {
+              const now = new Date().toISOString();
+              const rowIndex = rows.findIndex((r) => r.id === rowId);
+              const original = rows[rowIndex];
+              if (!original) return;
+              const updatedRow = {
+                ...original,
+                position: rowIndex,
+                values: { ...original.values, reorderCheckedAt: checked ? now : null },
+              };
+              setRows((prev) =>
+                prev.map((row) =>
+                  row.id === rowId
+                    ? { ...row, values: { ...row.values, reorderCheckedAt: checked ? now : null } }
+                    : row,
+                ),
+              );
+              // Save immediately (bypass autosave) so state persists before navigation
+              await saveInventoryItems([updatedRow], []);
             }}
           />
         ) : activeTab === "pendingSubmissions" ? (

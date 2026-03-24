@@ -1,12 +1,13 @@
-import { useCallback, useMemo, useState, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
-import { ShoppingCart, ExternalLink, Link2Off, Package, PackageCheck, Undo2, Check, X, ChevronUp, ChevronDown, AlertTriangle } from "lucide-react";
+import { ShoppingCart, ExternalLink, Link2Off, Package, PackageCheck, Undo2, Check, X } from "lucide-react";
 
 interface ReorderTabProps {
   rows: InventoryRow[];
   onEditReorderLink?: (rowId: string) => void;
   onClearOrderedAt?: (rowIds: string[]) => void;
   onMarkOrdered?: (rowIds: string[]) => void;
+  onReorderCheck?: (rowId: string, checked: boolean) => Promise<void>;
 }
 
 const isMobile = () => window.innerWidth <= 780;
@@ -76,16 +77,9 @@ const handleReorderVendor = (group: VendorGroup) => {
   );
 };
 
-export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOrdered }: ReorderTabProps) {
+export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOrdered, onReorderCheck }: ReorderTabProps) {
   const [reorderedVendors, setReorderedVendors] = useState<Set<string>>(new Set());
-  const [mobileChecklist, setMobileChecklist] = useState<{
-    group: VendorGroup;
-    checkedItems: Set<number>;
-    collapsed: boolean;
-    iframeBlocked: boolean;
-    activeUrl: string;
-  } | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [savingRowId, setSavingRowId] = useState<string | null>(null);
 
   const { vendorGroups, noLinkItems, orderedItems } = useMemo(() => {
     const reorderItems: ReorderItem[] = [];
@@ -158,16 +152,26 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
 
   const totalReorderItems = vendorGroups.reduce((sum, g) => sum + g.items.length, 0);
 
+  const [mobileChecklistDomain, setMobileChecklistDomain] = useState<string | null>(null);
+  const autoOpenedRef = useRef(false);
+
+  // Auto-open checklist if returning from vendor (items have reorderCheckedAt)
+  if (!autoOpenedRef.current && isMobile() && vendorGroups.length > 0) {
+    const group = vendorGroups.find((g) =>
+      g.items.some((item) => item.row.values.reorderCheckedAt)
+    );
+    if (group) {
+      autoOpenedRef.current = true;
+      // Set state synchronously during render to avoid flash
+      if (mobileChecklistDomain !== group.domain) {
+        setMobileChecklistDomain(group.domain);
+      }
+    }
+  }
+
   const handleReorder = useCallback((group: VendorGroup) => {
     if (isMobile()) {
-      // On mobile: full-screen iframe with floating checklist overlay
-      setMobileChecklist({
-        group,
-        checkedItems: new Set(),
-        collapsed: false,
-        iframeBlocked: false,
-        activeUrl: group.items[0].reorderLink,
-      });
+      setMobileChecklistDomain(group.domain);
     } else {
       handleReorderVendor(group);
     }
@@ -287,153 +291,109 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
         </div>
       )}
 
-      {mobileChecklist && (
-        <div className="reorder-mobile-overlay">
-          {/* Full-screen iframe for vendor site */}
-          <div className="reorder-mobile-iframe-wrap">
-            {mobileChecklist.iframeBlocked ? (
-              <div className="reorder-mobile-iframe-blocked">
-                <AlertTriangle size={32} />
-                <p>This vendor's site can't be embedded.</p>
-                <a
-                  href={mobileChecklist.activeUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="button button-primary"
-                >
-                  Open in Browser
-                  <ExternalLink size={14} />
-                </a>
-              </div>
-            ) : (
-              <iframe
-                ref={iframeRef}
-                src={mobileChecklist.activeUrl}
-                className="reorder-mobile-iframe"
-                title={`${mobileChecklist.group.domain} - Reorder`}
-                onError={() => setMobileChecklist((prev) => prev ? { ...prev, iframeBlocked: true } : null)}
-                onLoad={() => {
-                  // Detect if iframe was blocked (same-origin check)
-                  try {
-                    const doc = iframeRef.current?.contentDocument;
-                    // If we CAN access contentDocument and it's empty/error, it's blocked
-                    if (doc && doc.body && doc.body.innerHTML === "") {
-                      setMobileChecklist((prev) => prev ? { ...prev, iframeBlocked: true } : null);
-                    }
-                  } catch {
-                    // Cross-origin = iframe loaded successfully (we can't access it, that's fine)
-                  }
-                }}
-              />
-            )}
-          </div>
-
-          {/* Floating checklist bottom sheet */}
-          <div className={`reorder-mobile-checklist${mobileChecklist.collapsed ? " collapsed" : ""}`}>
-            <div
-              className="reorder-mobile-checklist-header"
-              onClick={() => setMobileChecklist((prev) => prev ? { ...prev, collapsed: !prev.collapsed } : null)}
-            >
-              <div className="reorder-mobile-checklist-header-left">
-                {mobileChecklist.collapsed
-                  ? <ChevronUp size={18} />
-                  : <ChevronDown size={18} />
-                }
+      {mobileChecklistDomain && (() => {
+        const group = vendorGroups.find((g) => g.domain === mobileChecklistDomain);
+        if (!group) return null;
+        const checkedCount = group.items.filter((item) => item.row.values.reorderCheckedAt).length;
+        return (
+          <div className="reorder-mobile-overlay">
+            <div className="reorder-mobile-checklist">
+              <div className="reorder-mobile-checklist-header">
                 <div>
-                  <h4 className="reorder-mobile-checklist-title">{mobileChecklist.group.domain}</h4>
+                  <h4 className="reorder-mobile-checklist-title">{group.domain}</h4>
                   <p className="reorder-mobile-checklist-subtitle">
-                    {mobileChecklist.checkedItems.size}/{mobileChecklist.group.items.length} items
+                    {checkedCount}/{group.items.length} items checked
                   </p>
                 </div>
+                <button
+                  type="button"
+                  className="reorder-mobile-checklist-close"
+                  onClick={() => setMobileChecklistDomain(null)}
+                  aria-label="Close checklist"
+                >
+                  <X size={18} />
+                </button>
               </div>
-              <button
-                type="button"
-                className="reorder-mobile-checklist-close"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMobileChecklist(null);
-                }}
-                aria-label="Close checklist"
-              >
-                <X size={18} />
-              </button>
+              <div className="reorder-mobile-checklist-progress">
+                <div
+                  className="reorder-mobile-checklist-progress-fill"
+                  style={{ width: `${group.items.length > 0 ? (checkedCount / group.items.length) * 100 : 0}%` }}
+                />
+              </div>
+              <p className="reorder-mobile-checklist-instructions">
+                Tap an item to open it on {group.domain}. Use your browser's back button to return here.
+              </p>
+              <div className="reorder-mobile-checklist-items">
+                {group.items.map((item) => {
+                  const isChecked = !!item.row.values.reorderCheckedAt;
+                  const isSaving = savingRowId === item.row.id;
+                  return (
+                    <div key={item.row.id} className={`reorder-mobile-checklist-item${isChecked ? " checked" : ""}`}>
+                      <button
+                        type="button"
+                        className={`reorder-mobile-checkbox${isChecked ? " checked" : ""}`}
+                        disabled={isSaving}
+                        onClick={async () => {
+                          if (!onReorderCheck) return;
+                          setSavingRowId(item.row.id);
+                          try {
+                            await onReorderCheck(item.row.id, !isChecked);
+                          } finally {
+                            setSavingRowId(null);
+                          }
+                        }}
+                      >
+                        {isChecked && <Check size={14} />}
+                      </button>
+                      <button
+                        type="button"
+                        className="reorder-mobile-checklist-item-info"
+                        disabled={isSaving}
+                        onClick={async () => {
+                          if (onReorderCheck && !isChecked) {
+                            setSavingRowId(item.row.id);
+                            try {
+                              await onReorderCheck(item.row.id, true);
+                            } finally {
+                              setSavingRowId(null);
+                            }
+                          }
+                          window.location.href = item.reorderLink;
+                        }}
+                      >
+                        <span className="reorder-mobile-checklist-item-name">
+                          {item.itemName}
+                          {isSaving
+                            ? <span className="app-spinner" style={{ width: 12, height: 12 }} />
+                            : <ExternalLink size={12} />}
+                        </span>
+                        <span className="reorder-mobile-checklist-item-detail">{item.statusLabel}</span>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {checkedCount > 0 && onMarkOrdered && (
+                <div className="reorder-mobile-checklist-footer">
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    onClick={() => {
+                      const checkedRowIds = group.items
+                        .filter((item) => item.row.values.reorderCheckedAt)
+                        .map((item) => item.row.id);
+                      onMarkOrdered(checkedRowIds);
+                      setMobileChecklistDomain(null);
+                    }}
+                  >
+                    Mark as Ordered
+                  </button>
+                </div>
+              )}
             </div>
-            {!mobileChecklist.collapsed && (
-              <>
-                <p className="reorder-mobile-checklist-instructions">
-                  Tap an item to view it above. Items are checked off as you go.
-                </p>
-                <div className="reorder-mobile-checklist-progress">
-                  <div
-                    className="reorder-mobile-checklist-progress-fill"
-                    style={{ width: `${mobileChecklist.group.items.length > 0 ? (mobileChecklist.checkedItems.size / mobileChecklist.group.items.length) * 100 : 0}%` }}
-                  />
-                </div>
-                <div className="reorder-mobile-checklist-items">
-                  {mobileChecklist.group.items.map((item, index) => {
-                    const isChecked = mobileChecklist.checkedItems.has(index);
-                    return (
-                      <div key={item.row.id} className={`reorder-mobile-checklist-item${isChecked ? " checked" : ""}`}>
-                        <button
-                          type="button"
-                          className={`reorder-mobile-checkbox${isChecked ? " checked" : ""}`}
-                          onClick={() => {
-                            setMobileChecklist((prev) => {
-                              if (!prev) return null;
-                              const next = new Set(prev.checkedItems);
-                              if (next.has(index)) next.delete(index);
-                              else next.add(index);
-                              return { ...prev, checkedItems: next };
-                            });
-                          }}
-                        >
-                          {isChecked && <Check size={14} />}
-                        </button>
-                        <button
-                          type="button"
-                          className="reorder-mobile-checklist-item-info"
-                          onClick={() => {
-                            // Navigate iframe to this item's link and auto-check
-                            setMobileChecklist((prev) => {
-                              if (!prev) return null;
-                              const next = new Set(prev.checkedItems);
-                              next.add(index);
-                              return { ...prev, checkedItems: next, activeUrl: item.reorderLink, iframeBlocked: false };
-                            });
-                          }}
-                        >
-                          <span className="reorder-mobile-checklist-item-name">
-                            {item.itemName}
-                            <ExternalLink size={12} />
-                          </span>
-                          <span className="reorder-mobile-checklist-item-detail">{item.statusLabel}</span>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                {mobileChecklist.checkedItems.size > 0 && onMarkOrdered && (
-                  <div className="reorder-mobile-checklist-footer">
-                    <button
-                      type="button"
-                      className="button button-primary"
-                      onClick={() => {
-                        const checkedRowIds = mobileChecklist.group.items
-                          .filter((_, i) => mobileChecklist.checkedItems.has(i))
-                          .map((item) => item.row.id);
-                        onMarkOrdered(checkedRowIds);
-                        setMobileChecklist(null);
-                      }}
-                    >
-                      Mark as Ordered
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {orderedItems.length > 0 && (
         <div className="reorder-vendor-card reorder-ordered-card app-card">

@@ -262,6 +262,7 @@ export function InventoryPage({
   const [addingLocation, setAddingLocation] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [addLocationError, setAddLocationError] = useState<string | null>(null);
+  const pendingNewLocationRef = useRef<string | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickInventoryLine());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
@@ -500,6 +501,50 @@ export function InventoryPage({
     (column) => column.key === "minQuantity" && column.isVisible,
   );
 
+  // --- Prune duplicate zero-qty expiration rows on load and after save ---
+  const pruningRef = useRef(false);
+  useEffect(() => {
+    if (loading || pruningRef.current || rows.length === 0) return;
+    const expCol = columns.find((c) => c.key === "expirationDate");
+    if (!expCol) return;
+    const locKey = locationColumn?.key;
+
+    const zeroGroups = new Map<string, InventoryRow[]>();
+    for (const r of rows) {
+      const qty = Number(r.values.quantity ?? 0);
+      const hasExp =
+        r.values[expCol.key] != null &&
+        String(r.values[expCol.key]).trim() !== "";
+      if (qty === 0 && hasExp) {
+        const name = String(r.values.itemName ?? "").trim();
+        const loc = locKey ? String(r.values[locKey] ?? "").trim() : "";
+        const key = `${name}||${loc}`;
+        const group = zeroGroups.get(key) ?? [];
+        group.push(r);
+        zeroGroups.set(key, group);
+      }
+    }
+
+    const idsToDelete: string[] = [];
+    for (const group of zeroGroups.values()) {
+      if (group.length > 1) {
+        // Keep the first zero-qty row, delete the rest
+        for (let i = 1; i < group.length; i++) {
+          idsToDelete.push(group[i].id);
+        }
+      }
+    }
+
+    if (idsToDelete.length > 0) {
+      pruningRef.current = true;
+      const deleteSet = new Set(idsToDelete);
+      setRows((prev) => prev.filter((r) => !deleteSet.has(r.id)));
+      void saveInventoryItems([], idsToDelete).then(() => {
+        pruningRef.current = false;
+      });
+    }
+  }, [loading, rows, columns, locationColumn]);
+
   const getDaysUntilExpiration = (value: string | number | boolean | null | undefined) => {
     const raw = String(value ?? "").trim();
     if (!raw) return null;
@@ -585,6 +630,15 @@ export function InventoryPage({
     setSelectedRowIds(new Set());
     setSelectedRowId(null);
   }, [effectiveLocationFilter]);
+
+  // Auto-add an empty row when a new location is created
+  useEffect(() => {
+    if (pendingNewLocationRef.current && effectiveLocationFilter === pendingNewLocationRef.current && canEditTable) {
+      pendingNewLocationRef.current = null;
+      onAddRow("top");
+    }
+  }, [effectiveLocationFilter]);
+
   const categoryOptions = useMemo(() => {
     if (!categoryColumn) return ["All Categories"];
     const options = Array.from(
@@ -1195,6 +1249,8 @@ export function InventoryPage({
       setUndoStack([]);
       setRedoStack([]);
       editSessionCellRef.current = null;
+      // Allow the pruning effect to re-evaluate after save
+      pruningRef.current = false;
     } catch (err: any) {
       if (!silent) {
         alert(err?.message ?? "Failed to save inventory");
@@ -1653,6 +1709,7 @@ export function InventoryPage({
                       }
                       void addInventoryLocation(name).then((locs) => {
                         setRegisteredLocations(locs);
+                        pendingNewLocationRef.current = name;
                         onLocationChange(name);
                         setNewLocationName("");
                         setAddingLocation(false);
@@ -1684,6 +1741,7 @@ export function InventoryPage({
                     }
                     void addInventoryLocation(name).then((locs) => {
                       setRegisteredLocations(locs);
+                      pendingNewLocationRef.current = name;
                       onLocationChange(name);
                       setNewLocationName("");
                       setAddingLocation(false);
@@ -1726,6 +1784,7 @@ export function InventoryPage({
                     }
                     void addInventoryLocation(name).then((locs) => {
                       setRegisteredLocations(locs);
+                      pendingNewLocationRef.current = name;
                       onLocationChange(name);
                       setNewLocationName("");
                       setAddingLocation(false);
@@ -1757,6 +1816,7 @@ export function InventoryPage({
                   }
                   void addInventoryLocation(name).then((locs) => {
                     setRegisteredLocations(locs);
+                    pendingNewLocationRef.current = name;
                     onLocationChange(name);
                     setNewLocationName("");
                     setAddingLocation(false);
@@ -1809,6 +1869,7 @@ export function InventoryPage({
                       const name = newLocationName.trim();
                       void addInventoryLocation(name).then((locs) => {
                         setRegisteredLocations(locs);
+                        pendingNewLocationRef.current = name;
                         onLocationChange(name);
                         setNewLocationName("");
                         setAddingLocation(false);
@@ -1835,6 +1896,7 @@ export function InventoryPage({
                     const name = newLocationName.trim();
                     void addInventoryLocation(name).then((locs) => {
                       setRegisteredLocations(locs);
+                      pendingNewLocationRef.current = name;
                       onLocationChange(name);
                       setNewLocationName("");
                       setAddingLocation(false);
@@ -2268,9 +2330,10 @@ export function InventoryPage({
                             column.type === "link" ? (
                               (() => {
                                 const normalizedLink = normalizeLinkValue(String(row.values[column.key] ?? ""));
+                                const itemName = String(row.values.itemName ?? "").trim();
                                 return normalizedLink ? (
                                   <a className="inventory-card-field-link" href={normalizedLink} target="_blank" rel="noreferrer">
-                                    {normalizedLink}
+                                    {itemName || normalizedLink}
                                   </a>
                                 ) : (
                                   <span className="inventory-card-field-value">--</span>

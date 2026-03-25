@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   approveUsageSubmission,
   listPendingSubmissions,
+  loadInventoryBootstrap,
+  pruneZeroQtyRows,
   rejectUsageSubmission,
   type PendingEntry,
   type PendingSubmission,
@@ -211,6 +213,14 @@ export function UsageReviewPage({ onNavigateToUsageForm }: UsageReviewPageProps)
         s.id === id ? { ...s, status: "approved", reviewedAt: new Date().toISOString() } : s,
       ),
     );
+    // After approval decrements quantities, prune zero-qty duplicate rows
+    try {
+      const { columns, items } = await loadInventoryBootstrap();
+      const locationCol = columns.find((c) => c.key === "location");
+      await pruneZeroQtyRows(items, columns, locationCol?.key);
+    } catch {
+      // Pruning is best-effort; don't block approval flow
+    }
   };
 
   const handleReject = async (id: string, reason: string) => {

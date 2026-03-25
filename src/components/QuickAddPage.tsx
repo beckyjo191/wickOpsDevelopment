@@ -406,40 +406,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
     );
   }, [singleLocation]);
 
-  // Prune duplicate zero-qty expiration rows on load/refresh.
-  // For each item name+location, keep only one zero-qty expiration row.
-  useEffect(() => {
-    if (loading || !expirationDateKey || rows.length === 0) return;
 
-    const zeroGroups = new Map<string, InventoryRow[]>();
-    for (const r of rows) {
-      const qty = Number(r.values.quantity ?? 0);
-      const hasExp = r.values[expirationDateKey] != null && String(r.values[expirationDateKey]).trim() !== "";
-      if (qty === 0 && hasExp) {
-        const name = String(r.values.itemName ?? "").trim();
-        const loc = locationKey ? String(r.values[locationKey] ?? "").trim() : "";
-        const key = `${name}||${loc}`;
-        const group = zeroGroups.get(key) ?? [];
-        group.push(r);
-        zeroGroups.set(key, group);
-      }
-    }
-
-    const idsToDelete: string[] = [];
-    for (const group of zeroGroups.values()) {
-      if (group.length > 1) {
-        for (let i = 1; i < group.length; i++) {
-          idsToDelete.push(group[i].id);
-        }
-      }
-    }
-
-    if (idsToDelete.length > 0) {
-      void saveInventoryItems([], idsToDelete).then(() => {
-        void refreshInventoryRows({ silent: true });
-      });
-    }
-  }, [loading, rows, expirationDateKey, locationKey, refreshInventoryRows]);
 
   const getItemOptionsForLocation = useCallback(
     (location: string): AutocompleteOption[] =>

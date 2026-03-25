@@ -198,6 +198,57 @@ export const saveInventoryItems = async (
   }
 };
 
+/**
+ * After usage approval decrements quantities, prune zero-qty expiration rows
+ * where the same item (name+location) still has non-zero rows.
+ * If all rows for an item are zero, keep one.
+ */
+export const pruneZeroQtyRows = async (
+  rows: InventoryRow[],
+  columns: InventoryColumn[],
+  locationColumnKey?: string,
+): Promise<void> => {
+  const expCol = columns.find((c) => c.key === "expirationDate");
+  if (!expCol) return;
+
+  const allGroups = new Map<string, InventoryRow[]>();
+  for (const r of rows) {
+    const name = String(r.values.itemName ?? "").trim();
+    const loc = locationColumnKey ? String(r.values[locationColumnKey] ?? "").trim() : "";
+    const key = `${name}||${loc}`;
+    const group = allGroups.get(key) ?? [];
+    group.push(r);
+    allGroups.set(key, group);
+  }
+
+  const idsToDelete: string[] = [];
+  for (const group of allGroups.values()) {
+    if (group.length < 2) continue;
+    const nonZeroRows = group.filter((r) => Number(r.values.quantity ?? 0) !== 0);
+    const zeroWithExp = group.filter((r) => {
+      if (Number(r.values.quantity ?? 0) !== 0) return false;
+      const hasExp =
+        r.values[expCol.key] != null &&
+        String(r.values[expCol.key]).trim() !== "";
+      return hasExp;
+    });
+    if (zeroWithExp.length === 0) continue;
+    if (nonZeroRows.length === 0) {
+      for (let i = 1; i < zeroWithExp.length; i++) {
+        idsToDelete.push(zeroWithExp[i].id);
+      }
+    } else {
+      for (const r of zeroWithExp) {
+        idsToDelete.push(r.id);
+      }
+    }
+  }
+
+  if (idsToDelete.length > 0) {
+    await saveInventoryItems([], idsToDelete);
+  }
+};
+
 export const submitInventoryUsage = async (
   entries: InventoryUsageEntryInput[],
 ): Promise<{

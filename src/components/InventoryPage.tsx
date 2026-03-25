@@ -291,6 +291,8 @@ export function InventoryPage({
   const selectedRowIdRef = useRef(selectedRowId);
   const restoringSnapshotRef = useRef(false);
   const editSessionCellRef = useRef<string | null>(null);
+  const editedRowPosRef = useRef<number | null>(null);
+  const filteredRowOrderRef = useRef<Map<string, number>>(new Map());
   const canEditTable = canEditInventory && activeTab !== "pendingSubmissions";
 
   useEffect(() => {
@@ -387,6 +389,7 @@ export function InventoryPage({
     setUndoStack([]);
     setRedoStack([]);
     editSessionCellRef.current = null;
+    editedRowPosRef.current = null;
   };
 
   const snapshotFromRefs = (): InventorySnapshot => ({
@@ -442,10 +445,14 @@ export function InventoryPage({
     if (editSessionCellRef.current === cellKey) return;
     pushUndoSnapshot();
     editSessionCellRef.current = cellKey;
+    // Capture the row's current sort position so we can pin it there
+    // while the user is still editing (prevents jumping).
+    editedRowPosRef.current = filteredRowOrderRef.current.get(rowId) ?? null;
   };
 
   const endCellEditSession = () => {
     editSessionCellRef.current = null;
+    editedRowPosRef.current = null;
     if (canEditInventory && (dirtyRowIds.size > 0 || deletedRowIds.size > 0)) {
       void onSave(true);
     }
@@ -516,49 +523,8 @@ export function InventoryPage({
     (column) => column.key === "minQuantity" && column.isVisible,
   );
 
-  // --- Prune duplicate zero-qty expiration rows on load and after save ---
+  // pruningRef kept for save-flow compatibility (reset after manual save)
   const pruningRef = useRef(false);
-  useEffect(() => {
-    if (loading || pruningRef.current || rows.length === 0) return;
-    const expCol = columns.find((c) => c.key === "expirationDate");
-    if (!expCol) return;
-    const locKey = locationColumn?.key;
-
-    const zeroGroups = new Map<string, InventoryRow[]>();
-    for (const r of rows) {
-      const qty = Number(r.values.quantity ?? 0);
-      const hasExp =
-        r.values[expCol.key] != null &&
-        String(r.values[expCol.key]).trim() !== "";
-      if (qty === 0 && hasExp) {
-        const name = String(r.values.itemName ?? "").trim();
-        const loc = locKey ? String(r.values[locKey] ?? "").trim() : "";
-        const key = `${name}||${loc}`;
-        const group = zeroGroups.get(key) ?? [];
-        group.push(r);
-        zeroGroups.set(key, group);
-      }
-    }
-
-    const idsToDelete: string[] = [];
-    for (const group of zeroGroups.values()) {
-      if (group.length > 1) {
-        // Keep the first zero-qty row, delete the rest
-        for (let i = 1; i < group.length; i++) {
-          idsToDelete.push(group[i].id);
-        }
-      }
-    }
-
-    if (idsToDelete.length > 0) {
-      pruningRef.current = true;
-      const deleteSet = new Set(idsToDelete);
-      setRows((prev) => prev.filter((r) => !deleteSet.has(r.id)));
-      void saveInventoryItems([], idsToDelete).then(() => {
-        pruningRef.current = false;
-      });
-    }
-  }, [loading, rows, columns, locationColumn]);
 
   const getDaysUntilExpiration = (value: string | number | boolean | null | undefined) => {
     const raw = String(value ?? "").trim();
@@ -759,7 +725,7 @@ export function InventoryPage({
         if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil < 0;
         if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
         if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
-        if (!passesTab) return false;
+        if (!passesTab && !isBeingEdited) return false;
 
         if (locationColumn && effectiveLocationFilter !== "All Locations") {
           const matchesLocation = effectiveLocationFilter === UNASSIGNED_LOCATION
@@ -784,6 +750,11 @@ export function InventoryPage({
             .includes(normalizedSearch);
         });
       });
+
+    // While a row is being edited, pin it to its previous position so it
+    // doesn't jump around in the list while the user is still interacting.
+    const editedRowId = editSessionCellRef.current?.split(":")[0] ?? null;
+    const pinnedPosition = editedRowId !== null ? editedRowPosRef.current : null;
 
     let sorted = filtered;
     if (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60") {
@@ -818,6 +789,25 @@ export function InventoryPage({
         });
       }
     }
+
+    // Pin the actively-edited row to its previous sort position so it
+    // doesn't jump while the user is still typing / clicking steppers.
+    if (editedRowId !== null && pinnedPosition !== null) {
+      const curIdx = sorted.findIndex(({ row }) => row.id === editedRowId);
+      if (curIdx !== -1 && curIdx !== pinnedPosition) {
+        const target = Math.min(pinnedPosition, sorted.length - 1);
+        const [item] = sorted.splice(curIdx, 1);
+        sorted.splice(target, 0, item);
+      }
+    }
+
+    // Keep a map of rowId → position so beginCellEditSession can
+    // capture the correct position before the value changes.
+    const orderMap = new Map<string, number>();
+    for (let i = 0; i < sorted.length; i++) {
+      orderMap.set(sorted[i].row.id, i);
+    }
+    filteredRowOrderRef.current = orderMap;
 
     return sorted;
   }, [
@@ -1287,19 +1277,31 @@ export function InventoryPage({
   const onSave = async (silent = false) => {
     if (!canEditInventory || saving || (dirtyRowIds.size === 0 && deletedRowIds.size === 0)) return;
     setSaving(true);
+    // Snapshot which IDs we're saving so we only clear those, not edits made during the save
+    const savedDirtyIds = new Set(dirtyRowIds);
+    const savedDeletedIds = new Set(deletedRowIds);
     try {
       const dirtyRows = rows
         .map((row, index) => ({ ...row, position: index }))
-        .filter((row) => dirtyRowIds.has(row.id));
+        .filter((row) => savedDirtyIds.has(row.id));
       await saveInventoryItems(
         dirtyRows,
-        Array.from(deletedRowIds),
+        Array.from(savedDeletedIds),
       );
-      setDirtyRowIds(new Set());
-      setDeletedRowIds(new Set());
+      setDirtyRowIds((prev) => {
+        const next = new Set(prev);
+        for (const id of savedDirtyIds) next.delete(id);
+        return next;
+      });
+      setDeletedRowIds((prev) => {
+        const next = new Set(prev);
+        for (const id of savedDeletedIds) next.delete(id);
+        return next;
+      });
       setUndoStack([]);
       setRedoStack([]);
       editSessionCellRef.current = null;
+      editedRowPosRef.current = null;
       // Allow the pruning effect to re-evaluate after save
       pruningRef.current = false;
       setShowSaved(true);
@@ -2730,6 +2732,7 @@ export function InventoryPage({
                                 type="url"
                                 value={rawLink}
                                 placeholder="Paste link"
+                                autoFocus={isEditingLinkCell(row.id, column.key)}
                                 onFocus={() => {
                                   setSelectedRowId(row.id);
                                   beginCellEditSession(row.id, column.key);
@@ -2762,6 +2765,36 @@ export function InventoryPage({
 
                           if (!hasLink) return null;
 
+                          const linkLabel = String(row.values.itemName ?? "").trim() || normalizedLink;
+
+                          if (canEditTable) {
+                            return (
+                              <div className="inventory-link-field-editable">
+                                <span
+                                  className="inventory-link-field-text"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedRowId(row.id);
+                                    setEditingLinkCell({ rowId: row.id, columnKey: column.key });
+                                  }}
+                                  title="Click to edit link"
+                                >
+                                  {linkLabel}
+                                </span>
+                                <a
+                                  className="inventory-link-field-open"
+                                  href={normalizedLink}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(event) => event.stopPropagation()}
+                                  title="Open link"
+                                >
+                                  &#x2197;
+                                </a>
+                              </div>
+                            );
+                          }
+
                           return (
                             <a
                               className="inventory-link-field"
@@ -2769,16 +2802,8 @@ export function InventoryPage({
                               target="_blank"
                               rel="noreferrer"
                               onClick={(event) => event.stopPropagation()}
-                              onDoubleClick={(event) => {
-                                if (!canEditTable) return;
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setSelectedRowId(row.id);
-                                setEditingLinkCell({ rowId: row.id, columnKey: column.key });
-                              }}
-                              title={canEditTable ? "Double-click to edit link" : undefined}
                             >
-                              {String(row.values.itemName ?? "").trim() || normalizedLink}
+                              {linkLabel}
                             </a>
                           );
                         })()

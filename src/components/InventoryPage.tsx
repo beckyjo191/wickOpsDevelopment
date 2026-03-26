@@ -391,6 +391,50 @@ export function InventoryPage({
     editSessionCellRef.current = null;
   };
 
+  /** Reload inventory from the API, then prune zero-quantity rows that have
+   *  at least one non-zero sibling with the same itemName. Used after
+   *  approving a usage submission so "used up" duplicate rows are cleaned up. */
+  const reloadAndPruneZeroRows = async () => {
+    try {
+      const bootstrap = await loadInventoryBootstrap();
+      const freshRows = bootstrap.items;
+
+      // Group rows by itemName
+      const byName = new Map<string, typeof freshRows>();
+      for (const row of freshRows) {
+        const name = String(row.values.itemName ?? "").trim().toLowerCase();
+        if (!name) continue;
+        const group = byName.get(name) ?? [];
+        group.push(row);
+        byName.set(name, group);
+      }
+
+      // Identify zero-qty rows to prune (only when the item has at least one non-zero sibling)
+      const idsToDelete: string[] = [];
+      for (const group of byName.values()) {
+        if (group.length < 2) continue;
+        const hasNonZero = group.some((r) => Number(r.values.quantity ?? 0) > 0);
+        if (!hasNonZero) continue;
+        for (const r of group) {
+          if (Number(r.values.quantity ?? 0) === 0) {
+            idsToDelete.push(r.id);
+          }
+        }
+      }
+
+      if (idsToDelete.length > 0) {
+        await saveInventoryItems([], idsToDelete);
+        // Reload again to get the cleaned-up state
+        const cleaned = await loadInventoryBootstrap();
+        applyBootstrap(cleaned);
+      } else {
+        applyBootstrap(bootstrap);
+      }
+    } catch {
+      // Silently fall back — the approval itself already succeeded
+    }
+  };
+
   const snapshotFromRefs = (): InventorySnapshot => ({
     rows: rowsRef.current.map((row) => ({
       ...row,
@@ -450,7 +494,9 @@ export function InventoryPage({
   const endCellEditSession = () => {
     editSessionCellRef.current = null;
     setEditingRowId(null);
-    if (canEditInventory && (dirtyRowIds.size > 0 || deletedRowIds.size > 0)) {
+    // Always attempt save — onSave reads from refs (not closure state) so it
+    // will see dirty IDs even if React hasn't re-rendered yet.
+    if (canEditInventory) {
       void onSave(true);
     }
   };
@@ -1171,8 +1217,8 @@ export function InventoryPage({
   const onCellChange = (rowId: string, column: InventoryColumn, value: string) => {
     if (!canEditTable) return;
     let changedRowId: string | null = null;
-    setRows((prev) =>
-      prev.map((row) => {
+    setRows((prev) => {
+      const next = prev.map((row) => {
         if (row.id !== rowId) return row;
         const currentValue = row.values[column.key];
         // Auto-clear orderedAt when restocking fields are updated
@@ -1213,13 +1259,19 @@ export function InventoryPage({
             [column.key]: value,
           },
         };
-      }),
-    );
+      });
+      // Synchronously update ref so onSave (via endCellEditSession/onBlur)
+      // sees the latest rows before React commits the state update.
+      rowsRef.current = next;
+      return next;
+    });
     if (changedRowId) {
       const resolvedRowId = changedRowId;
       setDirtyRowIds((prev) => {
         const next = new Set(prev);
         next.add(resolvedRowId);
+        // Synchronously update ref so onSave sees the dirty ID immediately.
+        dirtyRowIdsRef.current = next;
         return next;
       });
     }
@@ -1338,8 +1390,9 @@ export function InventoryPage({
   useEffect(() => {
     const trySavePending = () => {
       if (!canEditInventory) return;
-      if (saving) return;
-      if (dirtyRowIds.size === 0 && deletedRowIds.size === 0) return;
+      // Read from refs to always get the latest state (closure values may be stale)
+      if (savingRef.current) return;
+      if (dirtyRowIdsRef.current.size === 0 && deletedRowIdsRef.current.size === 0) return;
       void onSave(true);
     };
 
@@ -1364,8 +1417,10 @@ export function InventoryPage({
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("beforeunload", onBeforeUnload);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      // Flush dirty data on unmount (SPA navigation) — refs always have latest values
+      trySavePending();
     };
-  }, [canEditInventory, saving, dirtyRowIds, deletedRowIds, onSave]);
+  }, [canEditInventory]);
 
   const onChooseCsvImport = () => {
     if (!canEditInventory || importingCsv) return;
@@ -2187,6 +2242,7 @@ export function InventoryPage({
                         if (failed.length > 0) {
                           setApproveAllError(`Failed to approve: ${failed.join(", ")}`);
                         }
+                        await reloadAndPruneZeroRows();
                       }}
                     >
                       {approvingAll ? "Approving..." : "Approve All"}
@@ -2233,6 +2289,7 @@ export function InventoryPage({
                         await approveUsageSubmission(sub.id, anyEdited ? effectiveEntries : undefined);
                         setPendingSubmissions((prev) => prev.filter((s) => s.id !== sub.id));
                         setEditedQtys((prev) => { const next = { ...prev }; delete next[sub.id]; return next; });
+                        await reloadAndPruneZeroRows();
                       }}
                       onDelete={async () => {
                         await deleteUsageSubmission(sub.id);

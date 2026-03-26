@@ -263,6 +263,7 @@ export function InventoryPage({
   const [deletedRowIds, setDeletedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [copiedRowValues, setCopiedRowValues] = useState<Record<string, string | number | boolean | null> | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
   const [undoStack, setUndoStack] = useState<InventorySnapshot[]>([]);
@@ -287,12 +288,11 @@ export function InventoryPage({
   const rowsRef = useRef(rows);
   const dirtyRowIdsRef = useRef(dirtyRowIds);
   const deletedRowIdsRef = useRef(deletedRowIds);
+  const savingRef = useRef(false);
   const selectedRowIdsRef = useRef(selectedRowIds);
   const selectedRowIdRef = useRef(selectedRowId);
   const restoringSnapshotRef = useRef(false);
   const editSessionCellRef = useRef<string | null>(null);
-  const editedRowPosRef = useRef<number | null>(null);
-  const filteredRowOrderRef = useRef<Map<string, number>>(new Map());
   const canEditTable = canEditInventory && activeTab !== "pendingSubmissions";
 
   useEffect(() => {
@@ -389,7 +389,6 @@ export function InventoryPage({
     setUndoStack([]);
     setRedoStack([]);
     editSessionCellRef.current = null;
-    editedRowPosRef.current = null;
   };
 
   const snapshotFromRefs = (): InventorySnapshot => ({
@@ -445,14 +444,12 @@ export function InventoryPage({
     if (editSessionCellRef.current === cellKey) return;
     pushUndoSnapshot();
     editSessionCellRef.current = cellKey;
-    // Capture the row's current sort position so we can pin it there
-    // while the user is still editing (prevents jumping).
-    editedRowPosRef.current = filteredRowOrderRef.current.get(rowId) ?? null;
+    setEditingRowId(rowId);
   };
 
   const endCellEditSession = () => {
     editSessionCellRef.current = null;
-    editedRowPosRef.current = null;
+    setEditingRowId(null);
     if (canEditInventory && (dirtyRowIds.size > 0 || deletedRowIds.size > 0)) {
       void onSave(true);
     }
@@ -616,7 +613,7 @@ export function InventoryPage({
   useEffect(() => {
     if (pendingNewLocationRef.current && effectiveLocationFilter === pendingNewLocationRef.current && canEditTable) {
       pendingNewLocationRef.current = null;
-      onAddRow("top");
+      onAddRow("above");
     }
   }, [effectiveLocationFilter]);
 
@@ -702,6 +699,7 @@ export function InventoryPage({
     const filtered = rows
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => {
+        if (editingRowId && row.id === editingRowId) return true;
         const quantityRaw = row.values.quantity;
         const minQuantityRaw = row.values.minQuantity;
         const quantity = Number(quantityRaw);
@@ -715,9 +713,6 @@ export function InventoryPage({
         const rowLocation = String(row.values.location ?? "").trim();
         const rowCategory = String(row.values.category ?? "").trim();
 
-        // Don't filter out a row while it's being actively edited
-        const isBeingEdited = editSessionCellRef.current?.startsWith(`${row.id}:`) ?? false;
-
         let passesTab = true;
         if (activeFilter === "lowStock") {
           passesTab = hasMinQuantity && Number.isFinite(quantity) && quantity < minQuantity;
@@ -725,20 +720,19 @@ export function InventoryPage({
         if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil < 0;
         if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
         if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
-        if (!passesTab && !isBeingEdited) return false;
+        if (!passesTab) return false;
 
         if (locationColumn && effectiveLocationFilter !== "All Locations") {
           const matchesLocation = effectiveLocationFilter === UNASSIGNED_LOCATION
             ? rowLocation === ""
             : rowLocation === effectiveLocationFilter;
-          if (!matchesLocation && !isBeingEdited) return false;
+          if (!matchesLocation) return false;
         }
-        if (categoryColumn && effectiveCategoryFilter !== "All Categories" && rowCategory !== effectiveCategoryFilter) {
-          if (!isBeingEdited) return false;
+        if (categoryColumn && effectiveCategoryFilter !== "All Categories" && rowCategory !== "" && rowCategory !== effectiveCategoryFilter) {
+          return false;
         }
 
         if (!normalizedSearch) return true;
-        if (isBeingEdited) return true;
         return visibleColumns.some((column) => {
           if (column.type === "date" || column.key === "expirationDate") {
             return normalizeDateForSearch(row.values[column.key]).some((value) =>
@@ -750,11 +744,6 @@ export function InventoryPage({
             .includes(normalizedSearch);
         });
       });
-
-    // While a row is being edited, pin it to its previous position so it
-    // doesn't jump around in the list while the user is still interacting.
-    const editedRowId = editSessionCellRef.current?.split(":")[0] ?? null;
-    const pinnedPosition = editedRowId !== null ? editedRowPosRef.current : null;
 
     let sorted = filtered;
     if (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60") {
@@ -790,25 +779,6 @@ export function InventoryPage({
       }
     }
 
-    // Pin the actively-edited row to its previous sort position so it
-    // doesn't jump while the user is still typing / clicking steppers.
-    if (editedRowId !== null && pinnedPosition !== null) {
-      const curIdx = sorted.findIndex(({ row }) => row.id === editedRowId);
-      if (curIdx !== -1 && curIdx !== pinnedPosition) {
-        const target = Math.min(pinnedPosition, sorted.length - 1);
-        const [item] = sorted.splice(curIdx, 1);
-        sorted.splice(target, 0, item);
-      }
-    }
-
-    // Keep a map of rowId → position so beginCellEditSession can
-    // capture the correct position before the value changes.
-    const orderMap = new Map<string, number>();
-    for (let i = 0; i < sorted.length; i++) {
-      orderMap.set(sorted[i].row.id, i);
-    }
-    filteredRowOrderRef.current = orderMap;
-
     return sorted;
   }, [
     rows,
@@ -820,6 +790,7 @@ export function InventoryPage({
     categoryColumn,
     effectiveCategoryFilter,
     sortState,
+    editingRowId,
   ]);
 
   const filteredRowIds = useMemo(
@@ -876,7 +847,7 @@ export function InventoryPage({
     element?.closest("details")?.removeAttribute("open");
   };
 
-  const onAddRow = (position: "above" | "below" | "top" | "bottom", event?: ReactMouseEvent<HTMLElement>) => {
+  const onAddRow = (position: "above" | "below", event?: ReactMouseEvent<HTMLElement>) => {
     if (!canEditTable) return;
     pushUndoSnapshot();
     if (event) {
@@ -885,49 +856,29 @@ export function InventoryPage({
     const anchorFromFiltered =
       filteredRows.find(({ row }) => row.id === selectedRowId)?.row;
     const anchorRowId = anchorFromFiltered?.id ?? null;
+    const newRowId = crypto.randomUUID();
+    setSelectedRowId(newRowId);
+    setDirtyRowIds((ids) => {
+      const next = new Set(ids);
+      next.add(newRowId);
+      return next;
+    });
     setRows((prev) => {
       const selectedIndex =
         anchorRowId ? prev.findIndex((row) => row.id === anchorRowId) : -1;
-      let insertIndex: number;
-      if (position === "top") {
-        insertIndex = 0;
-      } else if (position === "bottom") {
-        insertIndex = prev.length;
-      } else if (selectedIndex >= 0) {
-        insertIndex = position === "above" ? selectedIndex : selectedIndex + 1;
-      } else {
-        insertIndex = position === "above" ? 0 : prev.length;
-      }
+      const insertIndex = selectedIndex >= 0
+        ? (position === "above" ? selectedIndex : selectedIndex + 1)
+        : prev.length;
       const created = createBlankInventoryRow(allColumns, insertIndex);
-      const anchorRow =
-        position === "above" || position === "below"
-          ? selectedIndex >= 0
-            ? prev[selectedIndex]
-            : null
-          : null;
-      if (anchorRow && sortState && sortState.key in created.values) {
-        created.values[sortState.key] = anchorRow.values?.[sortState.key] ?? created.values[sortState.key];
-      }
+      created.id = newRowId;
       if (locationColumn && effectiveLocationFilter !== "All Locations" && effectiveLocationFilter !== UNASSIGNED_LOCATION) {
-        created.values[locationColumn.key] =
-          anchorRow?.values?.[locationColumn.key] ?? effectiveLocationFilter;
+        created.values[locationColumn.key] = effectiveLocationFilter;
       }
-      if (categoryColumn && effectiveCategoryFilter !== "All Categories") {
-        created.values[categoryColumn.key] =
-          anchorRow?.values?.[categoryColumn.key] ?? effectiveCategoryFilter;
-      }
-      const nextRows = [
+      return [
         ...prev.slice(0, insertIndex),
         created,
         ...prev.slice(insertIndex),
       ];
-      setSelectedRowId(created.id);
-      setDirtyRowIds((ids) => {
-        const next = new Set(ids);
-        next.add(created.id);
-        return next;
-      });
-      return nextRows;
     });
   };
 
@@ -1275,13 +1226,18 @@ export function InventoryPage({
   };
 
   const onSave = async (silent = false) => {
-    if (!canEditInventory || saving || (dirtyRowIds.size === 0 && deletedRowIds.size === 0)) return;
+    // Read from refs to always get the latest state, even if called from a stale closure
+    const currentRows = rowsRef.current;
+    const currentDirtyIds = dirtyRowIdsRef.current;
+    const currentDeletedIds = deletedRowIdsRef.current;
+    if (!canEditInventory || savingRef.current || (currentDirtyIds.size === 0 && currentDeletedIds.size === 0)) return;
+    savingRef.current = true;
     setSaving(true);
     // Snapshot which IDs we're saving so we only clear those, not edits made during the save
-    const savedDirtyIds = new Set(dirtyRowIds);
-    const savedDeletedIds = new Set(deletedRowIds);
+    const savedDirtyIds = new Set(currentDirtyIds);
+    const savedDeletedIds = new Set(currentDeletedIds);
     try {
-      const dirtyRows = rows
+      const dirtyRows = currentRows
         .map((row, index) => ({ ...row, position: index }))
         .filter((row) => savedDirtyIds.has(row.id));
       await saveInventoryItems(
@@ -1301,7 +1257,6 @@ export function InventoryPage({
       setUndoStack([]);
       setRedoStack([]);
       editSessionCellRef.current = null;
-      editedRowPosRef.current = null;
       // Allow the pruning effect to re-evaluate after save
       pruningRef.current = false;
       setShowSaved(true);
@@ -1311,6 +1266,7 @@ export function InventoryPage({
         alert(err?.message ?? "Failed to save inventory");
       }
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -1610,7 +1566,7 @@ export function InventoryPage({
                       <button
                         type="button"
                         className="button button-primary button-sm"
-                        onClick={(event) => onAddRow("top", event)}
+                        onClick={(event) => onAddRow("below", event)}
                       >
                         Add Item
                       </button>
@@ -1618,20 +1574,6 @@ export function InventoryPage({
                     <details className="inventory-import-menu">
                       <summary className="inventory-import-trigger">Add Row</summary>
                       <div className="inventory-import-panel">
-                        <button
-                          type="button"
-                          className="inventory-import-option"
-                          onClick={(event) => onAddRow("top", event)}
-                        >
-                          Add To Top
-                        </button>
-                        <button
-                          type="button"
-                          className="inventory-import-option"
-                          onClick={(event) => onAddRow("bottom", event)}
-                        >
-                          Add To Bottom
-                        </button>
                         <button
                           type="button"
                           className="inventory-import-option"

@@ -1,5 +1,5 @@
 import { useAuthenticator } from "@aws-amplify/ui-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
 import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
@@ -11,6 +11,7 @@ import { InventoryUsagePage } from "./components/InventoryUsagePage";
 import { OnboardingPage } from "./components/OnboardingPage";
 import { InventorySubNav } from "./components/InventorySubNav";
 import { QuickAddPage } from "./components/QuickAddPage";
+import { AuditLogPage } from "./components/AuditLogPage";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -32,13 +33,14 @@ const MAX_SUBSCRIPTION_RETRIES = 6;
 import { pickLoadingLine } from "./lib/loadingLines";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
-type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "invite" | "settings";
+type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "activity" | "invite" | "settings";
 
 const isAppView = (value: unknown): value is AppView =>
   value === "dashboard" ||
   value === "inventory" ||
   value === "usage" ||
   value === "quickadd" ||
+  value === "activity" ||
   value === "invite" ||
   value === "settings";
 
@@ -57,6 +59,18 @@ export default function App() {
     if (v !== "inventory") setInventoryInitialFilter(undefined);
     if (v === "dashboard") setDashboardKey((k) => k + 1);
     setViewRaw(v);
+  };
+
+  // Holds the async save function registered by InventoryPage on mount.
+  const inventorySaveFnRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Navigates away from inventory only after flushing any pending save.
+  // Prevents race conditions where the destination page fetches stale data.
+  const navigateTo = async (v: AppView) => {
+    if (inventorySaveFnRef.current) {
+      await inventorySaveFnRef.current().catch(() => {});
+    }
+    setView(v);
   };
   const [selectedLocation, setSelectedLocation] = useState<string | null>(() => {
     try { return localStorage.getItem("wickops.selectedLocation") ?? null; } catch { return null; }
@@ -342,6 +356,9 @@ export default function App() {
     if (view === "quickadd" && !subState.allowedModules.includes("inventory")) {
       setView("dashboard");
     }
+    if (view === "activity" && !subState.allowedModules.includes("inventory")) {
+      setView("dashboard");
+    }
   }, [view, subState.allowedModules]);
 
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
@@ -452,6 +469,7 @@ export default function App() {
         initialFilter={inventoryInitialFilter}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
+        onSaveFnChange={(fn) => { inventorySaveFnRef.current = fn; }}
       />
     ) : (
       <DashboardPage
@@ -477,6 +495,18 @@ export default function App() {
   } else if (view === "quickadd") {
     content = canAccessInventory && canEditInventory ? (
       <QuickAddPage selectedLocation={selectedLocation} />
+    ) : (
+      <DashboardPage
+        accessibleModules={subState.allowedModules}
+        canEditInventory={canEditInventory}
+        selectedLocation={selectedLocation}
+        onLocationChange={onLocationChange}
+        onNavigate={(v) => setView(v)}
+      />
+    );
+  } else if (view === "activity") {
+    content = canAccessInventory ? (
+      <AuditLogPage canManageColumns={canManageInventoryColumns} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
@@ -543,20 +573,20 @@ export default function App() {
     );
   }
 
-  const isInventorySection = view === "inventory" || view === "usage" || view === "quickadd";
+  const isInventorySection = view === "inventory" || view === "usage" || view === "quickadd" || view === "activity";
 
   return (
     <section className={`app-shell${isMobile && !keyboardOpen ? " app-shell--mobile" : ""}`}>
       <AppToolbar
         view={view}
-        onNavigate={(v) => setView(v)}
+        onNavigate={(v) => void navigateTo(v)}
       />
       {isInventorySection && (
         <InventorySubNav
           activeView={view}
           accessibleModules={subState.allowedModules}
           canEditInventory={canEditInventory}
-          onNavigate={(v) => setView(v)}
+          onNavigate={(v) => void navigateTo(v)}
         />
       )}
       {content}
@@ -565,7 +595,7 @@ export default function App() {
           <button
             type="button"
             className={`app-bottom-bar-item${view === "dashboard" ? " active" : ""}`}
-            onClick={() => setView("dashboard")}
+            onClick={() => void navigateTo("dashboard")}
           >
             <LayoutDashboard size={20} />
             <span>Dashboard</span>
@@ -573,7 +603,7 @@ export default function App() {
           <button
             type="button"
             className={`app-bottom-bar-item${view === "settings" || view === "invite" ? " active" : ""}`}
-            onClick={() => setView("settings")}
+            onClick={() => void navigateTo("settings")}
           >
             <SettingsIcon size={20} />
             <span>Settings</span>

@@ -1,6 +1,6 @@
 import type { AppModuleKey } from "../lib/moduleRegistry";
 
-type InventorySubView = "inventory" | "usage" | "quickadd";
+type InventorySubView = "inventory" | "usage" | "quickadd" | "activity";
 
 interface InventorySubNavProps {
   activeView: InventorySubView;
@@ -18,8 +18,9 @@ export function InventorySubNav({
   const showInventory = accessibleModules.includes("inventory");
   const showUsage = accessibleModules.includes("usage");
   const showQuickAdd = showInventory && canEditInventory;
+  const showActivity = showInventory;
 
-  const visibleCount = (showInventory ? 1 : 0) + (showUsage ? 1 : 0) + (showQuickAdd ? 1 : 0);
+  const visibleCount = (showInventory ? 1 : 0) + (showUsage ? 1 : 0) + (showQuickAdd ? 1 : 0) + (showActivity ? 1 : 0);
   if (visibleCount < 2) return null;
 
   return (
@@ -59,6 +60,17 @@ export function InventorySubNav({
           onClick={() => onNavigate("quickadd")}
         >
           Quick Add
+        </button>
+      )}
+      {showActivity && (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === "activity"}
+          className={`inventory-subnav-item${activeView === "activity" ? " active" : ""}`}
+          onClick={() => onNavigate("activity")}
+        >
+          Activity
         </button>
       )}
     </nav>

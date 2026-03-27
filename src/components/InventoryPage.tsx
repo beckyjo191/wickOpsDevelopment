@@ -31,6 +31,9 @@ interface InventoryPageProps {
   initialFilter?: InventoryFilter;
   selectedLocation: string | null;
   onLocationChange: (location: string | null) => void;
+  /** Called with the async save function when the component mounts, null when it unmounts.
+   *  Lets a parent await a save before navigating away (avoids race with stale reads). */
+  onSaveFnChange?: (fn: (() => Promise<void>) | null) => void;
 }
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
@@ -210,6 +213,7 @@ export function InventoryPage({
   initialFilter,
   selectedLocation,
   onLocationChange,
+  onSaveFnChange,
 }: InventoryPageProps) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
@@ -258,13 +262,18 @@ export function InventoryPage({
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
-  const [sortState, setSortState] = useState<{ key: string; direction: SortDirection } | null>(() => {
+  const [sortStateByTab, setSortStateByTab] = useState<Record<string, { key: string; direction: SortDirection } | null>>(() => {
     try {
-      const saved = localStorage.getItem("wickops.inventory.sortState");
+      const saved = localStorage.getItem("wickops.inventory.sortStateByTab");
       if (saved) return JSON.parse(saved);
+      // Migrate legacy single sort state to the "all" tab slot
+      const legacy = localStorage.getItem("wickops.inventory.sortState");
+      if (legacy) return { all: JSON.parse(legacy) };
     } catch {}
-    return { key: "itemName", direction: "asc" as SortDirection };
+    return { all: { key: "itemName", direction: "asc" as SortDirection } };
   });
+  // Derived sort for the current tab — used in JSX and filteredRows
+  const sortState = sortStateByTab[activeTab] ?? (activeTab === "all" ? { key: "itemName", direction: "asc" as SortDirection } : null);
   const [organizationId, setOrganizationId] = useState("");
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -853,13 +862,14 @@ export function InventoryPage({
       });
     }
 
-    if (sortState) {
-      const sortColumn = visibleColumns.find((column) => column.key === sortState.key);
+    const tabSort = sortStateByTab[activeTab] ?? (activeTab === "all" ? { key: "itemName", direction: "asc" as SortDirection } : null);
+    if (tabSort) {
+      const sortColumn = visibleColumns.find((column) => column.key === tabSort.key);
       if (sortColumn) {
         sorted = [...sorted].sort((a, b) => {
           const left = getSortableValue(sortColumn, a.row.values[sortColumn.key]);
           const right = getSortableValue(sortColumn, b.row.values[sortColumn.key]);
-          const cmp = compareForSort(left, right, sortState.direction);
+          const cmp = compareForSort(left, right, tabSort.direction);
           return cmp !== 0 ? cmp : a.index - b.index;
         });
       }
@@ -869,13 +879,14 @@ export function InventoryPage({
   }, [
     rows,
     activeFilter,
+    activeTab,
     visibleColumns,
     debouncedSearchTerm,
     locationColumn,
     effectiveLocationFilter,
     categoryColumn,
     effectiveCategoryFilter,
-    sortState,
+    sortStateByTab,
   ]);
 
   const filteredRowIds = useMemo(
@@ -1206,12 +1217,14 @@ export function InventoryPage({
   }
 
   const onSortColumn = (column: InventoryColumn) => {
-    setSortState((prev) => {
-      const next = (!prev || prev.key !== column.key)
-        ? { key: column.key, direction: "asc" as SortDirection }
-        : { key: column.key, direction: prev.direction === "asc" ? "desc" as SortDirection : "asc" as SortDirection };
-      try { localStorage.setItem("wickops.inventory.sortState", JSON.stringify(next)); } catch {}
-      return next;
+    const prev = sortStateByTab[activeTab] ?? null;
+    const next = (!prev || prev.key !== column.key)
+      ? { key: column.key, direction: "asc" as SortDirection }
+      : { key: column.key, direction: prev.direction === "asc" ? "desc" as SortDirection : "asc" as SortDirection };
+    setSortStateByTab((prevMap) => {
+      const nextMap = { ...prevMap, [activeTab]: next };
+      try { localStorage.setItem("wickops.inventory.sortStateByTab", JSON.stringify(nextMap)); } catch {}
+      return nextMap;
     });
   };
 
@@ -1646,6 +1659,14 @@ export function InventoryPage({
   // Keep a stable ref to onSave so the interval always calls the latest version.
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
+
+  // Expose save function to parent so it can await a save before navigating away.
+  useEffect(() => {
+    if (!onSaveFnChange) return;
+    const fn = () => onSaveRef.current();
+    onSaveFnChange(fn);
+    return () => onSaveFnChange(null);
+  }, [onSaveFnChange]);
 
   // Background autosave: every 3 seconds, diff rows against last-saved snapshot.
   useEffect(() => {
@@ -2750,7 +2771,7 @@ export function InventoryPage({
                     >
                       <button
                         type="button"
-                        className="inventory-sort-trigger"
+                        className={`inventory-sort-trigger${sortState?.key === column.key ? " inventory-sort-active" : ""}`}
                         onClick={() => onSortColumn(column)}
                       >
                         <span>{column.label}</span>

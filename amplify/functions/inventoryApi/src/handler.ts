@@ -8,8 +8,11 @@ import {
   ProjectionType,
   ScalarAttributeType,
   UpdateContinuousBackupsCommand,
+  UpdateTimeToLiveCommand,
 } from "@aws-sdk/client-dynamodb";
 import {
+  BatchGetCommand,
+  BatchWriteCommand,
   DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
@@ -167,6 +170,7 @@ type InventoryStorage = {
   columnTable: string;
   itemTable: string;
   pendingTable: string;
+  auditTable: string;
 };
 
 const storageCache = new Map<string, { storage: InventoryStorage; checkedAt: number }>();
@@ -276,7 +280,7 @@ const sanitizeOrgIdForTableName = (organizationId: string): string =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 36) || "org";
 
-const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items" | "pending"): string => {
+const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items" | "pending" | "auditlog"): string => {
   const safeOrg = sanitizeOrgIdForTableName(organizationId);
   const hash = createHash("sha256").update(organizationId).digest("hex").slice(0, 10);
   return `${INVENTORY_ORG_TABLE_PREFIX}-${INVENTORY_STORAGE_NAMESPACE}-${safeOrg}-${hash}-${suffix}`;
@@ -420,12 +424,177 @@ const createOrgPendingTableIfMissing = async (tableName: string): Promise<{ crea
   }
 };
 
+const AUDIT_BY_TIMESTAMP_INDEX = "ByTimestamp";
+const AUDIT_BY_USER_INDEX = "ByUser";
+const AUDIT_TTL_DAYS = 365;
+
+const createOrgAuditTableIfMissing = async (tableName: string): Promise<{ created: boolean }> => {
+  const existing = await describeTable(tableName);
+  if (existing?.Table) {
+    if (existing.Table.TableStatus !== "ACTIVE") {
+      try {
+        await waitForTableActive(tableName);
+      } catch {
+        throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
+      }
+    }
+    await enablePitr(tableName);
+    return { created: false };
+  }
+
+  try {
+    await rawDdb.send(
+      new CreateTableCommand({
+        TableName: tableName,
+        BillingMode: BillingMode.PAY_PER_REQUEST,
+        AttributeDefinitions: [
+          { AttributeName: "pk", AttributeType: ScalarAttributeType.S },
+          { AttributeName: "sk", AttributeType: ScalarAttributeType.S },
+          { AttributeName: "orgId", AttributeType: ScalarAttributeType.S },
+          { AttributeName: "timestamp", AttributeType: ScalarAttributeType.S },
+          { AttributeName: "userId", AttributeType: ScalarAttributeType.S },
+        ],
+        KeySchema: [
+          { AttributeName: "pk", KeyType: KeyType.HASH },
+          { AttributeName: "sk", KeyType: KeyType.RANGE },
+        ],
+        GlobalSecondaryIndexes: [
+          {
+            IndexName: AUDIT_BY_TIMESTAMP_INDEX,
+            KeySchema: [
+              { AttributeName: "orgId", KeyType: KeyType.HASH },
+              { AttributeName: "timestamp", KeyType: KeyType.RANGE },
+            ],
+            Projection: { ProjectionType: ProjectionType.ALL },
+          },
+          {
+            IndexName: AUDIT_BY_USER_INDEX,
+            KeySchema: [
+              { AttributeName: "userId", KeyType: KeyType.HASH },
+              { AttributeName: "timestamp", KeyType: KeyType.RANGE },
+            ],
+            Projection: { ProjectionType: ProjectionType.ALL },
+          },
+        ],
+      }),
+    );
+  } catch (err: any) {
+    if (!isResourceInUse(err)) {
+      throw err;
+    }
+  }
+
+  try {
+    await waitForTableActive(tableName);
+    await enablePitr(tableName);
+    // Enable TTL for automatic cleanup of old audit events
+    try {
+      await rawDdb.send(
+        new UpdateTimeToLiveCommand({
+          TableName: tableName,
+          TimeToLiveSpecification: { AttributeName: "ttl", Enabled: true },
+        }),
+      );
+    } catch { /* best-effort */ }
+    return { created: true };
+  } catch {
+    throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
+  }
+};
+
+// ── AUDIT HELPERS ──────────────────────────────────────────────────────────
+
+type AuditAction =
+  | "ITEM_CREATE"
+  | "ITEM_EDIT"
+  | "ITEM_DELETE"
+  | "USAGE_SUBMIT"
+  | "USAGE_APPROVE"
+  | "USAGE_REJECT"
+  | "COLUMN_CREATE"
+  | "COLUMN_DELETE"
+  | "COLUMN_UPDATE"
+  | "COLUMN_REORDER"
+  | "CSV_IMPORT"
+  | "TEMPLATE_APPLY";
+
+const buildAuditEvent = (
+  access: AccessContext,
+  action: AuditAction,
+  itemId: string | null,
+  itemName: string | null,
+  details: Record<string, unknown>,
+) => {
+  const eventId = randomUUID();
+  const timestamp = new Date().toISOString();
+  const pk = itemId ? `ITEM#${itemId}` : `ORG#${access.organizationId}`;
+  const sk = `TS#${timestamp}#${eventId.slice(-8)}`;
+  const ttl = Math.floor(Date.now() / 1000) + AUDIT_TTL_DAYS * 86400;
+
+  return {
+    pk,
+    sk,
+    eventId,
+    action,
+    timestamp,
+    orgId: access.organizationId,
+    userId: access.userId,
+    userEmail: access.email,
+    userName: access.displayName || access.email,
+    ...(itemId ? { itemId } : {}),
+    ...(itemName ? { itemName } : {}),
+    detailsJson: JSON.stringify(details),
+    ttl,
+  };
+};
+
+const writeAuditEvents = async (
+  auditTable: string,
+  events: Record<string, unknown>[],
+): Promise<void> => {
+  if (events.length === 0) return;
+  // BatchWriteItem supports max 25 items per call
+  for (let i = 0; i < events.length; i += 25) {
+    const batch = events.slice(i, i + 25);
+    try {
+      await ddb.send(
+        new BatchWriteCommand({
+          RequestItems: {
+            [auditTable]: batch.map((item) => ({
+              PutRequest: { Item: item },
+            })),
+          },
+        }),
+      );
+    } catch (err: any) {
+      console.error("audit write failed", err);
+    }
+  }
+};
+
+const computeValuesDiff = (
+  oldValues: Record<string, unknown>,
+  newValues: Record<string, unknown>,
+): Array<{ field: string; from: unknown; to: unknown }> => {
+  const changes: Array<{ field: string; from: unknown; to: unknown }> = [];
+  const allKeys = new Set([...Object.keys(oldValues), ...Object.keys(newValues)]);
+  for (const key of allKeys) {
+    const oldVal = oldValues[key] ?? null;
+    const newVal = newValues[key] ?? null;
+    if (String(oldVal) !== String(newVal)) {
+      changes.push({ field: key, from: oldVal, to: newVal });
+    }
+  }
+  return changes;
+};
+
 const ensureStorageForOrganization = async (organizationId: string): Promise<InventoryStorage> => {
   if (!ENABLE_PER_ORG_TABLES) {
     return {
       columnTable: DEFAULT_INVENTORY_COLUMN_TABLE,
       itemTable: DEFAULT_INVENTORY_ITEM_TABLE,
       pendingTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-pending`,
+      auditTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-auditlog`,
     };
   }
 
@@ -439,12 +608,14 @@ const ensureStorageForOrganization = async (organizationId: string): Promise<Inv
     columnTable: buildOrgScopedTableName(organizationId, "columns"),
     itemTable: buildOrgScopedTableName(organizationId, "items"),
     pendingTable: buildOrgScopedTableName(organizationId, "pending"),
+    auditTable: buildOrgScopedTableName(organizationId, "auditlog"),
   };
 
   await Promise.all([
     createOrgTableIfMissing(storage.columnTable, INVENTORY_COLUMN_BY_MODULE_INDEX, "sortOrder"),
     createOrgTableIfMissing(storage.itemTable, INVENTORY_ITEM_BY_MODULE_INDEX, "position"),
     createOrgPendingTableIfMissing(storage.pendingTable),
+    createOrgAuditTableIfMissing(storage.auditTable),
   ]);
 
   storageCache.set(organizationId, { storage, checkedAt: now });
@@ -455,7 +626,7 @@ const deleteStorageForOrganization = async (organizationId: string): Promise<voi
   if (!ENABLE_PER_ORG_TABLES) return;
   const storage = await ensureStorageForOrganization(organizationId);
   await Promise.all(
-    [storage.columnTable, storage.itemTable, storage.pendingTable].map(async (tableName) => {
+    [storage.columnTable, storage.itemTable, storage.pendingTable, storage.auditTable].map(async (tableName) => {
       try {
         await rawDdb.send(new DeleteTableCommand({ TableName: tableName }));
       } catch (err: any) {
@@ -1713,6 +1884,42 @@ const handleSaveItems = async (storage: InventoryStorage, access: AccessContext,
         .filter((value: string) => value.length > 0)
     : [];
 
+  // Batch-read existing rows for audit diff
+  const allIds = [
+    ...rows.map((r: any) => String(r?.id ?? "").trim()).filter((id: string) => id.length > 0),
+    ...deletedRowIds,
+  ];
+  const oldValuesMap = new Map<string, Record<string, unknown>>();
+  if (allIds.length > 0) {
+    for (let i = 0; i < allIds.length; i += 100) {
+      const chunk = allIds.slice(i, i + 100);
+      try {
+        const batchResult = await ddb.send(
+          new BatchGetCommand({
+            RequestItems: {
+              [storage.itemTable]: {
+                Keys: chunk.map((id: string) => ({ id })),
+                ProjectionExpression: "id, valuesJson",
+              },
+            },
+          }),
+        );
+        const items = batchResult.Responses?.[storage.itemTable] ?? [];
+        for (const item of items) {
+          try {
+            oldValuesMap.set(String(item.id), JSON.parse(String(item.valuesJson ?? "{}")));
+          } catch {
+            oldValuesMap.set(String(item.id), {});
+          }
+        }
+      } catch {
+        // Non-critical: audit diffs will be unavailable but save proceeds
+      }
+    }
+  }
+
+  const auditEvents: Record<string, unknown>[] = [];
+
   for (let idx = 0; idx < rows.length; idx += 1) {
     const row = rows[idx];
     const rowId = String(row?.id ?? "").trim() || randomUUID();
@@ -1732,7 +1939,6 @@ const handleSaveItems = async (storage: InventoryStorage, access: AccessContext,
         new UpdateCommand({
           TableName: storage.itemTable,
           Key: { id: rowId },
-          // Prevent cross-org overwrite if a caller sends an arbitrary existing id.
           ConditionExpression:
             "attribute_not_exists(id) OR (organizationId = :org AND #module = :module)",
           UpdateExpression:
@@ -1757,25 +1963,48 @@ const handleSaveItems = async (storage: InventoryStorage, access: AccessContext,
       }
       throw err;
     }
+
+    // Build audit event
+    const itemName = String(values.itemName ?? "").trim() || `Item ${rowId.slice(0, 8)}`;
+    const oldValues = oldValuesMap.get(rowId);
+    if (oldValues) {
+      const changes = computeValuesDiff(oldValues, values as Record<string, unknown>);
+      if (changes.length > 0) {
+        auditEvents.push(buildAuditEvent(access, "ITEM_EDIT", rowId, itemName, { changes }));
+      }
+    } else {
+      auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, { initialValues: values }));
+    }
   }
 
   for (const deletedId of deletedRowIds) {
-    await ddb.send(
-      new DeleteCommand({
-        TableName: storage.itemTable,
-        Key: { id: deletedId },
-        ConditionExpression: "organizationId = :org AND #module = :module",
-        ExpressionAttributeNames: {
-          "#module": "module",
-        },
-        ExpressionAttributeValues: {
-          ":org": access.organizationId,
-          ":module": "inventory",
-        },
-      }),
-    );
+    const oldValues = oldValuesMap.get(deletedId);
+    const deletedName = oldValues ? String(oldValues.itemName ?? "") : "";
+    try {
+      await ddb.send(
+        new DeleteCommand({
+          TableName: storage.itemTable,
+          Key: { id: deletedId },
+          ConditionExpression: "organizationId = :org AND #module = :module",
+          ExpressionAttributeNames: {
+            "#module": "module",
+          },
+          ExpressionAttributeValues: {
+            ":org": access.organizationId,
+            ":module": "inventory",
+          },
+        }),
+      );
+      auditEvents.push(buildAuditEvent(access, "ITEM_DELETE", deletedId, deletedName, {
+        deletedValues: oldValues ?? {},
+      }));
+    } catch (err: any) {
+      if (err?.name === "ConditionalCheckFailedException") continue;
+      throw err;
+    }
   }
 
+  await writeAuditEvents(storage.auditTable, auditEvents);
   return json(200, { ok: true });
 };
 
@@ -1879,6 +2108,13 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
 
   await ddb.send(new PutCommand({ TableName: storage.pendingTable, Item: submission }));
 
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "USAGE_SUBMIT", null, null, {
+      submissionId,
+      entries: pendingEntries.map((e) => ({ itemId: e.itemId, itemName: e.itemName, quantityUsed: e.quantityUsed })),
+    }),
+  ]);
+
   return json(200, { ok: true, pending: true, submissionId, entryCount: pendingEntries.length });
 };
 
@@ -1901,7 +2137,7 @@ const applyUsageEntries = async (
   storage: InventoryStorage,
   access: AccessContext,
   pendingEntries: PendingEntry[],
-): Promise<{ error?: string }> => {
+): Promise<{ error?: string; appliedDetails?: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number }> }> => {
   const items = await listAllItems(storage, access.organizationId);
   const byId = new Map(items.map((item) => [String(item.id), item]));
 
@@ -1929,6 +2165,7 @@ const applyUsageEntries = async (
   }
 
   // All validated — apply deductions
+  const appliedDetails: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number }> = [];
   for (const entry of pendingEntries) {
     const item = byId.get(entry.itemId)!;
     let values: Record<string, string | number | boolean | null> = {};
@@ -1937,7 +2174,8 @@ const applyUsageEntries = async (
     } catch {
       values = {};
     }
-    const nextQuantity = Number(values.quantity ?? 0) - entry.quantityUsed;
+    const quantityBefore = Number(values.quantity ?? 0);
+    const nextQuantity = quantityBefore - entry.quantityUsed;
     const nextValues = { ...values, quantity: nextQuantity };
     try {
       await ddb.send(
@@ -1955,6 +2193,13 @@ const applyUsageEntries = async (
           },
         }),
       );
+      appliedDetails.push({
+        itemId: entry.itemId,
+        itemName: entry.itemName,
+        quantityUsed: entry.quantityUsed,
+        quantityBefore,
+        quantityAfter: nextQuantity,
+      });
     } catch (err: any) {
       if (err?.name === "ConditionalCheckFailedException") {
         return { error: `Item (${entry.itemName}): does not belong to organization.` };
@@ -1962,7 +2207,7 @@ const applyUsageEntries = async (
       throw err;
     }
   }
-  return {};
+  return { appliedDetails };
 };
 
 const handleDeleteSubmission = async (
@@ -2040,6 +2285,19 @@ const handleApproveSubmission = async (
     }),
   );
 
+  // Write audit events for each item affected
+  const auditEvents: Record<string, unknown>[] = [];
+  for (const detail of applyResult.appliedDetails ?? []) {
+    auditEvents.push(buildAuditEvent(access, "USAGE_APPROVE", detail.itemId, detail.itemName, {
+      submissionId,
+      submittedByEmail: submission.submittedByEmail,
+      quantityUsed: detail.quantityUsed,
+      quantityBefore: detail.quantityBefore,
+      quantityAfter: detail.quantityAfter,
+    }));
+  }
+  await writeAuditEvents(storage.auditTable, auditEvents);
+
   return json(200, { ok: true, updatedCount: pendingEntries.length });
 };
 
@@ -2087,6 +2345,14 @@ const handleRejectSubmission = async (
     }),
   );
 
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "USAGE_REJECT", null, null, {
+      submissionId,
+      submittedByEmail: submission.submittedByEmail,
+      reason: rejectionReason || undefined,
+    }),
+  ]);
+
   return json(200, { ok: true });
 };
 
@@ -2129,6 +2395,16 @@ const handleCreateColumn = async (storage: InventoryStorage, access: AccessConte
   };
 
   await ddb.send(new PutCommand({ TableName: storage.columnTable, Item: created }));
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_CREATE", null, null, {
+      columnId: created.id,
+      columnKey: key,
+      columnLabel: label,
+      columnType: type,
+    }),
+  ]);
+
   return json(200, { column: created });
 };
 
@@ -2154,6 +2430,15 @@ const handleDeleteColumn = async (storage: InventoryStorage, access: AccessConte
   }
 
   await ddb.send(new DeleteCommand({ TableName: storage.columnTable, Key: { id: columnId } }));
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_DELETE", null, null, {
+      columnId,
+      columnKey: column.key,
+      columnLabel: column.label,
+    }),
+  ]);
+
   return json(200, { ok: true });
 };
 
@@ -2195,6 +2480,16 @@ const handleUpdateColumnVisibility = async (
       },
     }),
   );
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_UPDATE", null, null, {
+      columnId,
+      columnKey: column.key,
+      changeType: "visibility",
+      from: column.isVisible,
+      to: isVisible,
+    }),
+  ]);
 
   return json(200, { ok: true, columnId, isVisible });
 };
@@ -2244,6 +2539,16 @@ const handleUpdateColumnLabel = async (
     }),
   );
 
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_UPDATE", null, null, {
+      columnId,
+      columnKey: column.key,
+      changeType: "label",
+      from: column.label,
+      to: label,
+    }),
+  ]);
+
   return json(200, { ok: true, columnId, label });
 };
 
@@ -2291,6 +2596,16 @@ const handleUpdateColumnType = async (
       },
     }),
   );
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_UPDATE", null, null, {
+      columnId,
+      columnKey: column.key,
+      changeType: "type",
+      from: column.type,
+      to: type,
+    }),
+  ]);
 
   return json(200, { ok: true, columnId, type });
 };
@@ -2340,6 +2655,12 @@ const handleReorderColumns = async (
       ),
     ),
   );
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_REORDER", null, null, {
+      columnOrder,
+    }),
+  ]);
 
   return json(200, { ok: true });
 };
@@ -2661,6 +2982,16 @@ const handleImportCsv = async (storage: InventoryStorage, access: AccessContext,
     });
   }
 
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "CSV_IMPORT", null, null, {
+      rowsCreated: createdCount,
+      rowsUpdated: updatedCount,
+      rowsSkipped: skippedCount,
+      duplicateSkipped: duplicateSkippedCount,
+      columnsCreated: createdColumns.map((c) => c.key),
+    }),
+  ]);
+
   return json(200, {
     ok: true,
     createdCount,
@@ -2876,7 +3207,271 @@ const handleApplyOnboardingTemplate = async (
     sortOrder += 10;
   }
 
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "TEMPLATE_APPLY", null, null, {
+      templateId,
+      columnsAdded: addedColumns.map((c) => c.key),
+    }),
+  ]);
+
   return json(200, { ok: true, addedColumns });
+};
+
+// ── AUDIT LOG API ENDPOINTS ────────────────────────────────────────────────
+
+const handleAuditFeed = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  query: Record<string, string | undefined>,
+) => {
+  const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 200);
+  const startAfter = query.startAfter;
+  const endBefore = query.endBefore;
+  const actionFilter = query.action?.split(",").filter(Boolean);
+  const userIdFilter = query.userId;
+
+  // EDITORs can only see their own events
+  const effectiveUserId = access.canManageColumns ? userIdFilter : access.userId;
+
+  let keyCondition = "orgId = :orgId";
+  const exprValues: Record<string, unknown> = { ":orgId": access.organizationId };
+  const exprNames: Record<string, string> = {};
+
+  if (startAfter && endBefore) {
+    keyCondition += " AND #ts BETWEEN :start AND :end";
+    exprValues[":start"] = startAfter;
+    exprValues[":end"] = endBefore;
+    exprNames["#ts"] = "timestamp";
+  } else if (startAfter) {
+    keyCondition += " AND #ts > :start";
+    exprValues[":start"] = startAfter;
+    exprNames["#ts"] = "timestamp";
+  } else if (endBefore) {
+    keyCondition += " AND #ts < :end";
+    exprValues[":end"] = endBefore;
+    exprNames["#ts"] = "timestamp";
+  }
+
+  // If filtering by user, query ByUser GSI instead
+  const useUserIndex = !!effectiveUserId;
+  if (useUserIndex) {
+    keyCondition = "userId = :userId";
+    exprValues[":userId"] = effectiveUserId;
+    delete exprValues[":orgId"];
+    if (startAfter && endBefore) {
+      keyCondition += " AND #ts BETWEEN :start AND :end";
+    } else if (startAfter) {
+      keyCondition += " AND #ts > :start";
+    } else if (endBefore) {
+      keyCondition += " AND #ts < :end";
+    }
+  }
+
+  let filterExpression: string | undefined;
+  if (actionFilter && actionFilter.length > 0) {
+    const placeholders = actionFilter.map((_, i) => `:act${i}`);
+    filterExpression = `#action IN (${placeholders.join(", ")})`;
+    exprNames["#action"] = "action";
+    actionFilter.forEach((a, i) => {
+      exprValues[`:act${i}`] = a;
+    });
+  }
+
+  // For non-user-filtered queries where EDITOR, also filter by orgId
+  if (useUserIndex && !access.canManageColumns) {
+    const orgFilter = "orgId = :orgId";
+    exprValues[":orgId"] = access.organizationId;
+    filterExpression = filterExpression ? `${filterExpression} AND ${orgFilter}` : orgFilter;
+  }
+
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: storage.auditTable,
+      IndexName: useUserIndex ? AUDIT_BY_USER_INDEX : AUDIT_BY_TIMESTAMP_INDEX,
+      KeyConditionExpression: keyCondition,
+      ...(filterExpression ? { FilterExpression: filterExpression } : {}),
+      ExpressionAttributeValues: exprValues,
+      ...(Object.keys(exprNames).length > 0 ? { ExpressionAttributeNames: exprNames } : {}),
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  );
+
+  const events = (result.Items ?? []).map((item) => ({
+    eventId: item.eventId,
+    action: item.action,
+    timestamp: item.timestamp,
+    userId: item.userId,
+    userEmail: item.userEmail,
+    userName: item.userName,
+    itemId: item.itemId,
+    itemName: item.itemName,
+    details: JSON.parse(String(item.detailsJson ?? "{}")),
+  }));
+
+  const nextCursor = result.LastEvaluatedKey
+    ? encodeNextToken(result.LastEvaluatedKey as Record<string, unknown>)
+    : null;
+
+  return json(200, { events, nextCursor });
+};
+
+const handleAuditItemHistory = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  path: string,
+  query: Record<string, string | undefined>,
+) => {
+  const match = path.match(/\/inventory\/audit\/item\/([^/]+)$/);
+  const itemId = match?.[1];
+  if (!itemId) return json(400, { error: "Missing item ID." });
+
+  const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 200);
+  const cursor = parseNextToken(query.cursor);
+
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: storage.auditTable,
+      KeyConditionExpression: "pk = :pk",
+      ExpressionAttributeValues: { ":pk": `ITEM#${itemId}` },
+      ScanIndexForward: false,
+      Limit: limit,
+      ...(cursor ? { ExclusiveStartKey: cursor } : {}),
+    }),
+  );
+
+  const events = (result.Items ?? []).map((item) => ({
+    eventId: item.eventId,
+    action: item.action,
+    timestamp: item.timestamp,
+    userId: item.userId,
+    userEmail: item.userEmail,
+    userName: item.userName,
+    itemId: item.itemId,
+    itemName: item.itemName,
+    details: JSON.parse(String(item.detailsJson ?? "{}")),
+  }));
+
+  const nextCursor = result.LastEvaluatedKey
+    ? encodeNextToken(result.LastEvaluatedKey as Record<string, unknown>)
+    : null;
+
+  return json(200, { events, nextCursor });
+};
+
+const handleAuditAnalytics = async (
+  storage: InventoryStorage,
+  access: AccessContext,
+  query: Record<string, string | undefined>,
+) => {
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can view analytics." });
+  }
+
+  const period = query.period ?? "30d";
+  const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+
+  // Fetch all audit events in the time range
+  let allEvents: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const result = await ddb.send(
+      new QueryCommand({
+        TableName: storage.auditTable,
+        IndexName: AUDIT_BY_TIMESTAMP_INDEX,
+        KeyConditionExpression: "orgId = :orgId AND #ts >= :since",
+        ExpressionAttributeValues: { ":orgId": access.organizationId, ":since": since },
+        ExpressionAttributeNames: { "#ts": "timestamp" },
+        ScanIndexForward: true,
+        Limit: 1000,
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      }),
+    );
+    allEvents = allEvents.concat(result.Items ?? []);
+    lastKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastKey && allEvents.length < 10000);
+
+  // Usage over time: group USAGE_APPROVE events by day
+  const usageByDay = new Map<string, number>();
+  // User comparison: count events per user
+  const userActivity = new Map<string, { email: string; name: string; edits: number; approvals: number; submissions: number }>();
+  // Top items: count changes per item
+  const itemActivity = new Map<string, { itemName: string; changeCount: number; totalUsed: number }>();
+
+  for (const evt of allEvents) {
+    const action = String(evt.action ?? "");
+    const day = String(evt.timestamp ?? "").slice(0, 10);
+    const userId = String(evt.userId ?? "");
+    const itemId = String(evt.itemId ?? "");
+    const itemName = String(evt.itemName ?? "");
+
+    // User activity tracking
+    if (!userActivity.has(userId)) {
+      userActivity.set(userId, {
+        email: String(evt.userEmail ?? ""),
+        name: String(evt.userName ?? ""),
+        edits: 0,
+        approvals: 0,
+        submissions: 0,
+      });
+    }
+    const ua = userActivity.get(userId)!;
+
+    let details: Record<string, unknown> = {};
+    try {
+      details = JSON.parse(String(evt.detailsJson ?? "{}"));
+    } catch { /* ignore */ }
+
+    if (action === "USAGE_APPROVE") {
+      const qtyUsed = Number(details.quantityUsed ?? 0);
+      usageByDay.set(day, (usageByDay.get(day) ?? 0) + qtyUsed);
+      ua.approvals += 1;
+      if (itemId) {
+        const ia = itemActivity.get(itemId) ?? { itemName, changeCount: 0, totalUsed: 0 };
+        ia.totalUsed += qtyUsed;
+        ia.changeCount += 1;
+        itemActivity.set(itemId, ia);
+      }
+    } else if (action === "ITEM_EDIT") {
+      ua.edits += 1;
+      if (itemId) {
+        const ia = itemActivity.get(itemId) ?? { itemName, changeCount: 0, totalUsed: 0 };
+        ia.changeCount += 1;
+        itemActivity.set(itemId, ia);
+      }
+    } else if (action === "USAGE_SUBMIT") {
+      ua.submissions += 1;
+    } else if (action === "ITEM_CREATE" || action === "ITEM_DELETE") {
+      ua.edits += 1;
+    }
+  }
+
+  // Build usage-over-time sorted by day
+  const usageOverTime = [...usageByDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, totalUsed]) => ({ date, totalUsed }));
+
+  // Build user comparison sorted by total activity descending
+  const userComparison = [...userActivity.entries()]
+    .map(([userId, data]) => ({ userId, ...data, total: data.edits + data.approvals + data.submissions }))
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 20);
+
+  // Build top items sorted by change count descending
+  const topItems = [...itemActivity.entries()]
+    .map(([itemId, data]) => ({ itemId, ...data }))
+    .sort((a, b) => b.changeCount - a.changeCount)
+    .slice(0, 20);
+
+  return json(200, {
+    period,
+    days,
+    totalEvents: allEvents.length,
+    usageOverTime,
+    userComparison,
+    topItems,
+  });
 };
 
 export const handler = async (event: any) => {
@@ -2935,6 +3530,28 @@ export const handler = async (event: any) => {
 
     if (method === "POST" && path.endsWith("/inventory/onboarding/apply-template")) {
       return handleApplyOnboardingTemplate(storage, access, parseBody(event));
+    }
+
+    // ── Audit Log Routes ──
+    if (method === "GET" && path.endsWith("/inventory/audit/feed")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleAuditFeed(storage, access, query);
+    }
+
+    if (method === "GET" && /\/inventory\/audit\/item\/[^/]+$/.test(path)) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleAuditItemHistory(storage, access, path, query);
+    }
+
+    if (method === "GET" && path.endsWith("/inventory/audit/analytics")) {
+      if (!hasModuleAccess(access, "inventory")) {
+        return json(403, { error: "Module access denied" });
+      }
+      return handleAuditAnalytics(storage, access, query);
     }
 
     if (method === "POST" && path.endsWith("/inventory/locations")) {

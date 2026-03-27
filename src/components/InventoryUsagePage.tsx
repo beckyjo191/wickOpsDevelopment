@@ -667,6 +667,13 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
       <div className="app-card usage-card">
         <header className="usage-header">
           <h2 className="usage-title">Log Usage</h2>
+          <p className="usage-instructions">
+            {showLocationPicker && <>Select a <strong>location</strong>, then </>}
+            Search for an item, enter the quantity used, and hit <strong>Submit Usage</strong>.
+            {" "}Need to log more? Tap <strong>+ Add Item</strong> to add another line.
+            {" "}Use the <strong>note</strong> field to flag anything the inventory manager should know —
+            a count discrepancy, a damaged item, or why something was used differently than expected.
+          </p>
         </header>
 
         {feedback && (
@@ -886,6 +893,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
         {recentActivity.length > 0 && (
           <div className="usage-activity">
             <h3 className="usage-activity-title">Recent Checkouts</h3>
+            <p className="usage-activity-subtitle">Latest submission, pending review.</p>
             <ul className="usage-activity-list">
               {recentActivity.map((sub) => {
                 let entries: import("../lib/inventoryApi").PendingEntry[] = [];

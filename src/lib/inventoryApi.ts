@@ -891,6 +891,92 @@ export const generateAndDownloadInventoryTemplate = async (
  * Create a Stripe Customer Portal session for the logged-in user's org.
  * Returns the portal URL to redirect to.
  */
+// ─── Audit Log ───────────────────────────────────────────────────────────────
+
+export type AuditEvent = {
+  eventId: string;
+  action: string;
+  timestamp: string;
+  userId: string;
+  userEmail: string;
+  userName: string;
+  itemId?: string;
+  itemName?: string;
+  details: Record<string, unknown>;
+};
+
+export type AuditFeedResponse = {
+  events: AuditEvent[];
+  nextCursor: string | null;
+};
+
+export type AuditAnalytics = {
+  period: string;
+  days: number;
+  totalEvents: number;
+  usageOverTime: Array<{ date: string; totalUsed: number }>;
+  userComparison: Array<{
+    userId: string;
+    email: string;
+    name: string;
+    edits: number;
+    approvals: number;
+    submissions: number;
+    total: number;
+  }>;
+  topItems: Array<{
+    itemId: string;
+    itemName: string;
+    changeCount: number;
+    totalUsed: number;
+  }>;
+};
+
+export const fetchAuditFeed = async (params: {
+  limit?: number;
+  startAfter?: string;
+  endBefore?: string;
+  action?: string;
+  userId?: string;
+}): Promise<AuditFeedResponse> => {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.startAfter) qs.set("startAfter", params.startAfter);
+  if (params.endBefore) qs.set("endBefore", params.endBefore);
+  if (params.action) qs.set("action", params.action);
+  if (params.userId) qs.set("userId", params.userId);
+  const qsStr = qs.toString();
+  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/feed${qsStr ? `?${qsStr}` : ""}`;
+  const res = await authFetch(url);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load audit feed."));
+  return res.json();
+};
+
+export const fetchItemHistory = async (
+  itemId: string,
+  params: { limit?: number; cursor?: string },
+): Promise<AuditFeedResponse> => {
+  const qs = new URLSearchParams();
+  if (params.limit) qs.set("limit", String(params.limit));
+  if (params.cursor) qs.set("cursor", params.cursor);
+  const qsStr = qs.toString();
+  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/item/${encodeURIComponent(itemId)}${qsStr ? `?${qsStr}` : ""}`;
+  const res = await authFetch(url);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load item history."));
+  return res.json();
+};
+
+export const fetchAuditAnalytics = async (params: {
+  period: "7d" | "30d" | "90d";
+}): Promise<AuditAnalytics> => {
+  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/analytics?period=${params.period}`;
+  const res = await authFetch(url);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load analytics."));
+  return res.json();
+};
+
+// ─── Billing Portal ───────────────────────────────────────────────────────────
+
 export const createBillingPortalSession = async (): Promise<string> => {
   if (!CORE_API_BASE_URL) {
     throw new Error("Missing VITE_API_BASE_URL");

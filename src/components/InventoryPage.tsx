@@ -11,6 +11,7 @@ import {
   listPendingSubmissions,
   loadInventoryBootstrap,
   saveInventoryItems,
+  saveInventoryItemsSync,
   type ColumnVisibilityOverrides,
   type InventoryColumn,
   type InventoryRow,
@@ -263,7 +264,7 @@ export function InventoryPage({
   const [deletedRowIds, setDeletedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
-  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const editingRowIdRef = useRef<string | null>(null);
   const [copiedRowValues, setCopiedRowValues] = useState<Record<string, string | number | boolean | null> | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
   const [undoStack, setUndoStack] = useState<InventorySnapshot[]>([]);
@@ -381,14 +382,23 @@ export function InventoryPage({
         ? persistedRows
         : [createBlankInventoryRow(resolvedColumns, 0)];
     setRows(nextRows);
+    rowsRef.current = nextRows;
     setDirtyRowIds(new Set());
+    dirtyRowIdsRef.current = new Set();
     setDeletedRowIds(new Set());
+    deletedRowIdsRef.current = new Set();
     setSelectedRowIds(new Set());
     setSelectedRowId(nextRows[0]?.id ?? null);
     setCopiedRowValues(null);
     setUndoStack([]);
     setRedoStack([]);
     editSessionCellRef.current = null;
+    // Snapshot current state so the interval timer knows what's already saved
+    const snap = new Map<string, string>();
+    for (let i = 0; i < nextRows.length; i++) {
+      snap.set(nextRows[i].id, JSON.stringify({ values: nextRows[i].values, position: i }));
+    }
+    lastSavedSnapshotRef.current = snap;
   };
 
   /** Reload inventory from the API, then prune zero-quantity rows that have
@@ -486,19 +496,29 @@ export function InventoryPage({
   const beginCellEditSession = (rowId: string, columnKey: string) => {
     const cellKey = `${rowId}:${columnKey}`;
     if (editSessionCellRef.current === cellKey) return;
-    pushUndoSnapshot();
     editSessionCellRef.current = cellKey;
-    setEditingRowId(rowId);
+    editingRowIdRef.current = rowId;
+    // Defer state updates so they don't cause a re-render that clears
+    // the text selection from select(). Also re-select after the deferred
+    // re-render in case a pending state update (from a previous edit)
+    // already triggered a re-render that cleared the selection.
+    requestAnimationFrame(() => {
+      setSelectedRowId(rowId);
+      pushUndoSnapshot();
+      // Re-select after the state updates flush — the re-render from
+      // setSelectedRowId/pushUndoSnapshot will clear the selection again.
+      requestAnimationFrame(() => {
+        const active = document.activeElement as HTMLInputElement | null;
+        if (active?.select && active.tagName === "INPUT") {
+          active.select();
+        }
+      });
+    });
   };
 
   const endCellEditSession = () => {
     editSessionCellRef.current = null;
-    setEditingRowId(null);
-    // Always attempt save — onSave reads from refs (not closure state) so it
-    // will see dirty IDs even if React hasn't re-rendered yet.
-    if (canEditInventory) {
-      void onSave(true);
-    }
+    editingRowIdRef.current = null;
   };
 
   useEffect(() => {
@@ -568,6 +588,9 @@ export function InventoryPage({
 
   // pruningRef kept for save-flow compatibility (reset after manual save)
   const pruningRef = useRef(false);
+  // Snapshot of row values as last sent to the API.  The interval diffs
+  // current rows against this to decide what to save — no dirty tracking needed.
+  const lastSavedSnapshotRef = useRef<Map<string, string>>(new Map());
 
   const getDaysUntilExpiration = (value: string | number | boolean | null | undefined) => {
     const raw = String(value ?? "").trim();
@@ -670,16 +693,19 @@ export function InventoryPage({
       if (event.data?.type === "mark-ordered" && Array.isArray(event.data.rowIds)) {
         const orderedIds = new Set<string>(event.data.rowIds);
         const now = new Date().toISOString();
-        setRows((prev) =>
-          prev.map((row) =>
+        setRows((prev) => {
+          const next = prev.map((row) =>
             orderedIds.has(row.id)
               ? { ...row, values: { ...row.values, orderedAt: now } }
               : row,
-          ),
-        );
+          );
+          rowsRef.current = next;
+          return next;
+        });
         setDirtyRowIds((prev) => {
           const next = new Set(prev);
           for (const id of orderedIds) next.add(id);
+          dirtyRowIdsRef.current = next;
           return next;
         });
       }
@@ -745,7 +771,7 @@ export function InventoryPage({
     const filtered = rows
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => {
-        if (editingRowId && row.id === editingRowId) return true;
+        if (editingRowIdRef.current && row.id === editingRowIdRef.current) return true;
         const quantityRaw = row.values.quantity;
         const minQuantityRaw = row.values.minQuantity;
         const quantity = Number(quantityRaw);
@@ -836,7 +862,6 @@ export function InventoryPage({
     categoryColumn,
     effectiveCategoryFilter,
     sortState,
-    editingRowId,
   ]);
 
   const filteredRowIds = useMemo(
@@ -907,6 +932,7 @@ export function InventoryPage({
     setDirtyRowIds((ids) => {
       const next = new Set(ids);
       next.add(newRowId);
+      dirtyRowIdsRef.current = next;
       return next;
     });
     setRows((prev) => {
@@ -920,11 +946,13 @@ export function InventoryPage({
       if (locationColumn && effectiveLocationFilter !== "All Locations" && effectiveLocationFilter !== UNASSIGNED_LOCATION) {
         created.values[locationColumn.key] = effectiveLocationFilter;
       }
-      return [
+      const next = [
         ...prev.slice(0, insertIndex),
         created,
         ...prev.slice(insertIndex),
       ];
+      rowsRef.current = next;
+      return next;
     });
   };
 
@@ -970,8 +998,8 @@ export function InventoryPage({
     if (!canEditTable || !selectedRowId || !copiedRowValues) return;
     pushUndoSnapshot();
     let changedRowId: string | null = null;
-    setRows((prev) =>
-      prev.map((row) => {
+    setRows((prev) => {
+      const next = prev.map((row) => {
         if (row.id !== selectedRowId) return row;
         const nextValues = { ...row.values };
         let changed = false;
@@ -1009,14 +1037,17 @@ export function InventoryPage({
         if (!changed) return row;
         changedRowId = row.id;
         return { ...row, values: nextValues };
-      }),
-    );
+      });
+      rowsRef.current = next;
+      return next;
+    });
 
     if (changedRowId) {
       const resolvedRowId = changedRowId;
       setDirtyRowIds((prev) => {
         const next = new Set(prev);
         next.add(resolvedRowId);
+        dirtyRowIdsRef.current = next;
         return next;
       });
     }
@@ -1038,11 +1069,13 @@ export function InventoryPage({
     setDeletedRowIds((prev) => {
       const next = new Set(prev);
       for (const id of persistedIdsToDelete) next.add(id);
+      deletedRowIdsRef.current = next;
       return next;
     });
     setDirtyRowIds((prev) => {
       const next = new Set(prev);
       for (const id of idsToDelete) next.delete(id);
+      dirtyRowIdsRef.current = next;
       return next;
     });
     setRows((prev) => {
@@ -1051,9 +1084,11 @@ export function InventoryPage({
         setDirtyRowIds((ids) => {
           const next = new Set(ids);
           next.add(created.id);
+          dirtyRowIdsRef.current = next;
           return next;
         });
         setSelectedRowId(created.id);
+        rowsRef.current = [created];
         return [created];
       }
       const nextRows = prev.filter((row) => !idsToDelete.has(row.id));
@@ -1062,14 +1097,17 @@ export function InventoryPage({
         setDirtyRowIds((ids) => {
           const next = new Set(ids);
           next.add(created.id);
+          dirtyRowIdsRef.current = next;
           return next;
         });
         setSelectedRowId(created.id);
+        rowsRef.current = [created];
         return [created];
       }
       if (selectedRowId && idsToDelete.has(selectedRowId)) {
         setSelectedRowId(nextRows[0]?.id ?? null);
       }
+      rowsRef.current = nextRows;
       return nextRows;
     });
     setSelectedRowIds(new Set());
@@ -1080,16 +1118,19 @@ export function InventoryPage({
     const idsToMove = selectedRowIds.size > 0 ? selectedRowIds : (selectedRowId ? new Set([selectedRowId]) : new Set<string>());
     if (idsToMove.size === 0) return;
     pushUndoSnapshot();
-    setRows((prev) =>
-      prev.map((row) =>
+    setRows((prev) => {
+      const next = prev.map((row) =>
         idsToMove.has(row.id)
           ? { ...row, values: { ...row.values, [locationColumn.key]: targetLocation } }
           : row,
-      ),
-    );
+      );
+      rowsRef.current = next;
+      return next;
+    });
     setDirtyRowIds((prev) => {
       const next = new Set(prev);
       for (const id of idsToMove) next.add(id);
+      dirtyRowIdsRef.current = next;
       return next;
     });
     setSelectedRowIds(new Set());
@@ -1270,46 +1311,91 @@ export function InventoryPage({
       setDirtyRowIds((prev) => {
         const next = new Set(prev);
         next.add(resolvedRowId);
-        // Synchronously update ref so onSave sees the dirty ID immediately.
+        // Synchronously update ref so the interval timer and unload handlers
+        // see the dirty ID immediately, before React re-renders.
         dirtyRowIdsRef.current = next;
         return next;
       });
     }
   };
 
+  /** Serialize a row's saveable state for snapshot comparison.
+   *  Includes position so reordering is detected. */
+  const serializeRowForSnapshot = (row: InventoryRow, position: number) =>
+    JSON.stringify({ values: row.values, position });
+
+  /** Return rows that differ from the last-saved snapshot, with positions set.
+   *  Skips new blank rows (no createdAt, all values at defaults) — those
+   *  shouldn't auto-save until the user has filled something in. */
+  const diffRowsAgainstSnapshot = (rows: InventoryRow[], snap: Map<string, string>) => {
+    const changed: InventoryRow[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const prev = snap.get(row.id);
+      const serialized = serializeRowForSnapshot(row, i);
+      if (prev === serialized) continue;
+      // New row (not in snapshot) with all-default values — skip until user edits it
+      if (prev === undefined && !row.createdAt) {
+        const hasContent = Object.entries(row.values).some(([, v]) =>
+          typeof v === "string" ? v.trim() !== "" : typeof v === "number" ? v !== 0 : v != null,
+        );
+        if (!hasContent) continue;
+      }
+      changed.push({ ...row, position: i });
+    }
+    return changed;
+  };
+
+  /** Diff current rows against last-saved snapshot, save any changes + deletions.
+   *  No dependency on dirtyRowIds for detecting edits — purely snapshot-based. */
   const onSave = async (silent = false) => {
-    // Read from refs to always get the latest state, even if called from a stale closure
+    if (!canEditInventory || savingRef.current) return;
+
     const currentRows = rowsRef.current;
-    const currentDirtyIds = dirtyRowIdsRef.current;
-    const currentDeletedIds = deletedRowIdsRef.current;
-    if (!canEditInventory || savingRef.current || (currentDirtyIds.size === 0 && currentDeletedIds.size === 0)) return;
+    const pendingDeleted = Array.from(deletedRowIdsRef.current);
+    const snap = lastSavedSnapshotRef.current;
+
+    const changedRows = diffRowsAgainstSnapshot(currentRows, snap);
+
+    if (changedRows.length === 0 && pendingDeleted.length === 0) return;
+
     savingRef.current = true;
     setSaving(true);
-    // Snapshot which IDs we're saving so we only clear those, not edits made during the save
-    const savedDirtyIds = new Set(currentDirtyIds);
-    const savedDeletedIds = new Set(currentDeletedIds);
     try {
-      const dirtyRows = currentRows
-        .map((row, index) => ({ ...row, position: index }))
-        .filter((row) => savedDirtyIds.has(row.id));
-      await saveInventoryItems(
-        dirtyRows,
-        Array.from(savedDeletedIds),
-      );
+      await saveInventoryItems(changedRows, pendingDeleted);
+
+      // Update snapshot to reflect what was just saved
+      const nextSnap = new Map(snap);
+      for (const row of changedRows) {
+        nextSnap.set(row.id, serializeRowForSnapshot(row, row.position));
+      }
+      for (const id of pendingDeleted) {
+        nextSnap.delete(id);
+      }
+      lastSavedSnapshotRef.current = nextSnap;
+
+      // Clear deleted IDs that were just saved
+      if (pendingDeleted.length > 0) {
+        const savedSet = new Set(pendingDeleted);
+        setDeletedRowIds((prev) => {
+          const next = new Set(prev);
+          for (const id of savedSet) next.delete(id);
+          deletedRowIdsRef.current = next;
+          return next;
+        });
+      }
+
+      // Also clear dirtyRowIds for the saved rows (keeps UI indicators accurate)
+      const savedIds = new Set(changedRows.map((r) => r.id));
       setDirtyRowIds((prev) => {
         const next = new Set(prev);
-        for (const id of savedDirtyIds) next.delete(id);
+        for (const id of savedIds) next.delete(id);
+        dirtyRowIdsRef.current = next;
         return next;
       });
-      setDeletedRowIds((prev) => {
-        const next = new Set(prev);
-        for (const id of savedDeletedIds) next.delete(id);
-        return next;
-      });
+
       setUndoStack([]);
       setRedoStack([]);
-      editSessionCellRef.current = null;
-      // Allow the pruning effect to re-evaluate after save
       pruningRef.current = false;
       setShowSaved(true);
       window.setTimeout(() => setShowSaved(false), 2000);
@@ -1388,26 +1474,22 @@ export function InventoryPage({
   }, [canEditTable, selectedRowId, copiedRowValues, undoStack, redoStack, rows, allColumns]);
 
   useEffect(() => {
-    const trySavePending = () => {
+    /** Synchronous, keepalive save for page unload / hide / SPA unmount.
+     *  Uses snapshot diffing — no dirty tracking dependency.
+     *  Bypasses savingRef — even if an async save is in flight,
+     *  we fire a redundant keepalive request to guarantee delivery. */
+    const flushSync = () => {
       if (!canEditInventory) return;
-      // Read from refs to always get the latest state (closure values may be stale)
-      if (savingRef.current) return;
-      if (dirtyRowIdsRef.current.size === 0 && deletedRowIdsRef.current.size === 0) return;
-      void onSave(true);
+      const changedRows = diffRowsAgainstSnapshot(rowsRef.current, lastSavedSnapshotRef.current);
+      const pendingDeleted = Array.from(deletedRowIdsRef.current);
+      if (changedRows.length === 0 && pendingDeleted.length === 0) return;
+      saveInventoryItemsSync(changedRows, pendingDeleted);
     };
 
-    const onPageHide = () => {
-      trySavePending();
-    };
-
-    const onBeforeUnload = () => {
-      trySavePending();
-    };
-
+    const onPageHide = () => flushSync();
+    const onBeforeUnload = () => flushSync();
     const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        trySavePending();
-      }
+      if (document.visibilityState === "hidden") flushSync();
     };
 
     window.addEventListener("pagehide", onPageHide);
@@ -1417,8 +1499,8 @@ export function InventoryPage({
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("beforeunload", onBeforeUnload);
       document.removeEventListener("visibilitychange", onVisibilityChange);
-      // Flush dirty data on unmount (SPA navigation) — refs always have latest values
-      trySavePending();
+      // SPA navigation unmount — fire keepalive save
+      flushSync();
     };
   }, [canEditInventory]);
 
@@ -1537,13 +1619,18 @@ export function InventoryPage({
     }
   };
 
+  // Keep a stable ref to onSave so the interval always calls the latest version.
+  const onSaveRef = useRef(onSave);
+  onSaveRef.current = onSave;
+
+  // Background autosave: every 3 seconds, diff rows against last-saved snapshot.
   useEffect(() => {
-    if (!canEditInventory || (dirtyRowIds.size === 0 && deletedRowIds.size === 0)) return;
-    const timeout = window.setTimeout(() => {
-      void onSave(true);
+    if (!canEditInventory) return;
+    const id = window.setInterval(() => {
+      void onSaveRef.current(true);
     }, AUTOSAVE_DELAY_MS);
-    return () => window.clearTimeout(timeout);
-  }, [rows, dirtyRowIds, deletedRowIds, canEditInventory]);
+    return () => window.clearInterval(id);
+  }, [canEditInventory]);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -2498,7 +2585,6 @@ export function InventoryPage({
                               value={String(row.values[column.key] ?? "")}
                               rows={2}
                               onFocus={() => {
-                                setSelectedRowId(row.id);
                                 beginCellEditSession(row.id, column.key);
                               }}
                               onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
@@ -2506,13 +2592,13 @@ export function InventoryPage({
                             />
                           ) : column.type === "number" ? (
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
                               className="inventory-card-input"
-                              min={0}
                               value={String(row.values[column.key] ?? "")}
                               onFocus={(e) => {
                                 e.currentTarget.select();
-                                setSelectedRowId(row.id);
                                 beginCellEditSession(row.id, column.key);
                               }}
                               onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
@@ -2525,7 +2611,6 @@ export function InventoryPage({
                                 className="inventory-card-input"
                                 value={toDateInputValue(row.values[column.key])}
                                 onFocus={() => {
-                                  setSelectedRowId(row.id);
                                   beginCellEditSession(row.id, column.key);
                                 }}
                                 onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
@@ -2549,7 +2634,6 @@ export function InventoryPage({
                               value={String(row.values[column.key] ?? "")}
                               placeholder="Paste link"
                               onFocus={() => {
-                                setSelectedRowId(row.id);
                                 beginCellEditSession(row.id, column.key);
                               }}
                               onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
@@ -2567,7 +2651,6 @@ export function InventoryPage({
                               className="inventory-card-input"
                               value={String(row.values[column.key] ?? "")}
                               onFocus={() => {
-                                setSelectedRowId(row.id);
                                 beginCellEditSession(row.id, column.key);
                               }}
                               onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
@@ -2733,7 +2816,6 @@ export function InventoryPage({
                                 placeholder="Paste link"
                                 autoFocus={isEditingLinkCell(row.id, column.key)}
                                 onFocus={() => {
-                                  setSelectedRowId(row.id);
                                   beginCellEditSession(row.id, column.key);
                                   setEditingLinkCell({ rowId: row.id, columnKey: column.key });
                                 }}
@@ -2810,7 +2892,6 @@ export function InventoryPage({
                         <textarea
                           value={String(row.values[column.key] ?? "")}
                           onFocus={() => {
-                            setSelectedRowId(row.id);
                             beginCellEditSession(row.id, column.key);
                           }}
                           onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
@@ -2851,7 +2932,6 @@ export function InventoryPage({
                                 value={isoValue}
                                 autoFocus={editing}
                                 onFocus={() => {
-                                  setSelectedRowId(row.id);
                                   beginCellEditSession(row.id, column.key);
                                   setEditingDateCell({ rowId: row.id, columnKey: column.key });
                                 }}
@@ -2891,12 +2971,17 @@ export function InventoryPage({
                         })()
                       ) : (
                         <input
-                          type={column.type === "number" ? "number" : "text"}
-                          min={column.type === "number" ? 0 : undefined}
+                          type="text"
+                          inputMode={column.type === "number" ? "numeric" : undefined}
+                          pattern={column.type === "number" ? "[0-9]*" : undefined}
                           value={String(row.values[column.key] ?? "")}
                           onFocus={(event) => {
-                            if (column.type === "number") event.currentTarget.select();
-                            setSelectedRowId(row.id);
+                            if (column.type === "number") {
+                              event.currentTarget.select();
+                              const el = event.currentTarget;
+                              const cancel = (e: Event) => { e.preventDefault(); el.removeEventListener("mouseup", cancel); };
+                              el.addEventListener("mouseup", cancel, { once: true });
+                            }
                             beginCellEditSession(row.id, column.key);
                           }}
                           onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}

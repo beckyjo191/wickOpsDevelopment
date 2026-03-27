@@ -1,4 +1,4 @@
-import { authFetch } from "./authFetch";
+import { authFetch, getCachedAuthToken } from "./authFetch";
 import type { AppModuleKey } from "./moduleRegistry";
 export type { AppModuleKey };
 
@@ -195,6 +195,40 @@ export const saveInventoryItems = async (
 
   if (!res.ok) {
     throw new Error((await res.text()) || "Failed to save inventory");
+  }
+};
+
+/** Synchronous, fire-and-forget save using `keepalive` + cached auth token.
+ *  Designed for page unload / visibilitychange where we cannot await promises.
+ *  Falls back silently if no cached token is available. */
+export const saveInventoryItemsSync = (
+  rows: InventoryRow[],
+  deletedRowIds: string[] = [],
+): void => {
+  const token = getCachedAuthToken();
+  if (!token) return;
+  const base = normalizeBaseUrl(import.meta.env.VITE_INVENTORY_API_URL);
+  if (!base) return;
+  try {
+    fetch(`${base}/inventory/items/save`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        rows: rows.map((row, index) => ({
+          id: row.id,
+          position: index,
+          values: row.values,
+          createdAt: row.createdAt,
+        })),
+        deletedRowIds,
+      }),
+      keepalive: true,
+    });
+  } catch {
+    // Best-effort — page is unloading
   }
 };
 

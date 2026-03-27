@@ -35,6 +35,7 @@ interface InventoryPageProps {
 
 const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);
 const AUTOSAVE_DELAY_MS = 3000;
+const ROWS_PER_PAGE = 50;
 const UNDO_HISTORY_LIMIT = 80;
 const COLUMN_WIDTHS_STORAGE_KEY_PREFIX = "wickops.inventory.columnWidths:";
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
@@ -254,8 +255,16 @@ export function InventoryPage({
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   const [templateSelectedIds, setTemplateSelectedIds] = useState<Set<string> | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
-  const [sortState, setSortState] = useState<{ key: string; direction: SortDirection } | null>(null);
+  const [sortState, setSortState] = useState<{ key: string; direction: SortDirection } | null>(() => {
+    try {
+      const saved = localStorage.getItem("wickops.inventory.sortState");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return { key: "itemName", direction: "asc" as SortDirection };
+  });
   const [organizationId, setOrganizationId] = useState("");
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
@@ -309,6 +318,11 @@ export function InventoryPage({
       setExpandedCardId(null);
     }
   }, [isMobile]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -766,7 +780,7 @@ export function InventoryPage({
   }, [rows, locationColumn, effectiveLocationFilter]);
 
   const filteredRows = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
+    const normalizedSearch = debouncedSearchTerm.trim().toLowerCase();
 
     const filtered = rows
       .map((row, index) => ({ row, index }))
@@ -856,7 +870,7 @@ export function InventoryPage({
     rows,
     activeFilter,
     visibleColumns,
-    searchTerm,
+    debouncedSearchTerm,
     locationColumn,
     effectiveLocationFilter,
     categoryColumn,
@@ -876,6 +890,15 @@ export function InventoryPage({
 
   const allFilteredSelected = filteredRowIds.length > 0 && selectedFilteredCount === filteredRowIds.length;
   const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / ROWS_PER_PAGE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStart = (safePage - 1) * ROWS_PER_PAGE;
+  const paginatedRows = filteredRows.slice(pageStart, pageStart + ROWS_PER_PAGE);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearchTerm, activeFilter, effectiveLocationFilter, effectiveCategoryFilter]);
 
   useEffect(() => {
     // Don't reset tabs while inventory is still loading — columns aren't available yet
@@ -1184,10 +1207,11 @@ export function InventoryPage({
 
   const onSortColumn = (column: InventoryColumn) => {
     setSortState((prev) => {
-      if (!prev || prev.key !== column.key) {
-        return { key: column.key, direction: "asc" };
-      }
-      return { key: column.key, direction: prev.direction === "asc" ? "desc" : "asc" };
+      const next = (!prev || prev.key !== column.key)
+        ? { key: column.key, direction: "asc" as SortDirection }
+        : { key: column.key, direction: prev.direction === "asc" ? "desc" as SortDirection : "asc" as SortDirection };
+      try { localStorage.setItem("wickops.inventory.sortState", JSON.stringify(next)); } catch {}
+      return next;
     });
   };
 
@@ -2447,7 +2471,7 @@ export function InventoryPage({
           {filteredRows.length === 0 ? (
             <p className="inventory-cards-empty">No items match your filters.</p>
           ) : (
-            filteredRows.map(({ row }) => {
+            paginatedRows.map(({ row }) => {
               const isExpanded = expandedCardId === row.id;
               const isSelected = selectedRowIds.has(row.id);
 
@@ -2751,7 +2775,7 @@ export function InventoryPage({
               </tr>
             </thead>
             <tbody>
-              {filteredRows.map(({ row, index: rowIndex }) => (
+              {paginatedRows.map(({ row, index: rowIndex }) => (
                 <tr
                   key={row.id}
                   data-row-id={row.id}
@@ -3002,6 +3026,47 @@ export function InventoryPage({
           </table>
         </div>
         )}
+        {activeTab !== "reorder" && activeTab !== "pendingSubmissions" && totalPages > 1 ? (
+          <div className="inventory-pagination">
+            <span className="inventory-pagination-info">
+              {pageStart + 1}–{Math.min(pageStart + ROWS_PER_PAGE, filteredRows.length)} of {filteredRows.length}
+            </span>
+            <div className="inventory-pagination-controls">
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={safePage === 1}
+              >
+                ← Prev
+              </button>
+              {totalPages <= 10 ? (
+                <span className="inventory-pagination-pages">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                    <button
+                      key={page}
+                      type="button"
+                      className={`inventory-pagination-page${safePage === page ? " active" : ""}`}
+                      onClick={() => setCurrentPage(page)}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                </span>
+              ) : (
+                <span className="inventory-pagination-current">Page {safePage} of {totalPages}</span>
+              )}
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage === totalPages}
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
       {csvImportDialog ? (
         <div className="inventory-import-overlay" role="dialog" aria-modal="true" aria-label="Choose import columns">

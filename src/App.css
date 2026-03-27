@@ -3462,6 +3462,77 @@ details[open] > .settings-section-title::after {
   font-size: 0.9rem;
 }
 
+/* ── Pagination ── */
+.inventory-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.inventory-pagination-info {
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  white-space: nowrap;
+}
+
+.inventory-pagination-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.inventory-pagination-pages {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.inventory-pagination-page {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.inventory-pagination-page:hover {
+  background: var(--surface-alt);
+}
+
+.inventory-pagination-page.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+
+.inventory-pagination-current {
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  padding: 0 0.5rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 780px) {
+  .inventory-pagination {
+    justify-content: center;
+  }
+  .inventory-pagination-page {
+    min-width: 2.5rem;
+    height: 2.5rem;
+    font-size: 0.95rem;
+  }
+}
+
 .inventory-card {
   background: var(--surface);
   border: 1px solid var(--border);

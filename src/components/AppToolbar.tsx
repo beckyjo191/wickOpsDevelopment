@@ -1,6 +1,6 @@
 import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 
-type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "invite" | "settings";
+type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "activity" | "invite" | "settings";
 
 interface AppToolbarProps {
   view: AppView;

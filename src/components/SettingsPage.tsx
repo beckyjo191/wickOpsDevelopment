@@ -324,6 +324,9 @@ export function SettingsPage({
     try {
       const locs = await removeInventoryLocation(name);
       setRegisteredLocations(locs);
+      setInventoryRows((prev) =>
+        prev.filter((r) => String(r.values.location ?? "").trim() !== name),
+      );
       setPendingDeleteLocation(null);
     } catch (err) {
       console.error(err);

@@ -115,16 +115,16 @@ function AuditEventCard({ event, onViewItemHistory }: { event: AuditEvent; onVie
               Qty: {String(details.quantityBefore ?? "?")} → {String(details.quantityAfter ?? "?")}
               {" "}(used {String(details.quantityUsed ?? "?")})
             </span>
-            {details.submittedByEmail && (
+            {details.submittedByEmail ? (
               <span className="audit-change-chip">Submitted by: {String(details.submittedByEmail)}</span>
-            )}
+            ) : null}
           </div>
         )}
-        {event.action === "USAGE_REJECT" && details.reason && (
+        {event.action === "USAGE_REJECT" && details.reason ? (
           <div className="audit-event-changes">
             <span className="audit-change-chip">Reason: {String(details.reason)}</span>
           </div>
-        )}
+        ) : null}
         {event.action === "CSV_IMPORT" && (
           <div className="audit-event-changes">
             <span className="audit-change-chip">

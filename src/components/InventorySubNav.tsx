@@ -3,7 +3,7 @@ import type { AppModuleKey } from "../lib/moduleRegistry";
 type InventorySubView = "inventory" | "usage" | "quickadd" | "activity";
 
 interface InventorySubNavProps {
-  activeView: InventorySubView;
+  activeView: string;
   accessibleModules: AppModuleKey[];
   canEditInventory: boolean;
   onNavigate: (view: InventorySubView) => void;

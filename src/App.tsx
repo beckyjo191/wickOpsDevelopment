@@ -583,7 +583,7 @@ export default function App() {
       />
       {isInventorySection && (
         <InventorySubNav
-          activeView={view as "inventory" | "usage" | "quickadd" | "activity"}
+          activeView={view}
           accessibleModules={subState.allowedModules}
           canEditInventory={canEditInventory}
           onNavigate={(v) => void navigateTo(v)}

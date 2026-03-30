@@ -2108,12 +2108,15 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
 
   await ddb.send(new PutCommand({ TableName: storage.pendingTable, Item: submission }));
 
-  await writeAuditEvents(storage.auditTable, [
-    buildAuditEvent(access, "USAGE_SUBMIT", null, null, {
+  // Write per-item audit events so each item's history reflects the pending checkout
+  const submitAuditEvents = pendingEntries.map((e) =>
+    buildAuditEvent(access, "USAGE_SUBMIT", e.itemId, e.itemName, {
       submissionId,
-      entries: pendingEntries.map((e) => ({ itemId: e.itemId, itemName: e.itemName, quantityUsed: e.quantityUsed })),
+      quantityUsed: e.quantityUsed,
+      ...(e.notes ? { notes: e.notes } : {}),
     }),
-  ]);
+  );
+  await writeAuditEvents(storage.auditTable, submitAuditEvents);
 
   return json(200, { ok: true, pending: true, submissionId, entryCount: pendingEntries.length });
 };

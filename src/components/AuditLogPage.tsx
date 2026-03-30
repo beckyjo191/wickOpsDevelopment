@@ -109,6 +109,16 @@ function AuditEventCard({ event, onViewItemHistory }: { event: AuditEvent; onVie
             ))}
           </div>
         )}
+        {event.action === "USAGE_SUBMIT" && (
+          <div className="audit-event-changes">
+            <span className="audit-change-chip">
+              Used: {String(details.quantityUsed ?? "?")}
+            </span>
+            {details.notes ? (
+              <span className="audit-change-chip">Note: {String(details.notes)}</span>
+            ) : null}
+          </div>
+        )}
         {event.action === "USAGE_APPROVE" && (
           <div className="audit-event-changes">
             <span className="audit-change-chip">

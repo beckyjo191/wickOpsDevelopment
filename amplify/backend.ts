@@ -219,6 +219,7 @@ inventoryApiLambda.addToRolePolicy(
       "dynamodb:UpdateItem",
       "dynamodb:DeleteItem",
       "dynamodb:Query",
+      "dynamodb:BatchGetItem",
       "dynamodb:BatchWriteItem",
       "dynamodb:Scan",
     ],

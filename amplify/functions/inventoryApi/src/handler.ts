@@ -514,7 +514,6 @@ type AuditAction =
   | "COLUMN_CREATE"
   | "COLUMN_DELETE"
   | "COLUMN_UPDATE"
-  | "COLUMN_REORDER"
   | "CSV_IMPORT"
   | "TEMPLATE_APPLY";
 
@@ -2658,12 +2657,6 @@ const handleReorderColumns = async (
       ),
     ),
   );
-
-  await writeAuditEvents(storage.auditTable, [
-    buildAuditEvent(access, "COLUMN_REORDER", null, null, {
-      columnOrder,
-    }),
-  ]);
 
   return json(200, { ok: true });
 };

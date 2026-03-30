@@ -34,7 +34,6 @@ const ACTION_LABELS: Record<string, string> = {
   COLUMN_CREATE: "Created column",
   COLUMN_DELETE: "Deleted column",
   COLUMN_UPDATE: "Updated column",
-  COLUMN_REORDER: "Reordered columns",
   CSV_IMPORT: "Imported CSV",
   TEMPLATE_APPLY: "Applied template",
 };
@@ -49,7 +48,6 @@ const ACTION_COLORS: Record<string, string> = {
   COLUMN_CREATE: "var(--primary)",
   COLUMN_DELETE: "var(--error)",
   COLUMN_UPDATE: "var(--primary)",
-  COLUMN_REORDER: "var(--text-muted)",
   CSV_IMPORT: "var(--primary)",
   TEMPLATE_APPLY: "var(--primary)",
 };
@@ -192,7 +190,7 @@ function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: numbe
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
 
   return (
-    <div className="audit-chart-card">
+    <div className="audit-chart-card audit-chart-card--line">
       <h4 className="audit-chart-title">Usage Over Time</h4>
       <svg className="audit-line-chart" viewBox="-5 -5 110 110" preserveAspectRatio="none">
         <path d={pathD} fill="none" stroke="var(--primary)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
@@ -241,7 +239,7 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
         startAfter: append ? (events[events.length - 1]?.timestamp ?? undefined) : undefined,
         action: filterStr,
       });
-      setEvents(append ? [...events, ...res.events] : res.events);
+      setEvents(append ? [...events, ...(res.events ?? [])] : (res.events ?? []));
       setNextCursor(res.nextCursor);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load audit feed.");
@@ -274,7 +272,7 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
     setHistoryLoading(true);
     try {
       const res = await fetchItemHistory(itemId, { limit: 50 });
-      setHistoryEvents(res.events);
+      setHistoryEvents(res.events ?? []);
       setHistoryCursor(res.nextCursor);
     } catch {
       setHistoryEvents([]);

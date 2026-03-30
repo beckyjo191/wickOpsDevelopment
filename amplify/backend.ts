@@ -126,6 +126,9 @@ addInventoryRoute("/inventory/columns/{columnId}/type", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/reorder", [HttpMethod.POST]);
 addInventoryRoute("/inventory/columns/{columnId}", [HttpMethod.DELETE]);
 addInventoryRoute("/inventory/organization-storage", [HttpMethod.DELETE]);
+addInventoryRoute("/inventory/audit/feed", [HttpMethod.GET]);
+addInventoryRoute("/inventory/audit/item/{itemId}", [HttpMethod.GET]);
+addInventoryRoute("/inventory/audit/analytics", [HttpMethod.GET]);
 
 coreHttpApi.addRoutes({
   path: "/user-subscription",

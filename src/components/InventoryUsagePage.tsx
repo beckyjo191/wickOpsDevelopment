@@ -892,8 +892,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
 
         {recentActivity.length > 0 && (
           <div className="usage-activity">
-            <h3 className="usage-activity-title">Recent Checkouts</h3>
-            <p className="usage-activity-subtitle">Latest submission, pending review.</p>
+            <h3 className="usage-activity-title">Recent Usage</h3>
             <ul className="usage-activity-list">
               {recentActivity.map((sub) => {
                 let entries: import("../lib/inventoryApi").PendingEntry[] = [];

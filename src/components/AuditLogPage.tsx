@@ -25,9 +25,12 @@ interface AuditLogPageProps {
 }
 
 const ACTION_LABELS: Record<string, string> = {
-  ITEM_CREATE: "Created item",
-  ITEM_EDIT: "Edited item",
+  ITEM_CREATE: "Added item",
+  ITEM_EDIT: "Updated item",
   ITEM_DELETE: "Deleted item",
+  ITEM_MOVE: "Moved item",
+  ITEM_RESTOCK: "Restocked",
+  ITEM_QTY_ADJUST: "Adjusted qty",
   USAGE_SUBMIT: "Submitted usage",
   USAGE_APPROVE: "Approved usage",
   USAGE_REJECT: "Rejected usage",
@@ -38,9 +41,70 @@ const ACTION_LABELS: Record<string, string> = {
   TEMPLATE_APPLY: "Applied template",
 };
 
+const FIELD_LABELS: Record<string, string> = {
+  itemName: "Name",
+  quantity: "Qty",
+  minQuantity: "Min Qty",
+  expirationDate: "Expires",
+  orderedAt: "Ordered At",
+  notes: "Notes",
+  position: "Position",
+};
+
+function humanizeFieldName(field: string): string {
+  if (FIELD_LABELS[field]) return FIELD_LABELS[field];
+  // camelCase → Title Case
+  return field.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
+}
+
+function formatFieldValue(field: string, value: unknown): string {
+  if (value === null || value === undefined || value === "") return "empty";
+  const str = String(value);
+  // Detect ISO date strings
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(str)) {
+    const isDateOnlyField = field === "expirationDate";
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return str;
+    if (isDateOnlyField) {
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    }
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+  return str;
+}
+
+type DerivedAction = keyof typeof ACTION_LABELS;
+
+function deriveAction(event: AuditEvent): DerivedAction {
+  if (event.action !== "ITEM_EDIT") return event.action as DerivedAction;
+  const details = event.details ?? {};
+  const changes = Array.isArray(details.changes)
+    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
+    : [];
+  const fields = changes.map((c) => c.field);
+  const nonPositionFields = fields.filter((f) => f !== "position");
+
+  if (fields.length > 0 && nonPositionFields.length === 0) return "ITEM_MOVE";
+
+  if (nonPositionFields.length === 1 && nonPositionFields[0] === "quantity") {
+    const qtyChange = changes.find((c) => c.field === "quantity");
+    if (qtyChange) {
+      const from = Number(qtyChange.from ?? 0);
+      const to = Number(qtyChange.to ?? 0);
+      if (to > from) return "ITEM_RESTOCK";
+      if (to < from) return "ITEM_QTY_ADJUST";
+    }
+  }
+
+  return "ITEM_EDIT";
+}
+
 const ACTION_COLORS: Record<string, string> = {
   ITEM_CREATE: "var(--success)",
   ITEM_EDIT: "var(--primary)",
+  ITEM_MOVE: "var(--text-muted)",
+  ITEM_RESTOCK: "var(--success)",
+  ITEM_QTY_ADJUST: "var(--warning)",
   ITEM_DELETE: "var(--error)",
   USAGE_SUBMIT: "var(--warning)",
   USAGE_APPROVE: "var(--success)",
@@ -52,7 +116,13 @@ const ACTION_COLORS: Record<string, string> = {
   TEMPLATE_APPLY: "var(--primary)",
 };
 
-const ALL_ACTIONS = Object.keys(ACTION_LABELS);
+// Only include "real" backend actions in the filter menu (not derived display-only ones)
+const ALL_ACTIONS = [
+  "ITEM_CREATE", "ITEM_EDIT", "ITEM_DELETE",
+  "USAGE_SUBMIT", "USAGE_APPROVE", "USAGE_REJECT",
+  "COLUMN_CREATE", "COLUMN_DELETE", "COLUMN_UPDATE",
+  "CSV_IMPORT", "TEMPLATE_APPLY",
+];
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
@@ -69,17 +139,55 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function dayGroupLabel(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+  const eventDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  if (eventDay.getTime() === today.getTime()) return "Today";
+  if (eventDay.getTime() === yesterday.getTime()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
 function AuditEventCard({ event, onViewItemHistory }: { event: AuditEvent; onViewItemHistory?: (itemId: string, itemName: string) => void }) {
-  const label = ACTION_LABELS[event.action] ?? event.action;
-  const color = ACTION_COLORS[event.action] ?? "var(--text-muted)";
+  const derivedAction = deriveAction(event);
+  const label = ACTION_LABELS[derivedAction] ?? ACTION_LABELS[event.action] ?? event.action;
+  const color = ACTION_COLORS[derivedAction] ?? ACTION_COLORS[event.action] ?? "var(--text-muted)";
   const details = event.details ?? {};
+
+  // For ITEM_EDIT variants, filter out position changes (noise) and format fields
+  const visibleChanges = event.action === "ITEM_EDIT" && Array.isArray(details.changes)
+    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>).filter(
+        (c) => c.field !== "position"
+      )
+    : [];
+
+  // Snapshot: key item state at time of event (quantity, minQuantity, expirationDate)
+  const snapshot = (details.snapshot ?? {}) as Record<string, unknown>;
+  // For ITEM_CREATE fall back to initialValues
+  const snapshotSource: Record<string, unknown> =
+    Object.keys(snapshot).length > 0
+      ? snapshot
+      : ((details.initialValues ?? {}) as Record<string, unknown>);
+  const snapshotParts: string[] = [];
+  if (snapshotSource.quantity !== undefined && snapshotSource.quantity !== null) {
+    const qty = String(snapshotSource.quantity);
+    const minQty = snapshotSource.minQuantity !== undefined && snapshotSource.minQuantity !== null
+      ? String(snapshotSource.minQuantity)
+      : null;
+    snapshotParts.push(minQty ? `Qty: ${qty} (min ${minQty})` : `Qty: ${qty}`);
+  }
+  if (snapshotSource.expirationDate && String(snapshotSource.expirationDate).trim()) {
+    snapshotParts.push(`Exp: ${formatFieldValue("expirationDate", snapshotSource.expirationDate)}`);
+  }
 
   return (
     <div className="audit-event-card">
       <div className="audit-event-indicator" style={{ backgroundColor: color }} />
       <div className="audit-event-body">
         <div className="audit-event-header">
-          <span className="audit-event-action">{label}</span>
+          <span className="audit-event-action" style={{ color }}>{label}</span>
           {event.itemName && (
             <button
               type="button"
@@ -97,12 +205,17 @@ function AuditEventCard({ event, onViewItemHistory }: { event: AuditEvent; onVie
         <div className="audit-event-user">
           <User size={12} />
           <span>{event.userName || event.userEmail}</span>
+          {snapshotParts.length > 0 && (
+            <span className="audit-event-snapshot">{snapshotParts.join("  ·  ")}</span>
+          )}
         </div>
-        {event.action === "ITEM_EDIT" && Array.isArray(details.changes) && (
+        {visibleChanges.length > 0 && (
           <div className="audit-event-changes">
-            {(details.changes as Array<{ field: string; from: unknown; to: unknown }>).map((c, i) => (
+            {visibleChanges.map((c, i) => (
               <span key={i} className="audit-change-chip">
-                <strong>{c.field}</strong>: {String(c.from ?? "—")} → {String(c.to ?? "—")}
+                <strong>{humanizeFieldName(c.field)}</strong>
+                {": "}
+                {formatFieldValue(c.field, c.from)} → {formatFieldValue(c.field, c.to)}
               </span>
             ))}
           </div>
@@ -124,7 +237,7 @@ function AuditEventCard({ event, onViewItemHistory }: { event: AuditEvent; onVie
               {" "}(used {String(details.quantityUsed ?? "?")})
             </span>
             {details.submittedByEmail ? (
-              <span className="audit-change-chip">Submitted by: {String(details.submittedByEmail)}</span>
+              <span className="audit-change-chip">By: {String(details.submittedByEmail)}</span>
             ) : null}
           </div>
         )}
@@ -368,13 +481,17 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
             </div>
           )}
 
-          {events.map((event) => (
-            <AuditEventCard
-              key={event.eventId}
-              event={event}
-              onViewItemHistory={viewItemHistory}
-            />
-          ))}
+          {events.map((event, i) => {
+            const label = dayGroupLabel(event.timestamp);
+            const prevLabel = i > 0 ? dayGroupLabel(events[i - 1].timestamp) : null;
+            const showGroup = label !== prevLabel;
+            return (
+              <div key={event.eventId}>
+                {showGroup && <div className="audit-day-group">{label}</div>}
+                <AuditEventCard event={event} onViewItemHistory={viewItemHistory} />
+              </div>
+            );
+          })}
 
           {loading && (
             <div className="audit-loading">
@@ -418,9 +535,17 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
             </div>
           )}
 
-          {historyEvents.map((event) => (
-            <AuditEventCard key={event.eventId} event={event} />
-          ))}
+          {historyEvents.map((event, i) => {
+            const label = dayGroupLabel(event.timestamp);
+            const prevLabel = i > 0 ? dayGroupLabel(historyEvents[i - 1].timestamp) : null;
+            const showGroup = label !== prevLabel;
+            return (
+              <div key={event.eventId}>
+                {showGroup && <div className="audit-day-group">{label}</div>}
+                <AuditEventCard event={event} />
+              </div>
+            );
+          })}
 
           {!historyLoading && historyCursor && (
             <button

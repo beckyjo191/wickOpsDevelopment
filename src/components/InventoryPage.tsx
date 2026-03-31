@@ -283,6 +283,7 @@ export function InventoryPage({
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
   const editingRowIdRef = useRef<string | null>(null);
+  const pendingScrollToRowRef = useRef<string | null>(null);
   const [copiedRowValues, setCopiedRowValues] = useState<Record<string, string | number | boolean | null> | null>(null);
   const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
   const [undoStack, setUndoStack] = useState<InventorySnapshot[]>([]);
@@ -910,6 +911,30 @@ export function InventoryPage({
   useEffect(() => {
     setCurrentPage(1);
   }, [debouncedSearchTerm, activeFilter, effectiveLocationFilter, effectiveCategoryFilter]);
+
+  // Handle deferred scroll-to-row after tab/sort/filter changes settle
+  useEffect(() => {
+    const rowId = pendingScrollToRowRef.current;
+    if (!rowId) return;
+    const rowIndex = filteredRows.findIndex((r) => r.row.id === rowId);
+    if (rowIndex < 0) return;
+    const targetPage = Math.floor(rowIndex / ROWS_PER_PAGE) + 1;
+    setCurrentPage(targetPage);
+    pendingScrollToRowRef.current = null;
+    setTimeout(() => {
+      const el = document.querySelector(`[data-row-id="${rowId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        setTimeout(() => {
+          const input = el.querySelector<HTMLInputElement>('input[type="url"]');
+          if (input) {
+            input.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+            input.focus();
+          }
+        }, 100);
+      }
+    }, 100);
+  }, [filteredRows]);
 
   useEffect(() => {
     // Don't reset tabs while inventory is still loading — columns aren't available yet
@@ -2257,24 +2282,10 @@ export function InventoryPage({
           <ReorderTab
             rows={rows}
             onEditReorderLink={(rowId) => {
+              pendingScrollToRowRef.current = rowId;
               setActiveTabRaw("all");
               setSelectedRowId(rowId);
               setEditingLinkCell({ rowId, columnKey: "reorderLink" });
-              // Wait for tab switch to render, then scroll and focus the input
-              setTimeout(() => {
-                const row = document.querySelector(`[data-row-id="${rowId}"]`);
-                if (row) {
-                  row.scrollIntoView({ behavior: "smooth", block: "center" });
-                  // Find and focus the link input within this row
-                  setTimeout(() => {
-                    const input = row.querySelector<HTMLInputElement>('input[type="url"]');
-                    if (input) {
-                      input.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
-                      input.focus();
-                    }
-                  }, 100);
-                }
-              }, 50);
             }}
             onClearOrderedAt={(rowIds) => {
               const idSet = new Set(rowIds);

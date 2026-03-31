@@ -4668,6 +4668,29 @@ textarea.inventory-card-input {
   border: 1px solid var(--warning-border);
 }
 
+.reorder-status-stock {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.reorder-item-badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.reorder-section-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 12px 0 4px;
+  padding: 0;
+}
+
 .reorder-nolink-card {
   opacity: 0.8;
 }
@@ -4890,7 +4913,9 @@ textarea.inventory-card-input {
 }
 
 .checklist-item-detail {
-  display: block;
+  display: flex;
+  gap: 6px;
+  align-items: center;
   font-size: 0.78rem;
   color: var(--text-soft, #666);
   margin-top: 2px;
@@ -5050,6 +5075,9 @@ textarea.inventory-card-input {
 }
 
 .reorder-mobile-checklist-item-detail {
+  display: flex;
+  gap: 6px;
+  align-items: center;
   font-size: 0.75rem;
   color: var(--text-muted);
 }
@@ -5175,6 +5203,17 @@ textarea.inventory-card-input {
   background: var(--surface-alt);
 }
 
+.audit-day-group {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.5rem 0 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.25rem;
+}
+
 .audit-event-card {
   display: flex;
   gap: 0.75rem;
@@ -5245,6 +5284,14 @@ textarea.inventory-card-input {
   gap: 0.25rem;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.audit-event-snapshot {
+  margin-left: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.75rem;
 }
 
 .audit-event-changes {

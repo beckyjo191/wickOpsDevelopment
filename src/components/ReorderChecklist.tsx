@@ -6,6 +6,9 @@ type ChecklistItem = {
   name: string;
   link: string;
   status: string;
+  stockLabel?: string;
+  stockLow?: boolean;
+  statusType?: "expired" | "lowStock";
   quantity: number;
   minQuantity: number;
 };
@@ -72,9 +75,13 @@ export function ReorderChecklist() {
       next.add(index);
       return next;
     });
-    // Reuse the same vendor tab instead of opening new tabs each time
+    // Open vendor link from the parent window so the checklist popup stays on top
     const vendorTabName = `wickops-vendor-${data.domain}`;
-    window.open(link, vendorTabName);
+    if (window.opener && !window.opener.closed) {
+      window.opener.open(link, vendorTabName);
+    } else {
+      window.open(link, vendorTabName);
+    }
   };
 
   return (
@@ -131,7 +138,16 @@ export function ReorderChecklist() {
                   {item.name}
                   <ExternalLink size={12} />
                 </button>
-                <span className="checklist-item-detail">{item.status}</span>
+                <span className="checklist-item-detail">
+                  <span className={`reorder-item-status reorder-status-${item.statusType ?? "lowStock"}`}>
+                    {item.status}
+                  </span>
+                  {item.stockLabel && (
+                    <span className={`reorder-item-status ${item.stockLow ? "reorder-status-lowStock" : "reorder-status-stock"}`}>
+                      {item.stockLabel}
+                    </span>
+                  )}
+                </span>
               </div>
             </div>
           );

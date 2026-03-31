@@ -409,21 +409,39 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
 
 
   const getItemOptionsForLocation = useCallback(
-    (location: string): AutocompleteOption[] =>
-      rows
+    (location: string): AutocompleteOption[] => {
+      const filtered = rows
         .filter((row) => {
           if (!locationKey) return true;
           if (!location.trim()) return false;
           return String(row.values[locationKey] ?? "").trim() === location;
         })
-        .filter((row) => String(row.values.itemName ?? "").trim().length > 0)
-        .slice()
-        .sort((a, b) => getItemDisplayName(a).localeCompare(getItemDisplayName(b)))
-        .map((row) => ({
-          id: row.id,
-          name: getItemDisplayName(row),
-          quantity: Number(row.values.quantity ?? 0),
-        })),
+        .filter((row) => String(row.values.itemName ?? "").trim().length > 0);
+
+      // Deduplicate by name, aggregate quantities, use lowest-qty row as representative
+      const nameMap = new Map<string, { totalQty: number; rep: InventoryRow }>();
+      for (const row of filtered) {
+        const name = getItemDisplayName(row);
+        const qty = Number(row.values.quantity ?? 0);
+        const existing = nameMap.get(name);
+        if (!existing) {
+          nameMap.set(name, { totalQty: qty, rep: row });
+        } else {
+          existing.totalQty += qty;
+          if (qty < Number(existing.rep.values.quantity ?? 0)) {
+            existing.rep = row;
+          }
+        }
+      }
+
+      return Array.from(nameMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, { totalQty, rep }]) => ({
+          id: rep.id,
+          name,
+          quantity: totalQty,
+        }));
+    },
     [rows, locationKey],
   );
 
@@ -683,6 +701,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
             ...zeroRow.values,
             quantity: entry.quantityToAdd,
             ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
+            orderedAt: null,
           },
         });
       } else {
@@ -694,10 +713,17 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
             ...originalRow.values,
             quantity: entry.quantityToAdd,
             ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
+            orderedAt: null,
           },
         });
       }
     }
+
+    const restockedNames = new Set(
+      validEntries
+        .map((e) => String(rowById.get(e.itemId)?.values.itemName ?? "").trim())
+        .filter(Boolean),
+    );
 
     // Build summary for feedback
     const summaryLines = validEntries.map((entry) => {
@@ -710,6 +736,26 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
     setFeedback(null);
     try {
       await saveInventoryItems(rowsToSave, []);
+      // After saving, fetch fresh data and clear orderedAt on any row whose
+      // item name matches something we just restocked (name match only)
+      try {
+        const fresh = await loadInventoryBootstrap();
+        const savedIds = new Set(rowsToSave.map((r) => r.id));
+        const toUnorder = fresh.items.filter(
+          (r) =>
+            r.values.orderedAt &&
+            !savedIds.has(r.id) &&
+            restockedNames.has(String(r.values.itemName ?? "").trim()),
+        );
+        if (toUnorder.length > 0) {
+          await saveInventoryItems(
+            toUnorder.map((r) => ({ ...r, values: { ...r.values, orderedAt: null } })),
+            [],
+          );
+        }
+      } catch {
+        // Non-critical — ordered list will clear on next refresh
+      }
       setGroups([createRestockGroup(singleLocation ?? "")]);
       setFeedback({ type: "success", message: `Restocked: ${summaryLines.join(", ")}` });
       void refreshInventoryRows({ silent: true });

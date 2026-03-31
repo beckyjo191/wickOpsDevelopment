@@ -1966,13 +1966,17 @@ const handleSaveItems = async (storage: InventoryStorage, access: AccessContext,
     // Build audit event
     const itemName = String(values.itemName ?? "").trim() || `Item ${rowId.slice(0, 8)}`;
     const oldValues = oldValuesMap.get(rowId);
+    const snapshot: Record<string, unknown> = {};
+    if (values.quantity !== undefined && values.quantity !== null) snapshot.quantity = values.quantity;
+    if (values.minQuantity !== undefined && values.minQuantity !== null) snapshot.minQuantity = values.minQuantity;
+    if (values.expirationDate !== undefined && values.expirationDate !== null && values.expirationDate !== "") snapshot.expirationDate = values.expirationDate;
     if (oldValues) {
       const changes = computeValuesDiff(oldValues, values as Record<string, unknown>);
       if (changes.length > 0) {
-        auditEvents.push(buildAuditEvent(access, "ITEM_EDIT", rowId, itemName, { changes }));
+        auditEvents.push(buildAuditEvent(access, "ITEM_EDIT", rowId, itemName, { changes, snapshot }));
       }
     } else {
-      auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, { initialValues: values }));
+      auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, { initialValues: values, snapshot }));
     }
   }
 
@@ -2067,6 +2071,7 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
   const byId = new Map(items.map((item) => [String(item.id), item]));
 
   const pendingEntries: PendingEntry[] = [];
+  const usageSnapshotMap = new Map<string, Record<string, unknown>>();
   let itemCounter = 0;
   for (const [itemId, entry] of usageByItemId) {
     itemCounter += 1;
@@ -2085,6 +2090,11 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
     if (entry.location && itemLocation && entry.location !== itemLocation) {
       return json(400, { error: `Entry ${itemCounter}: location does not match inventory.` });
     }
+    const snap: Record<string, unknown> = {};
+    if (values.quantity !== undefined && values.quantity !== null) snap.quantity = values.quantity;
+    if (values.minQuantity !== undefined && values.minQuantity !== null) snap.minQuantity = values.minQuantity;
+    if (values.expirationDate !== undefined && values.expirationDate !== null && values.expirationDate !== "") snap.expirationDate = values.expirationDate;
+    usageSnapshotMap.set(itemId, snap);
     pendingEntries.push({
       itemId,
       itemName,
@@ -2113,6 +2123,7 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
       submissionId,
       quantityUsed: e.quantityUsed,
       ...(e.notes ? { notes: e.notes } : {}),
+      snapshot: usageSnapshotMap.get(e.itemId) ?? {},
     }),
   );
   await writeAuditEvents(storage.auditTable, submitAuditEvents);
@@ -2139,7 +2150,7 @@ const applyUsageEntries = async (
   storage: InventoryStorage,
   access: AccessContext,
   pendingEntries: PendingEntry[],
-): Promise<{ error?: string; appliedDetails?: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number }> }> => {
+): Promise<{ error?: string; appliedDetails?: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number; snapshot: Record<string, unknown> }> }> => {
   const items = await listAllItems(storage, access.organizationId);
   const byId = new Map(items.map((item) => [String(item.id), item]));
 
@@ -2167,7 +2178,7 @@ const applyUsageEntries = async (
   }
 
   // All validated — apply deductions
-  const appliedDetails: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number }> = [];
+  const appliedDetails: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number; snapshot: Record<string, unknown> }> = [];
   for (const entry of pendingEntries) {
     const item = byId.get(entry.itemId)!;
     let values: Record<string, string | number | boolean | null> = {};
@@ -2195,12 +2206,16 @@ const applyUsageEntries = async (
           },
         }),
       );
+      const snap: Record<string, unknown> = { quantity: nextQuantity };
+      if (values.minQuantity !== undefined && values.minQuantity !== null) snap.minQuantity = values.minQuantity;
+      if (values.expirationDate !== undefined && values.expirationDate !== null && values.expirationDate !== "") snap.expirationDate = values.expirationDate;
       appliedDetails.push({
         itemId: entry.itemId,
         itemName: entry.itemName,
         quantityUsed: entry.quantityUsed,
         quantityBefore,
         quantityAfter: nextQuantity,
+        snapshot: snap,
       });
     } catch (err: any) {
       if (err?.name === "ConditionalCheckFailedException") {
@@ -2296,6 +2311,7 @@ const handleApproveSubmission = async (
       quantityUsed: detail.quantityUsed,
       quantityBefore: detail.quantityBefore,
       quantityAfter: detail.quantityAfter,
+      snapshot: detail.snapshot,
     }));
   }
   await writeAuditEvents(storage.auditTable, auditEvents);

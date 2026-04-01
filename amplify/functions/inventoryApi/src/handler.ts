@@ -281,7 +281,7 @@ const sanitizeOrgIdForTableName = (organizationId: string): string =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 36) || "org";
 
-const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items" | "pending" | "auditlog"): string => {
+const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items" | "pending" | "auditlog" | "restock-orders"): string => {
   const safeOrg = sanitizeOrgIdForTableName(organizationId);
   const hash = createHash("sha256").update(organizationId).digest("hex").slice(0, 10);
   return `${INVENTORY_ORG_TABLE_PREFIX}-${INVENTORY_STORAGE_NAMESPACE}-${safeOrg}-${hash}-${suffix}`;
@@ -3557,13 +3557,13 @@ const handleListRestockOrders = async (storage: InventoryStorage, access: Access
     let receives: RestockReceiveEvent[] = [];
     try { items = JSON.parse(String(item.itemsJson ?? "[]")); } catch { /* ignore */ }
     try { receives = JSON.parse(String(item.receivesJson ?? "[]")); } catch { /* ignore */ }
-    return { ...item, items, receives };
+    return { ...(item as RestockOrder), items, receives };
   });
 
   // Sort: open first, then partial, then closed; within each group newest first
   const statusOrder: Record<RestockOrderStatus, number> = { open: 0, partial: 1, closed: 2 };
   orders.sort((a, b) => {
-    const sd = (statusOrder[a.status as RestockOrderStatus] ?? 3) - (statusOrder[b.status as RestockOrderStatus] ?? 3);
+    const sd = (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
     if (sd !== 0) return sd;
     return String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""));
   });
@@ -3757,7 +3757,7 @@ const handleReceiveRestockOrder = async (storage: InventoryStorage, access: Acce
     try { values = JSON.parse(String(item.valuesJson ?? "{}")); } catch { /* ignore */ }
     const oldQty = Number(values.quantity ?? 0);
     const newQty = oldQty + line.qtyThisReceive;
-    const nextValues = { ...values, quantity: newQty };
+    const nextValues: Record<string, unknown> = { ...values, quantity: newQty };
     if (line.expirationDate) nextValues.expirationDate = line.expirationDate;
 
     await ddb.send(new UpdateCommand({

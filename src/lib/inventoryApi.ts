@@ -1028,7 +1028,7 @@ export const listRestockOrders = async (): Promise<RestockOrder[]> => {
 export const createRestockOrder = async (payload: {
   vendor?: string;
   notes?: string;
-  items: Array<{ itemId: string; itemName: string; qtyOrdered: number; unitCost?: number }>;
+  items: Array<{ itemId?: string; itemName: string; qtyOrdered: number; unitCost?: number }>;
 }): Promise<{ orderId: string }> => {
   const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders`, {
     method: "POST",

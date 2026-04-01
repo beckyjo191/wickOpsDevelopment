@@ -2951,7 +2951,7 @@ export function InventoryPage({
           </table>
         </div>
         )}
-        {activeTab !== "reorder" && activeTab !== "pendingSubmissions" && totalPages > 1 ? (
+        {activeTab !== "pendingSubmissions" && totalPages > 1 ? (
           <div className="inventory-pagination">
             <span className="inventory-pagination-info">
               {pageStart + 1}–{Math.min(pageStart + ROWS_PER_PAGE, filteredRows.length)} of {filteredRows.length}

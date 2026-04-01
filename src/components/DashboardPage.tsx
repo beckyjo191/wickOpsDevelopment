@@ -5,8 +5,8 @@ import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/i
 import { LocationPills } from "./LocationPills";
 import { pickLoadingLine } from "../lib/loadingLines";
 
-type InventoryFilter = "expired" | "exp30" | "lowStock" | "reorder";
-type AppView = "inventory" | "usage" | "quickadd";
+type InventoryFilter = "expired" | "exp30" | "lowStock";
+type AppView = "inventory" | "usage" | "orders";
 
 interface DashboardPageProps {
   accessibleModules: AppModuleKey[];
@@ -187,7 +187,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="app-alert-card app-alert-card--reorder"
-                  onClick={() => onNavigateToInventoryWithFilter("reorder", selectedLocation)}
+                  onClick={() => onNavigate("orders")}
                 >
                   <span className="app-alert-card__icon">
                     <ShoppingCart size={16} strokeWidth={2} />
@@ -217,7 +217,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="dash-action-btn"
-                  onClick={() => onNavigate("quickadd")}
+                  onClick={() => onNavigate("orders")}
                 >
                   <Zap size={18} strokeWidth={2} />
                   <span>Quick Add</span>

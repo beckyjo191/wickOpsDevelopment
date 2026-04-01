@@ -688,9 +688,9 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
   }, []);
 
   const loadBootstrap = useCallback(() => {
-    loadInventoryBootstrap().then(({ columns, rows }) => {
-      setInventoryRows(rows);
-      inventoryRowsRef.current = rows;
+    loadInventoryBootstrap().then(({ columns, items }) => {
+      setInventoryRows(items);
+      inventoryRowsRef.current = items;
       setHasExpirationColumn(columns.some((c) => c.key === "expirationDate" && c.isVisible));
     }).catch(() => {});
   }, []);

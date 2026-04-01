@@ -353,7 +353,7 @@ export default function App() {
     if (view === "usage" && !subState.allowedModules.includes("usage")) {
       setView("dashboard");
     }
-    if (view === "quickadd" && !subState.allowedModules.includes("inventory")) {
+    if (view === "orders" && !subState.allowedModules.includes("inventory")) {
       setView("dashboard");
     }
     if (view === "activity" && !subState.allowedModules.includes("inventory")) {
@@ -362,13 +362,10 @@ export default function App() {
   }, [view, subState.allowedModules]);
 
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
-    const hideMessage = view === "inventory" && (() => {
-      try { return localStorage.getItem("wickops.inventory.activeTab") === "reorder"; } catch { return false; }
-    })();
     return (
       <div className="app-loading-fullscreen">
         <span className="app-spinner" aria-hidden="true" />
-        {!hideMessage && <span>{loadingLine}</span>}
+        <span>{loadingLine}</span>
       </div>
     );
   }

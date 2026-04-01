@@ -10,8 +10,8 @@ import { AppToolbar } from "./components/AppToolbar";
 import { InventoryUsagePage } from "./components/InventoryUsagePage";
 import { OnboardingPage } from "./components/OnboardingPage";
 import { InventorySubNav } from "./components/InventorySubNav";
-import { QuickAddPage } from "./components/QuickAddPage";
 import { AuditLogPage } from "./components/AuditLogPage";
+import { OrdersPage } from "./components/OrdersPage";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -33,13 +33,13 @@ const MAX_SUBSCRIPTION_RETRIES = 6;
 import { pickLoadingLine } from "./lib/loadingLines";
 
 type SubscriptionState = "loading" | "unsubscribed" | "subscribed";
-type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "activity" | "invite" | "settings";
+type AppView = "dashboard" | "inventory" | "usage" | "orders" | "activity" | "invite" | "settings";
 
 const isAppView = (value: unknown): value is AppView =>
   value === "dashboard" ||
   value === "inventory" ||
   value === "usage" ||
-  value === "quickadd" ||
+  value === "orders" ||
   value === "activity" ||
   value === "invite" ||
   value === "settings";
@@ -492,9 +492,9 @@ export default function App() {
         onNavigate={(v) => setView(v)}
       />
     );
-  } else if (view === "quickadd") {
+  } else if (view === "orders") {
     content = canAccessInventory && canEditInventory ? (
-      <QuickAddPage selectedLocation={selectedLocation} />
+      <OrdersPage selectedLocation={selectedLocation} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
@@ -573,7 +573,7 @@ export default function App() {
     );
   }
 
-  const isInventorySection = view === "inventory" || view === "usage" || view === "quickadd" || view === "activity";
+  const isInventorySection = view === "inventory" || view === "usage" || view === "orders" || view === "activity";
 
   return (
     <section className={`app-shell${isMobile && !keyboardOpen ? " app-shell--mobile" : ""}`}>

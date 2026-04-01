@@ -2,12 +2,15 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
 import { ShoppingCart, ExternalLink, Link2Off, Package, PackageCheck, Undo2, Check, X } from "lucide-react";
 
+export type PlaceOrderItem = { itemId: string; itemName: string; suggestedQty: number };
+
 interface ReorderTabProps {
   rows: InventoryRow[];
   onEditReorderLink?: (rowId: string) => void;
   onClearOrderedAt?: (rowIds: string[]) => void;
   onMarkOrdered?: (rowIds: string[]) => void;
   onReorderCheck?: (rowId: string, checked: boolean) => Promise<void>;
+  onPlaceOrder?: (vendor: string, items: PlaceOrderItem[]) => void;
 }
 
 const isMobile = () => window.innerWidth <= 780;
@@ -82,7 +85,7 @@ const handleReorderVendor = (group: VendorGroup) => {
   );
 };
 
-export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOrdered, onReorderCheck }: ReorderTabProps) {
+export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOrdered, onReorderCheck, onPlaceOrder }: ReorderTabProps) {
   const [reorderedVendors, setReorderedVendors] = useState<Set<string>>(new Set());
   const [savingRowId, setSavingRowId] = useState<string | null>(null);
 
@@ -240,17 +243,34 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
                 {group.items.length} item{group.items.length !== 1 ? "s" : ""}
               </span>
             </div>
-            <button
-              type="button"
-              className={`button ${reorderedVendors.has(group.domain) ? "button-secondary" : "button-primary"} button-sm`}
-              onClick={() => {
-                handleReorder(group);
-                setReorderedVendors((prev) => new Set(prev).add(group.domain));
-              }}
-            >
-              <ExternalLink size={14} />
-              {reorderedVendors.has(group.domain) ? "Reopen" : "Reorder"}
-            </button>
+            {onPlaceOrder ? (
+              <button
+                type="button"
+                className="button button-primary button-sm"
+                onClick={() => onPlaceOrder(
+                  group.domain,
+                  group.items.map((item) => ({
+                    itemId: item.row.id,
+                    itemName: item.itemName,
+                    suggestedQty: Math.max(1, item.minQuantity > item.quantity ? Math.ceil(item.minQuantity - item.quantity) : 1),
+                  })),
+                )}
+              >
+                <ShoppingCart size={14} /> Place Order
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={`button ${reorderedVendors.has(group.domain) ? "button-secondary" : "button-primary"} button-sm`}
+                onClick={() => {
+                  handleReorder(group);
+                  setReorderedVendors((prev) => new Set(prev).add(group.domain));
+                }}
+              >
+                <ExternalLink size={14} />
+                {reorderedVendors.has(group.domain) ? "Reopen" : "Reorder"}
+              </button>
+            )}
           </div>
           {(() => {
             const expired = group.items.filter((i) => i.status === "expired");

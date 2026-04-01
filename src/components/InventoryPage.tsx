@@ -19,9 +19,7 @@ import {
   type PendingSubmission,
 } from "../lib/inventoryApi";
 import { LocationPills } from "./LocationPills";
-import { ReorderTab } from "./ReorderTab";
-
-export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock" | "reorder";
+export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
 type ActiveTab = InventoryFilter | "pendingSubmissions";
 type SortDirection = "asc" | "desc";
 
@@ -225,7 +223,7 @@ export function InventoryPage({
     if (initialFilter) return initialFilter;
     try {
       const saved = localStorage.getItem("wickops.inventory.activeTab");
-      if (saved && ["all", "expired", "exp30", "exp60", "lowStock", "reorder", "pendingSubmissions"].includes(saved)) {
+      if (saved && ["all", "expired", "exp30", "exp60", "lowStock", "pendingSubmissions"].includes(saved)) {
         return saved as ActiveTab;
       }
     } catch {}
@@ -240,7 +238,7 @@ export function InventoryPage({
       return tab;
     });
   };
-  const activeFilter: InventoryFilter = (activeTab === "pendingSubmissions" || activeTab === "reorder") ? "all" : activeTab;
+  const activeFilter: InventoryFilter = activeTab === "pendingSubmissions" ? "all" : activeTab;
   const setActiveFilter = (f: InventoryFilter) => setActiveTabRaw(f);
 
   // When navigating from dashboard with a filter, sync the tab
@@ -710,32 +708,6 @@ export function InventoryPage({
     }
   }, [effectiveLocationFilter]);
 
-  // Listen for "mark as ordered" messages from the reorder checklist popup
-  useEffect(() => {
-    const channel = new BroadcastChannel("wickops-reorder");
-    channel.onmessage = (event) => {
-      if (event.data?.type === "mark-ordered" && Array.isArray(event.data.rowIds)) {
-        const orderedIds = new Set<string>(event.data.rowIds);
-        const now = new Date().toISOString();
-        setRows((prev) => {
-          const next = prev.map((row) =>
-            orderedIds.has(row.id)
-              ? { ...row, values: { ...row.values, orderedAt: now } }
-              : row,
-          );
-          rowsRef.current = next;
-          return next;
-        });
-        setDirtyRowIds((prev) => {
-          const next = new Set(prev);
-          for (const id of orderedIds) next.add(id);
-          dirtyRowIdsRef.current = next;
-          return next;
-        });
-      }
-    };
-    return () => channel.close();
-  }, []);
 
   const categoryOptions = useMemo(() => {
     if (!categoryColumn) return ["All Categories"];
@@ -758,7 +730,6 @@ export function InventoryPage({
     let exp30 = 0;
     let exp60 = 0;
     let lowStock = 0;
-    let reorder = 0;
     for (const row of rows) {
       if (locationColumn && effectiveLocationFilter !== "All Locations") {
         const rowLocation = String(row.values[locationColumn.key] ?? "").trim();
@@ -783,10 +754,8 @@ export function InventoryPage({
         Number.isFinite(minQuantity);
       const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
       if (isLowStock) lowStock++;
-      const hasOrderedAt = !!row.values.orderedAt;
-      if ((isExpired || isLowStock) && !hasOrderedAt) reorder++;
     }
-    return { expired, exp30, exp60, lowStock, reorder };
+    return { expired, exp30, exp60, lowStock };
   }, [rows, locationColumn, effectiveLocationFilter]);
 
   const filteredRows = useMemo(() => {
@@ -1736,12 +1705,11 @@ export function InventoryPage({
   }, [organizationId, columnWidths]);
 
   if (loading) {
-    const hideMessage = activeTab === "reorder";
     return (
       <section className="app-content">
         <div className="app-card app-card--inventory app-loading-card">
           <span className="app-spinner" aria-hidden="true" />
-          {!hideMessage && <span>{loadingMessage}</span>}
+          <span>{loadingMessage}</span>
         </div>
       </section>
     );
@@ -2160,9 +2128,6 @@ export function InventoryPage({
                   Low Stock{tabCounts.lowStock > 0 ? ` (${tabCounts.lowStock})` : ""}
                 </option>
               )}
-              <option value="reorder">
-                Reorder{tabCounts.reorder > 0 ? ` (${tabCounts.reorder})` : ""}
-              </option>
               {canReviewSubmissions && (
                 <option value="pendingSubmissions">
                   Pending{pendingSubmissions.length > 0 ? ` (${pendingSubmissions.length})` : ""}
@@ -2229,17 +2194,6 @@ export function InventoryPage({
                 ) : null}
               </button>
             ) : null}
-            <button
-              className={`inventory-tab-btn inventory-tab-btn-reorder${activeTab === "reorder" ? " active" : ""}`}
-              onClick={() => setActiveTabRaw("reorder")}
-              role="tab"
-              aria-selected={activeTab === "reorder"}
-            >
-              Reorder
-              {tabCounts.reorder > 0 && activeTab !== "reorder" ? (
-                <span className="inventory-tab-badge">{tabCounts.reorder}</span>
-              ) : null}
-            </button>
             {canReviewSubmissions ? (
               <button
                 className={`inventory-tab-btn${activeTab === "pendingSubmissions" ? " active" : ""}`}
@@ -2278,68 +2232,7 @@ export function InventoryPage({
           </div>
         </div>
 
-        {activeTab === "reorder" ? (
-          <ReorderTab
-            rows={rows}
-            onEditReorderLink={(rowId) => {
-              pendingScrollToRowRef.current = rowId;
-              setActiveTabRaw("all");
-              setSelectedRowId(rowId);
-              setEditingLinkCell({ rowId, columnKey: "reorderLink" });
-            }}
-            onClearOrderedAt={(rowIds) => {
-              const idSet = new Set(rowIds);
-              setRows((prev) =>
-                prev.map((row) =>
-                  idSet.has(row.id)
-                    ? { ...row, values: { ...row.values, orderedAt: null } }
-                    : row,
-                ),
-              );
-              setDirtyRowIds((prev) => {
-                const next = new Set(prev);
-                for (const id of rowIds) next.add(id);
-                return next;
-              });
-            }}
-            onMarkOrdered={(rowIds) => {
-              const idSet = new Set(rowIds);
-              const now = new Date().toISOString();
-              setRows((prev) =>
-                prev.map((row) =>
-                  idSet.has(row.id)
-                    ? { ...row, values: { ...row.values, orderedAt: now, reorderCheckedAt: null } }
-                    : row,
-                ),
-              );
-              setDirtyRowIds((prev) => {
-                const next = new Set(prev);
-                for (const id of rowIds) next.add(id);
-                return next;
-              });
-            }}
-            onReorderCheck={async (rowId, checked) => {
-              const now = new Date().toISOString();
-              const rowIndex = rows.findIndex((r) => r.id === rowId);
-              const original = rows[rowIndex];
-              if (!original) return;
-              const updatedRow = {
-                ...original,
-                position: rowIndex,
-                values: { ...original.values, reorderCheckedAt: checked ? now : null },
-              };
-              setRows((prev) =>
-                prev.map((row) =>
-                  row.id === rowId
-                    ? { ...row, values: { ...row.values, reorderCheckedAt: checked ? now : null } }
-                    : row,
-                ),
-              );
-              // Save immediately (bypass autosave) so state persists before navigation
-              await saveInventoryItems([updatedRow], []);
-            }}
-          />
-        ) : activeTab === "pendingSubmissions" ? (
+        {activeTab === "pendingSubmissions" ? (
           <div className="inventory-pending-wrap">
             {pendingLoading ? (
               <div className="app-loading-card" style={{ padding: "2rem", textAlign: "center" }}>

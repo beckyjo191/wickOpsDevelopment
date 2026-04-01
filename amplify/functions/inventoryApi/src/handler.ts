@@ -171,6 +171,7 @@ type InventoryStorage = {
   itemTable: string;
   pendingTable: string;
   auditTable: string;
+  restockOrdersTable: string;
 };
 
 const storageCache = new Map<string, { storage: InventoryStorage; checkedAt: number }>();
@@ -515,7 +516,10 @@ type AuditAction =
   | "COLUMN_DELETE"
   | "COLUMN_UPDATE"
   | "CSV_IMPORT"
-  | "TEMPLATE_APPLY";
+  | "TEMPLATE_APPLY"
+  | "RESTOCK_ORDER_CREATE"
+  | "RESTOCK_RECEIVED"
+  | "RESTOCK_ORDER_CLOSED";
 
 const buildAuditEvent = (
   access: AccessContext,
@@ -594,6 +598,7 @@ const ensureStorageForOrganization = async (organizationId: string): Promise<Inv
       itemTable: DEFAULT_INVENTORY_ITEM_TABLE,
       pendingTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-pending`,
       auditTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-auditlog`,
+      restockOrdersTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-restock-orders`,
     };
   }
 
@@ -608,6 +613,7 @@ const ensureStorageForOrganization = async (organizationId: string): Promise<Inv
     itemTable: buildOrgScopedTableName(organizationId, "items"),
     pendingTable: buildOrgScopedTableName(organizationId, "pending"),
     auditTable: buildOrgScopedTableName(organizationId, "auditlog"),
+    restockOrdersTable: buildOrgScopedTableName(organizationId, "restock-orders"),
   };
 
   await Promise.all([
@@ -615,6 +621,7 @@ const ensureStorageForOrganization = async (organizationId: string): Promise<Inv
     createOrgTableIfMissing(storage.itemTable, INVENTORY_ITEM_BY_MODULE_INDEX, "position"),
     createOrgPendingTableIfMissing(storage.pendingTable),
     createOrgAuditTableIfMissing(storage.auditTable),
+    createOrgPendingTableIfMissing(storage.restockOrdersTable),
   ]);
 
   storageCache.set(organizationId, { storage, checkedAt: now });
@@ -625,7 +632,7 @@ const deleteStorageForOrganization = async (organizationId: string): Promise<voi
   if (!ENABLE_PER_ORG_TABLES) return;
   const storage = await ensureStorageForOrganization(organizationId);
   await Promise.all(
-    [storage.columnTable, storage.itemTable, storage.pendingTable, storage.auditTable].map(async (tableName) => {
+    [storage.columnTable, storage.itemTable, storage.pendingTable, storage.auditTable, storage.restockOrdersTable].map(async (tableName) => {
       try {
         await rawDdb.send(new DeleteTableCommand({ TableName: tableName }));
       } catch (err: any) {
@@ -3486,6 +3493,385 @@ const handleAuditAnalytics = async (
   });
 };
 
+// ── RESTOCK ORDER TYPES ────────────────────────────────────────────────────
+
+type RestockOrderStatus = "open" | "partial" | "closed";
+
+type RestockOrderItem = {
+  itemId: string;
+  itemName: string;
+  qtyOrdered: number;
+  qtyReceived: number;
+  unitCost?: number;
+};
+
+type RestockReceiveLine = {
+  itemId: string;
+  qtyThisReceive: number;
+  expirationDate?: string;
+  unitCost?: number;
+  addToInventory?: boolean;
+};
+
+type RestockReceiveEvent = {
+  receivedAt: string;
+  receivedByUserId: string;
+  receivedByName: string;
+  lines: RestockReceiveLine[];
+  closedOrder: boolean;
+};
+
+type RestockOrder = {
+  id: string;
+  orgId: string;
+  status: RestockOrderStatus;
+  vendor?: string;
+  notes?: string;
+  createdAt: string;
+  createdByUserId: string;
+  createdByName: string;
+  itemsJson: string;
+  receivesJson: string;
+  closedAt?: string;
+  closedByUserId?: string;
+  closedByName?: string;
+};
+
+// ── RESTOCK ORDER HANDLERS ─────────────────────────────────────────────────
+
+const handleListRestockOrders = async (storage: InventoryStorage, access: AccessContext): Promise<ReturnType<typeof json>> => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can view restock orders." });
+  }
+
+  const result = await ddb.send(
+    new ScanCommand({
+      TableName: storage.restockOrdersTable,
+      FilterExpression: "orgId = :orgId",
+      ExpressionAttributeValues: { ":orgId": access.organizationId },
+    }),
+  );
+
+  const orders = (result.Items ?? []).map((item) => {
+    let items: RestockOrderItem[] = [];
+    let receives: RestockReceiveEvent[] = [];
+    try { items = JSON.parse(String(item.itemsJson ?? "[]")); } catch { /* ignore */ }
+    try { receives = JSON.parse(String(item.receivesJson ?? "[]")); } catch { /* ignore */ }
+    return { ...item, items, receives };
+  });
+
+  // Sort: open first, then partial, then closed; within each group newest first
+  const statusOrder: Record<RestockOrderStatus, number> = { open: 0, partial: 1, closed: 2 };
+  orders.sort((a, b) => {
+    const sd = (statusOrder[a.status as RestockOrderStatus] ?? 3) - (statusOrder[b.status as RestockOrderStatus] ?? 3);
+    if (sd !== 0) return sd;
+    return String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? ""));
+  });
+
+  return json(200, { orders });
+};
+
+const handleCreateRestockOrder = async (storage: InventoryStorage, access: AccessContext, body: any): Promise<ReturnType<typeof json>> => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can create restock orders." });
+  }
+
+  const rawItems = Array.isArray(body?.items) ? body.items : [];
+  if (rawItems.length === 0) {
+    return json(400, { error: "At least one item is required." });
+  }
+
+  const items = await listAllItems(storage, access.organizationId);
+  const byId = new Map(items.map((item) => [String(item.id), item]));
+
+  const orderItems: RestockOrderItem[] = [];
+  for (let i = 0; i < rawItems.length; i++) {
+    const entry = rawItems[i];
+    const itemId = String(entry?.itemId ?? "").trim();
+    const qtyOrdered = Number(entry?.qtyOrdered);
+    if (!Number.isFinite(qtyOrdered) || qtyOrdered <= 0) {
+      return json(400, { error: `Entry ${i + 1}: quantity must be greater than 0.` });
+    }
+    const unitCost = entry?.unitCost !== undefined && entry?.unitCost !== null && entry?.unitCost !== ""
+      ? Number(entry.unitCost) : undefined;
+    if (unitCost !== undefined && (!Number.isFinite(unitCost) || unitCost < 0)) {
+      return json(400, { error: `Entry ${i + 1}: unit cost must be a non-negative number.` });
+    }
+
+    if (!itemId) {
+      // Freeform item — not yet in inventory
+      const itemName = String(entry?.itemName ?? "").trim();
+      if (!itemName) return json(400, { error: `Entry ${i + 1}: itemName is required for items not in inventory.` });
+      const freeformId = `freeform-${randomUUID()}`;
+      orderItems.push({ itemId: freeformId, itemName, qtyOrdered, qtyReceived: 0, ...(unitCost !== undefined ? { unitCost } : {}) });
+    } else {
+      const item = byId.get(itemId);
+      let itemName = String(entry?.itemName ?? "").trim();
+      if (!itemName && item) {
+        try {
+          const vals = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, unknown>;
+          itemName = String(vals.itemName ?? "").trim() || `Item ${itemId.slice(0, 8)}`;
+        } catch { itemName = `Item ${itemId.slice(0, 8)}`; }
+      }
+      if (!itemName) itemName = `Item ${itemId.slice(0, 8)}`;
+      orderItems.push({ itemId, itemName, qtyOrdered, qtyReceived: 0, ...(unitCost !== undefined ? { unitCost } : {}) });
+    }
+  }
+
+  const orderId = randomUUID();
+  const now = new Date().toISOString();
+  const vendor = String(body?.vendor ?? "").trim() || undefined;
+  const notes = String(body?.notes ?? "").trim() || undefined;
+
+  const order: RestockOrder = {
+    id: orderId,
+    orgId: access.organizationId,
+    status: "open",
+    createdAt: now,
+    createdByUserId: access.userId,
+    createdByName: access.displayName || access.email,
+    itemsJson: JSON.stringify(orderItems),
+    receivesJson: JSON.stringify([]),
+    ...(vendor ? { vendor } : {}),
+    ...(notes ? { notes } : {}),
+  };
+
+  await ddb.send(new PutCommand({ TableName: storage.restockOrdersTable, Item: order }));
+
+  // Audit: one event per item ordered
+  const auditEvents = orderItems.map((oi) =>
+    buildAuditEvent(access, "RESTOCK_ORDER_CREATE", oi.itemId, oi.itemName, {
+      orderId,
+      qtyOrdered: oi.qtyOrdered,
+      ...(oi.unitCost !== undefined ? { unitCost: oi.unitCost } : {}),
+      ...(vendor ? { vendor } : {}),
+    }),
+  );
+  await writeAuditEvents(storage.auditTable, auditEvents);
+
+  return json(200, { ok: true, orderId });
+};
+
+const handleReceiveRestockOrder = async (storage: InventoryStorage, access: AccessContext, path: string, body: any): Promise<ReturnType<typeof json>> => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can receive restock orders." });
+  }
+
+  const orderId = path.split("/").at(-2) ?? "";
+  const result = await ddb.send(new GetCommand({ TableName: storage.restockOrdersTable, Key: { id: orderId } }));
+  if (!result.Item || result.Item.orgId !== access.organizationId) {
+    return json(404, { error: "Restock order not found." });
+  }
+  const order = result.Item as RestockOrder;
+  if (order.status === "closed") {
+    return json(409, { error: "This order is already closed." });
+  }
+
+  let orderItems: RestockOrderItem[] = [];
+  let receives: RestockReceiveEvent[] = [];
+  try { orderItems = JSON.parse(String(order.itemsJson ?? "[]")); } catch { /* ignore */ }
+  try { receives = JSON.parse(String(order.receivesJson ?? "[]")); } catch { /* ignore */ }
+
+  const rawLines = Array.isArray(body?.lines) ? body.lines : [];
+  if (rawLines.length === 0) {
+    return json(400, { error: "At least one receive line is required." });
+  }
+  const closeOrder = body?.closeOrder === true;
+
+  const receiveLines: RestockReceiveLine[] = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    const itemId = String(line?.itemId ?? "").trim();
+    if (!itemId) return json(400, { error: `Line ${i + 1}: itemId is required.` });
+    const orderItem = orderItems.find((oi) => oi.itemId === itemId);
+    if (!orderItem) return json(400, { error: `Line ${i + 1}: item not found in order.` });
+    const qtyThisReceive = Number(line?.qtyThisReceive);
+    if (!Number.isFinite(qtyThisReceive) || qtyThisReceive <= 0) {
+      return json(400, { error: `Line ${i + 1}: received quantity must be greater than 0.` });
+    }
+    const expirationDate = String(line?.expirationDate ?? "").trim() || undefined;
+    const unitCost = line?.unitCost !== undefined && line?.unitCost !== null && line?.unitCost !== ""
+      ? Number(line.unitCost) : undefined;
+    if (unitCost !== undefined && (!Number.isFinite(unitCost) || unitCost < 0)) {
+      return json(400, { error: `Line ${i + 1}: unit cost must be a non-negative number.` });
+    }
+    const addToInventory = line?.addToInventory === true;
+    receiveLines.push({ itemId, qtyThisReceive, ...(expirationDate ? { expirationDate } : {}), ...(unitCost !== undefined ? { unitCost } : {}), ...(addToInventory ? { addToInventory } : {}) });
+  }
+
+  // Update inventory quantities and expiration dates
+  const allItems = await listAllItems(storage, access.organizationId);
+  const byId = new Map(allItems.map((item) => [String(item.id), item]));
+  const auditEvents: Record<string, unknown>[] = [];
+  const now = new Date().toISOString();
+
+  for (const line of receiveLines) {
+    const isFreeform = line.itemId.startsWith("freeform-");
+    const orderItem = orderItems.find((oi) => oi.itemId === line.itemId)!;
+
+    if (isFreeform) {
+      orderItem.qtyReceived += line.qtyThisReceive;
+      if (line.unitCost !== undefined) orderItem.unitCost = line.unitCost;
+
+      if (line.addToInventory) {
+        // Create a new inventory item from this freeform receive
+        const newItemId = randomUUID();
+        const newValues: Record<string, unknown> = {
+          itemName: orderItem.itemName,
+          quantity: line.qtyThisReceive,
+        };
+        if (line.expirationDate) newValues.expirationDate = line.expirationDate;
+        await ddb.send(new PutCommand({
+          TableName: storage.itemTable,
+          Item: {
+            id: newItemId,
+            organizationId: access.organizationId,
+            module: "inventory",
+            position: allItems.length + 1,
+            valuesJson: JSON.stringify(newValues),
+            createdAt: now,
+            updatedAtCustom: now,
+          },
+        }));
+        auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", newItemId, orderItem.itemName, {
+          orderId,
+          source: "restock_receive",
+          initialValues: newValues,
+        }));
+        // Update the order item to reference the real inventory ID
+        orderItem.itemId = newItemId;
+        auditEvents.push(buildAuditEvent(access, "RESTOCK_RECEIVED", newItemId, orderItem.itemName, {
+          orderId,
+          qtyReceived: line.qtyThisReceive,
+          addedToInventory: true,
+          ...(line.expirationDate ? { expirationDate: line.expirationDate } : {}),
+          ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
+        }));
+      }
+      continue;
+    }
+
+    const item = byId.get(line.itemId);
+    if (!item) continue;
+    let values: Record<string, unknown> = {};
+    try { values = JSON.parse(String(item.valuesJson ?? "{}")); } catch { /* ignore */ }
+    const oldQty = Number(values.quantity ?? 0);
+    const newQty = oldQty + line.qtyThisReceive;
+    const nextValues = { ...values, quantity: newQty };
+    if (line.expirationDate) nextValues.expirationDate = line.expirationDate;
+
+    await ddb.send(new UpdateCommand({
+      TableName: storage.itemTable,
+      Key: { id: item.id },
+      ConditionExpression: "organizationId = :org AND #module = :module",
+      UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
+      ExpressionAttributeNames: { "#module": "module" },
+      ExpressionAttributeValues: {
+        ":org": access.organizationId,
+        ":module": "inventory",
+        ":values": JSON.stringify(nextValues),
+        ":updatedAtCustom": now,
+      },
+    }));
+
+    orderItem.qtyReceived += line.qtyThisReceive;
+    if (line.unitCost !== undefined) orderItem.unitCost = line.unitCost;
+
+    const snapshot: Record<string, unknown> = { quantity: newQty };
+    if (values.minQuantity !== undefined) snapshot.minQuantity = values.minQuantity;
+    if (line.expirationDate) snapshot.expirationDate = line.expirationDate;
+    auditEvents.push(buildAuditEvent(access, "RESTOCK_RECEIVED", line.itemId, orderItem.itemName, {
+      orderId,
+      qtyReceived: line.qtyThisReceive,
+      qtyBefore: oldQty,
+      qtyAfter: newQty,
+      ...(line.expirationDate ? { expirationDate: line.expirationDate } : {}),
+      ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
+      snapshot,
+    }));
+  }
+
+  // Determine new order status
+  const allFullyReceived = orderItems.every((oi) => oi.qtyReceived >= oi.qtyOrdered);
+  const newStatus: RestockOrderStatus = closeOrder || allFullyReceived ? "closed" : "partial";
+
+  const receiveEvent: RestockReceiveEvent = {
+    receivedAt: now,
+    receivedByUserId: access.userId,
+    receivedByName: access.displayName || access.email,
+    lines: receiveLines,
+    closedOrder: newStatus === "closed",
+  };
+  receives.push(receiveEvent);
+
+  const updateExpr = newStatus === "closed"
+    ? "SET itemsJson = :items, receivesJson = :receives, #status = :status, closedAt = :closedAt, closedByUserId = :closedByUserId, closedByName = :closedByName"
+    : "SET itemsJson = :items, receivesJson = :receives, #status = :status";
+  const updateVals: Record<string, unknown> = {
+    ":items": JSON.stringify(orderItems),
+    ":receives": JSON.stringify(receives),
+    ":status": newStatus,
+  };
+  if (newStatus === "closed") {
+    updateVals[":closedAt"] = now;
+    updateVals[":closedByUserId"] = access.userId;
+    updateVals[":closedByName"] = access.displayName || access.email;
+  }
+
+  await ddb.send(new UpdateCommand({
+    TableName: storage.restockOrdersTable,
+    Key: { id: orderId },
+    UpdateExpression: updateExpr,
+    ExpressionAttributeNames: { "#status": "status" },
+    ExpressionAttributeValues: updateVals,
+  }));
+
+  if (newStatus === "closed") {
+    auditEvents.push(buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, {
+      orderId,
+      closedManually: closeOrder && !allFullyReceived,
+    }));
+  }
+
+  await writeAuditEvents(storage.auditTable, auditEvents);
+  return json(200, { ok: true, status: newStatus });
+};
+
+const handleCloseRestockOrder = async (storage: InventoryStorage, access: AccessContext, path: string): Promise<ReturnType<typeof json>> => {
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can close restock orders." });
+  }
+
+  const orderId = path.split("/").at(-2) ?? "";
+  const result = await ddb.send(new GetCommand({ TableName: storage.restockOrdersTable, Key: { id: orderId } }));
+  if (!result.Item || result.Item.orgId !== access.organizationId) {
+    return json(404, { error: "Restock order not found." });
+  }
+  if (result.Item.status === "closed") {
+    return json(409, { error: "Order is already closed." });
+  }
+
+  const now = new Date().toISOString();
+  await ddb.send(new UpdateCommand({
+    TableName: storage.restockOrdersTable,
+    Key: { id: orderId },
+    UpdateExpression: "SET #status = :status, closedAt = :closedAt, closedByUserId = :uid, closedByName = :name",
+    ExpressionAttributeNames: { "#status": "status" },
+    ExpressionAttributeValues: {
+      ":status": "closed",
+      ":closedAt": now,
+      ":uid": access.userId,
+      ":name": access.displayName || access.email,
+    },
+  }));
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, { orderId, closedManually: true }),
+  ]);
+
+  return json(200, { ok: true });
+};
+
 export const handler = async (event: any) => {
   try {
     const method = getMethod(event);
@@ -3564,6 +3950,27 @@ export const handler = async (event: any) => {
         return json(403, { error: "Module access denied" });
       }
       return handleAuditAnalytics(storage, access, query);
+    }
+
+    // ── Restock Order Routes ──
+    if (method === "GET" && path.endsWith("/inventory/restock/orders")) {
+      if (!hasModuleAccess(access, "inventory")) return json(403, { error: "Module access denied" });
+      return handleListRestockOrders(storage, access);
+    }
+
+    if (method === "POST" && path.endsWith("/inventory/restock/orders")) {
+      if (!hasModuleAccess(access, "inventory")) return json(403, { error: "Module access denied" });
+      return handleCreateRestockOrder(storage, access, parseBody(event));
+    }
+
+    if (method === "POST" && /\/inventory\/restock\/orders\/[^/]+\/receive$/.test(path)) {
+      if (!hasModuleAccess(access, "inventory")) return json(403, { error: "Module access denied" });
+      return handleReceiveRestockOrder(storage, access, path, parseBody(event));
+    }
+
+    if (method === "POST" && /\/inventory\/restock\/orders\/[^/]+\/close$/.test(path)) {
+      if (!hasModuleAccess(access, "inventory")) return json(403, { error: "Module access denied" });
+      return handleCloseRestockOrder(storage, access, path);
     }
 
     if (method === "POST" && path.endsWith("/inventory/locations")) {

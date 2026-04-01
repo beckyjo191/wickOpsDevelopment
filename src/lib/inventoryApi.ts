@@ -977,6 +977,88 @@ export const fetchAuditAnalytics = async (params: {
 
 // ─── Billing Portal ───────────────────────────────────────────────────────────
 
+// ─── Restock Orders ───────────────────────────────────────────────────────────
+
+export type RestockOrderItem = {
+  itemId: string;
+  itemName: string;
+  qtyOrdered: number;
+  qtyReceived: number;
+  unitCost?: number;
+};
+
+export type RestockReceiveLine = {
+  itemId: string;
+  qtyThisReceive: number;
+  expirationDate?: string;
+  unitCost?: number;
+  addToInventory?: boolean;
+};
+
+export type RestockReceiveEvent = {
+  receivedAt: string;
+  receivedByUserId: string;
+  receivedByName: string;
+  lines: RestockReceiveLine[];
+  closedOrder: boolean;
+};
+
+export type RestockOrder = {
+  id: string;
+  orgId: string;
+  status: "open" | "partial" | "closed";
+  vendor?: string;
+  notes?: string;
+  createdAt: string;
+  createdByUserId: string;
+  createdByName: string;
+  items: RestockOrderItem[];
+  receives: RestockReceiveEvent[];
+  closedAt?: string;
+  closedByName?: string;
+};
+
+export const listRestockOrders = async (): Promise<RestockOrder[]> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders`);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load restock orders."));
+  const data = await res.json();
+  return data.orders ?? [];
+};
+
+export const createRestockOrder = async (payload: {
+  vendor?: string;
+  notes?: string;
+  items: Array<{ itemId: string; itemName: string; qtyOrdered: number; unitCost?: number }>;
+}): Promise<{ orderId: string }> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to create restock order."));
+  return res.json();
+};
+
+export const receiveRestockOrder = async (
+  orderId: string,
+  payload: { lines: RestockReceiveLine[]; closeOrder: boolean },
+): Promise<{ status: string }> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders/${encodeURIComponent(orderId)}/receive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to receive restock order."));
+  return res.json();
+};
+
+export const closeRestockOrder = async (orderId: string): Promise<void> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders/${encodeURIComponent(orderId)}/close`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to close restock order."));
+};
+
 export const createBillingPortalSession = async (): Promise<string> => {
   if (!CORE_API_BASE_URL) {
     throw new Error("Missing VITE_API_BASE_URL");

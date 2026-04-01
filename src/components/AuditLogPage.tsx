@@ -58,7 +58,7 @@ function humanizeFieldName(field: string): string {
 }
 
 function formatFieldValue(field: string, value: unknown): string {
-  if (value === null || value === undefined || value === "") return "empty";
+  if (value === null || value === undefined || value === "") return "—";
   const str = String(value);
   // Detect ISO date strings
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(str)) {
@@ -105,12 +105,12 @@ const ACTION_COLORS: Record<string, string> = {
   ITEM_MOVE: "var(--text-muted)",
   ITEM_RESTOCK: "var(--success)",
   ITEM_QTY_ADJUST: "var(--warning)",
-  ITEM_DELETE: "var(--error)",
+  ITEM_DELETE: "var(--danger)",
   USAGE_SUBMIT: "var(--warning)",
   USAGE_APPROVE: "var(--success)",
-  USAGE_REJECT: "var(--error)",
+  USAGE_REJECT: "var(--danger)",
   COLUMN_CREATE: "var(--primary)",
-  COLUMN_DELETE: "var(--error)",
+  COLUMN_DELETE: "var(--danger)",
   COLUMN_UPDATE: "var(--primary)",
   CSV_IMPORT: "var(--primary)",
   TEMPLATE_APPLY: "var(--primary)",
@@ -156,30 +156,49 @@ function AuditEventCard({ event, onViewItemHistory }: { event: AuditEvent; onVie
   const color = ACTION_COLORS[derivedAction] ?? ACTION_COLORS[event.action] ?? "var(--text-muted)";
   const details = event.details ?? {};
 
-  // For ITEM_EDIT variants, filter out position changes (noise) and format fields
+  // For ITEM_EDIT variants, filter out position changes (noise) and format fields.
+  // For restocks, also filter quantity since we show it as "+N received" in the snapshot line.
   const visibleChanges = event.action === "ITEM_EDIT" && Array.isArray(details.changes)
-    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>).filter(
-        (c) => c.field !== "position"
-      )
+    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>).filter((c) => {
+        if (c.field === "position") return false;
+        if (c.field === "quantity" && deriveAction(event) === "ITEM_RESTOCK") return false;
+        return true;
+      })
     : [];
 
-  // Snapshot: key item state at time of event (quantity, minQuantity, expirationDate)
-  const snapshot = (details.snapshot ?? {}) as Record<string, unknown>;
-  // For ITEM_CREATE fall back to initialValues
-  const snapshotSource: Record<string, unknown> =
-    Object.keys(snapshot).length > 0
-      ? snapshot
-      : ((details.initialValues ?? {}) as Record<string, unknown>);
+  // Snapshot context line — suppressed for moves (not meaningful for list reordering)
   const snapshotParts: string[] = [];
-  if (snapshotSource.quantity !== undefined && snapshotSource.quantity !== null) {
-    const qty = String(snapshotSource.quantity);
-    const minQty = snapshotSource.minQuantity !== undefined && snapshotSource.minQuantity !== null
-      ? String(snapshotSource.minQuantity)
-      : null;
-    snapshotParts.push(minQty ? `Qty: ${qty} (min ${minQty})` : `Qty: ${qty}`);
-  }
-  if (snapshotSource.expirationDate && String(snapshotSource.expirationDate).trim()) {
-    snapshotParts.push(`Exp: ${formatFieldValue("expirationDate", snapshotSource.expirationDate)}`);
+  if (derivedAction !== "ITEM_MOVE") {
+    const snapshot = (details.snapshot ?? {}) as Record<string, unknown>;
+    // Fall back to initialValues (ITEM_CREATE) or deletedValues (ITEM_DELETE)
+    const snapshotSource: Record<string, unknown> =
+      Object.keys(snapshot).length > 0
+        ? snapshot
+        : event.action === "ITEM_DELETE"
+          ? ((details.deletedValues ?? {}) as Record<string, unknown>)
+          : ((details.initialValues ?? {}) as Record<string, unknown>);
+
+    if (derivedAction === "ITEM_RESTOCK") {
+      // Show how many units were received, not the old stock's expiration
+      const qtyChange = visibleChanges.find((c) => c.field === "quantity");
+      if (qtyChange) {
+        const delta = Number(qtyChange.to ?? 0) - Number(qtyChange.from ?? 0);
+        if (delta > 0) snapshotParts.push(`+${delta} received`);
+      }
+      const minQty = snapshotSource.minQuantity;
+      if (minQty !== undefined && minQty !== null) snapshotParts.push(`min ${minQty}`);
+    } else {
+      if (snapshotSource.quantity !== undefined && snapshotSource.quantity !== null) {
+        const qty = String(snapshotSource.quantity);
+        const minQty = snapshotSource.minQuantity !== undefined && snapshotSource.minQuantity !== null
+          ? String(snapshotSource.minQuantity)
+          : null;
+        snapshotParts.push(minQty ? `Qty: ${qty} (min ${minQty})` : `Qty: ${qty}`);
+      }
+      if (snapshotSource.expirationDate && String(snapshotSource.expirationDate).trim()) {
+        snapshotParts.push(`Exp: ${formatFieldValue("expirationDate", snapshotSource.expirationDate)}`);
+      }
+    }
   }
 
   return (

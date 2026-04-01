@@ -1,6 +1,6 @@
 import type { AppModuleKey } from "../lib/moduleRegistry";
 
-type InventorySubView = "inventory" | "usage" | "quickadd" | "activity";
+type InventorySubView = "inventory" | "usage" | "orders" | "activity";
 
 interface InventorySubNavProps {
   activeView: string;
@@ -17,10 +17,10 @@ export function InventorySubNav({
 }: InventorySubNavProps) {
   const showInventory = accessibleModules.includes("inventory");
   const showUsage = accessibleModules.includes("usage");
-  const showQuickAdd = showInventory && canEditInventory;
+  const showOrders = showInventory && canEditInventory;
   const showActivity = showInventory;
 
-  const visibleCount = (showInventory ? 1 : 0) + (showUsage ? 1 : 0) + (showQuickAdd ? 1 : 0) + (showActivity ? 1 : 0);
+  const visibleCount = (showInventory ? 1 : 0) + (showUsage ? 1 : 0) + (showOrders ? 1 : 0) + (showActivity ? 1 : 0);
   if (visibleCount < 2) return null;
 
   return (
@@ -51,15 +51,15 @@ export function InventorySubNav({
           Log Usage
         </button>
       )}
-      {showQuickAdd && (
+      {showOrders && (
         <button
           type="button"
           role="tab"
-          aria-selected={activeView === "quickadd"}
-          className={`inventory-subnav-item${activeView === "quickadd" ? " active" : ""}`}
-          onClick={() => onNavigate("quickadd")}
+          aria-selected={activeView === "orders"}
+          className={`inventory-subnav-item${activeView === "orders" ? " active" : ""}`}
+          onClick={() => onNavigate("orders")}
         >
-          Quick Add
+          Orders
         </button>
       )}
       {showActivity && (

@@ -1,10 +1,8 @@
 import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
 
-type AppView = "dashboard" | "inventory" | "usage" | "quickadd" | "activity" | "invite" | "settings";
-
 interface AppToolbarProps {
-  view: AppView;
-  onNavigate: (view: AppView) => void;
+  view: string;
+  onNavigate: (view: string) => void;
 }
 
 export function AppToolbar({

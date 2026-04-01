@@ -6,14 +6,13 @@ import { LocationPills } from "./LocationPills";
 import { pickLoadingLine } from "../lib/loadingLines";
 
 type InventoryFilter = "expired" | "exp30" | "lowStock";
-type AppView = "inventory" | "usage" | "orders";
 
 interface DashboardPageProps {
   accessibleModules: AppModuleKey[];
   canEditInventory?: boolean;
   selectedLocation: string | null;
   onLocationChange: (location: string | null) => void;
-  onNavigate: (view: AppView) => void;
+  onNavigate: (view: string) => void;
   onNavigateToInventoryWithFilter?: (filter: InventoryFilter, location?: string | null) => void;
 }
 

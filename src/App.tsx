@@ -474,7 +474,7 @@ export default function App() {
         canEditInventory={canEditInventory}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
-        onNavigate={(v) => setView(v)}
+        onNavigate={(v) => setView(v as AppView)}
       />
     );
   } else if (view === "usage") {
@@ -486,7 +486,7 @@ export default function App() {
         canEditInventory={canEditInventory}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
-        onNavigate={(v) => setView(v)}
+        onNavigate={(v) => setView(v as AppView)}
       />
     );
   } else if (view === "orders") {
@@ -498,7 +498,7 @@ export default function App() {
         canEditInventory={canEditInventory}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
-        onNavigate={(v) => setView(v)}
+        onNavigate={(v) => setView(v as AppView)}
       />
     );
   } else if (view === "activity") {
@@ -510,7 +510,7 @@ export default function App() {
         canEditInventory={canEditInventory}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
-        onNavigate={(v) => setView(v)}
+        onNavigate={(v) => setView(v as AppView)}
       />
     );
   } else if (view === "invite") {
@@ -548,7 +548,7 @@ export default function App() {
         canEditInventory={canEditInventory}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
-        onNavigate={(v) => setView(v)}
+        onNavigate={(v) => setView(v as AppView)}
       />
     );
   } else {
@@ -559,7 +559,7 @@ export default function App() {
         canEditInventory={canEditInventory}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
-        onNavigate={(v) => setView(v)}
+        onNavigate={(v) => setView(v as AppView)}
         onNavigateToInventoryWithFilter={(filter, location) => {
           if (location !== undefined) onLocationChange(location);
           setInventoryInitialFilter(filter);
@@ -576,14 +576,14 @@ export default function App() {
     <section className={`app-shell${isMobile && !keyboardOpen ? " app-shell--mobile" : ""}`}>
       <AppToolbar
         view={view}
-        onNavigate={(v) => void navigateTo(v)}
+        onNavigate={(v) => void navigateTo(v as AppView)}
       />
       {isInventorySection && (
         <InventorySubNav
           activeView={view}
           accessibleModules={subState.allowedModules}
           canEditInventory={canEditInventory}
-          onNavigate={(v) => void navigateTo(v)}
+          onNavigate={(v) => void navigateTo(v as AppView)}
         />
       )}
       {content}

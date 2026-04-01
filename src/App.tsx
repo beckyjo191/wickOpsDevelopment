@@ -53,10 +53,16 @@ export default function App() {
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [view, setViewRaw] = useState<AppView>("dashboard");
   const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);
+  const [inventoryInitialSearch, setInventoryInitialSearch] = useState<string | undefined>(undefined);
+  const [inventoryInitialEditCell, setInventoryInitialEditCell] = useState<{ rowId: string; columnKey: string } | undefined>(undefined);
   const [inventoryKey, setInventoryKey] = useState(0);
   const [dashboardKey, setDashboardKey] = useState(0);
   const setView = (v: AppView) => {
-    if (v !== "inventory") setInventoryInitialFilter(undefined);
+    if (v !== "inventory") {
+      setInventoryInitialFilter(undefined);
+      setInventoryInitialSearch(undefined);
+      setInventoryInitialEditCell(undefined);
+    }
     if (v === "dashboard") setDashboardKey((k) => k + 1);
     setViewRaw(v);
   };
@@ -464,6 +470,8 @@ export default function App() {
         canEditInventory={canEditInventory}
         canReviewSubmissions={canReviewUsageSubmissions}
         initialFilter={inventoryInitialFilter}
+        initialSearch={inventoryInitialSearch}
+        initialEditCell={inventoryInitialEditCell}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
         onSaveFnChange={(fn) => { inventorySaveFnRef.current = fn; }}
@@ -491,7 +499,16 @@ export default function App() {
     );
   } else if (view === "orders") {
     content = canAccessInventory && canEditInventory ? (
-      <OrdersPage selectedLocation={selectedLocation} />
+      <OrdersPage
+        selectedLocation={selectedLocation}
+        onNavigateToInventoryItem={(rowId, itemName) => {
+          setInventoryInitialSearch(itemName);
+          setInventoryInitialEditCell({ rowId, columnKey: "reorderLink" });
+          setInventoryInitialFilter(undefined);
+          setInventoryKey((k) => k + 1);
+          setView("inventory");
+        }}
+      />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}

@@ -30,6 +30,7 @@ type OrdersTab = "main" | "quickadd";
 
 interface OrdersPageProps {
   selectedLocation?: string | null;
+  onNavigateToInventoryItem?: (rowId: string, itemName: string) => void;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -673,7 +674,7 @@ function OrderCard({
 
 // ── Main Orders Page ───────────────────────────────────────────────────────
 
-export function OrdersPage({ selectedLocation }: OrdersPageProps) {
+export function OrdersPage({ selectedLocation, onNavigateToInventoryItem }: OrdersPageProps) {
   const [tab, setTab] = useState<OrdersTab>("main");
   const [orders, setOrders] = useState<RestockOrder[]>([]);
   const [loading, setLoading] = useState(false);
@@ -872,6 +873,11 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
               rows={inventoryRows}
               onClearOrderedAt={handleClearOrderedAt}
               onMarkOrdered={handleMarkOrdered}
+              onEditReorderLink={onNavigateToInventoryItem ? (rowId) => {
+                const row = inventoryRowsRef.current.find((r) => r.id === rowId);
+                const name = String(row?.values.itemName ?? "").trim();
+                onNavigateToInventoryItem(rowId, name);
+              } : undefined}
             />
           </div>
 

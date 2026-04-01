@@ -580,8 +580,11 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
         if (!itemId) {
           error = "Select an item";
           hasError = true;
-        } else if (!Number.isFinite(quantityUsed) || quantityUsed <= 0) {
-          error = "Enter a quantity greater than 0";
+        } else if (!Number.isFinite(quantityUsed) || quantityUsed < 0) {
+          error = "Enter a valid quantity";
+          hasError = true;
+        } else if (quantityUsed === 0 && !notes) {
+          error = "Add a note when logging 0 quantity";
           hasError = true;
         } else {
           const row = rowById.get(itemId);

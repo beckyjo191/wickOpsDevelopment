@@ -27,6 +27,8 @@ interface InventoryPageProps {
   canEditInventory: boolean;
   canReviewSubmissions?: boolean;
   initialFilter?: InventoryFilter;
+  initialSearch?: string;
+  initialEditCell?: { rowId: string; columnKey: string };
   selectedLocation: string | null;
   onLocationChange: (location: string | null) => void;
   /** Called with the async save function when the component mounts, null when it unmounts.
@@ -209,6 +211,8 @@ export function InventoryPage({
   canEditInventory,
   canReviewSubmissions,
   initialFilter,
+  initialSearch,
+  initialEditCell,
   selectedLocation,
   onLocationChange,
   onSaveFnChange,
@@ -256,8 +260,8 @@ export function InventoryPage({
   const [editedQtys, setEditedQtys] = useState<Record<string, Record<number, string>>>({});
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   const [templateSelectedIds, setTemplateSelectedIds] = useState<Set<string> | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState(initialSearch ?? "");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState(initialSearch ?? "");
   const [currentPage, setCurrentPage] = useState(1);
   const [categoryFilter, setCategoryFilter] = useState("All Categories");
   const [sortStateByTab, setSortStateByTab] = useState<Record<string, { key: string; direction: SortDirection } | null>>(() => {
@@ -286,7 +290,7 @@ export function InventoryPage({
   const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
   const [undoStack, setUndoStack] = useState<InventorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<InventorySnapshot[]>([]);
-  const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(null);
+  const [editingLinkCell, setEditingLinkCell] = useState<{ rowId: string; columnKey: string } | null>(initialEditCell ?? null);
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
   const [editingDateCell, setEditingDateCell] = useState<{ rowId: string; columnKey: string } | null>(null);
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);

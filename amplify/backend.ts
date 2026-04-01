@@ -90,48 +90,23 @@ const createBillingPortalSessionIntegration = new HttpLambdaIntegration(
   backend.createBillingPortalSession.resources.lambda,
 );
 
-const addInventoryRoute = (path: string, methods: HttpMethod[]) => {
-  inventoryHttpApi.addRoutes({
-    path,
-    methods,
-    integration: inventoryLambdaIntegration,
-    authorizer: inventoryAuthorizer,
-  });
-};
-
-addInventoryRoute("/inventory/org-modules", [HttpMethod.GET, HttpMethod.POST]);
-addInventoryRoute("/inventory/module-access/users", [HttpMethod.GET]);
-addInventoryRoute("/inventory/module-access/users/{userId}", [HttpMethod.POST, HttpMethod.DELETE]);
-addInventoryRoute("/inventory/profile/display-name", [HttpMethod.POST]);
-addInventoryRoute("/inventory/profile/email/sync", [HttpMethod.POST]);
-addInventoryRoute("/inventory/onboarding/templates", [HttpMethod.GET]);
-addInventoryRoute("/inventory/onboarding/apply-template", [HttpMethod.POST]);
-addInventoryRoute("/inventory/alert-summary", [HttpMethod.GET]);
-addInventoryRoute("/inventory/bootstrap", [HttpMethod.GET]);
-addInventoryRoute("/inventory/items", [HttpMethod.GET]);
-addInventoryRoute("/inventory/items/save", [HttpMethod.POST]);
-addInventoryRoute("/inventory/usage/submit", [HttpMethod.POST]);
-addInventoryRoute("/inventory/usage/pending", [HttpMethod.GET]);
-addInventoryRoute("/inventory/usage/pending/{submissionId}", [HttpMethod.DELETE]);
-addInventoryRoute("/inventory/usage/pending/{submissionId}/approve", [HttpMethod.POST]);
-addInventoryRoute("/inventory/usage/pending/{submissionId}/reject", [HttpMethod.POST]);
-addInventoryRoute("/inventory/import-csv", [HttpMethod.POST]);
-addInventoryRoute("/inventory/locations", [HttpMethod.POST, HttpMethod.DELETE]);
-addInventoryRoute("/inventory/locations/rename", [HttpMethod.POST]);
-addInventoryRoute("/inventory/columns", [HttpMethod.POST]);
-addInventoryRoute("/inventory/column-visibility", [HttpMethod.POST]);
-addInventoryRoute("/inventory/columns/{columnId}/visibility", [HttpMethod.POST]);
-addInventoryRoute("/inventory/columns/{columnId}/label", [HttpMethod.POST]);
-addInventoryRoute("/inventory/columns/{columnId}/type", [HttpMethod.POST]);
-addInventoryRoute("/inventory/columns/reorder", [HttpMethod.POST]);
-addInventoryRoute("/inventory/columns/{columnId}", [HttpMethod.DELETE]);
-addInventoryRoute("/inventory/organization-storage", [HttpMethod.DELETE]);
-addInventoryRoute("/inventory/audit/feed", [HttpMethod.GET]);
-addInventoryRoute("/inventory/audit/item/{itemId}", [HttpMethod.GET]);
-addInventoryRoute("/inventory/audit/analytics", [HttpMethod.GET]);
-addInventoryRoute("/inventory/restock/orders", [HttpMethod.GET, HttpMethod.POST]);
-addInventoryRoute("/inventory/restock/orders/{orderId}/receive", [HttpMethod.POST]);
-addInventoryRoute("/inventory/restock/orders/{orderId}/close", [HttpMethod.POST]);
+// Two catch-all proxy routes replace 34+ per-route registrations.
+// The Lambda already handles routing internally via event.rawPath, so API Gateway
+// only needs to know where to forward requests — not which specific paths exist.
+// This keeps the Lambda resource-based policy at 2 statements instead of 34+,
+// permanently staying under the 20KB AWS limit regardless of future endpoints added.
+inventoryHttpApi.addRoutes({
+  path: "/",
+  methods: [HttpMethod.ANY],
+  integration: inventoryLambdaIntegration,
+  authorizer: inventoryAuthorizer,
+});
+inventoryHttpApi.addRoutes({
+  path: "/{proxy+}",
+  methods: [HttpMethod.ANY],
+  integration: inventoryLambdaIntegration,
+  authorizer: inventoryAuthorizer,
+});
 
 coreHttpApi.addRoutes({
   path: "/user-subscription",

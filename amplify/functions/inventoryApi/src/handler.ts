@@ -2055,8 +2055,8 @@ const handleSubmitUsage = async (storage: InventoryStorage, access: AccessContex
       return json(400, { error: `Entry ${i + 1}: itemId is required.` });
     }
     const quantityUsed = Number(entry?.quantityUsed);
-    if (!Number.isFinite(quantityUsed) || quantityUsed <= 0) {
-      return json(400, { error: "Used quantity must be greater than 0." });
+    if (!Number.isFinite(quantityUsed) || quantityUsed < 0) {
+      return json(400, { error: "Used quantity must be 0 or greater." });
     }
     const location = String(entry?.location ?? "").trim();
     const notes = String(entry?.notes ?? "").trim();

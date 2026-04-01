@@ -3,9 +3,10 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 5173
+      "runtimeExecutable": "/Users/bekahwick/.nvm/versions/node/v20.20.0/bin/npx",
+      "runtimeArgs": ["vite", "--port", "5173"],
+      "port": 5173,
+      "env": { "PATH": "/Users/bekahwick/.nvm/versions/node/v20.20.0/bin:/usr/bin:/bin" }
     }
   ]
 }

@@ -31,7 +31,7 @@ const deploymentEnv = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
 const deployedBranch = process.env.AWS_BRANCH ?? process.env.AMPLIFY_BRANCH ?? "";
 const isDeployed = deployedBranch !== "" || deploymentEnv === "prod" || deploymentEnv === "production";
 const corsAllowedOrigins = isDeployed
-  ? ["https://systems.wickops.com"]
+  ? ["https://systems.wickops.com", "http://localhost:5173"]
   : ["http://localhost:5173"];
 const corsAllowedHeaders = ["Authorization", "Content-Type"];
 const browserCorsMethods = [
@@ -129,6 +129,9 @@ addInventoryRoute("/inventory/organization-storage", [HttpMethod.DELETE]);
 addInventoryRoute("/inventory/audit/feed", [HttpMethod.GET]);
 addInventoryRoute("/inventory/audit/item/{itemId}", [HttpMethod.GET]);
 addInventoryRoute("/inventory/audit/analytics", [HttpMethod.GET]);
+addInventoryRoute("/inventory/restock/orders", [HttpMethod.GET, HttpMethod.POST]);
+addInventoryRoute("/inventory/restock/orders/{orderId}/receive", [HttpMethod.POST]);
+addInventoryRoute("/inventory/restock/orders/{orderId}/close", [HttpMethod.POST]);
 
 coreHttpApi.addRoutes({
   path: "/user-subscription",

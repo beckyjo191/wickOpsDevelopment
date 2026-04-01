@@ -24,7 +24,7 @@ import {
   type RestockReceiveLine,
 } from "../lib/inventoryApi";
 import { QuickAddPage } from "./QuickAddPage";
-import { ReorderTab, type PlaceOrderItem } from "./ReorderTab";
+import { ReorderTab, type OrderItem } from "./ReorderTab";
 
 type OrdersTab = "main" | "quickadd";
 
@@ -76,14 +76,10 @@ type CreateOrderLine = {
 
 function CreateOrderForm({
   rows,
-  initialVendor,
-  initialItems,
   onCreated,
   onCancel,
 }: {
   rows: InventoryRow[];
-  initialVendor?: string;
-  initialItems?: PlaceOrderItem[];
   onCreated: () => void;
   onCancel: () => void;
 }) {
@@ -94,27 +90,33 @@ function CreateOrderForm({
     return { id: crypto.randomUUID(), itemId: "", itemSearch: "", isFreeform: false, qtyOrdered: "", unitCost: "", error: "" };
   }
 
-  const [vendor, setVendor] = useState(initialVendor ?? "");
+  const [vendor, setVendor] = useState("");
   const [notes, setNotes] = useState("");
-  const [lines, setLines] = useState<CreateOrderLine[]>(
-    initialItems?.length
-      ? initialItems.map((r) => ({
-          id: crypto.randomUUID(),
-          itemId: r.itemId,
-          itemSearch: r.itemName,
-          isFreeform: false,
-          qtyOrdered: String(r.suggestedQty),
-          unitCost: "",
-          error: "",
-        }))
-      : [newLine()],
-  );
+  const [lines, setLines] = useState<CreateOrderLine[]>([newLine()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const filteredOptions = (search: string) => {
     const q = search.toLowerCase();
     return rows.filter((r) => getItemName(r).toLowerCase().includes(q)).slice(0, 8);
+  };
+
+  const getRowStockStatus = (r: InventoryRow) => {
+    const qty = Number(r.values.quantity ?? 0);
+    const minRaw = r.values.minQuantity;
+    const min = Number(minRaw);
+    const hasMin = minRaw !== null && minRaw !== undefined && String(minRaw).trim() !== "" && Number.isFinite(min);
+    const isLow = hasMin && Number.isFinite(qty) && qty < min;
+    const expRaw = String(r.values.expirationDate ?? "").trim();
+    let isExpired = false;
+    if (expRaw) {
+      const d = new Date(expRaw);
+      if (!Number.isNaN(d.getTime())) {
+        const today = new Date();
+        isExpired = d < new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      }
+    }
+    return { qty, min: hasMin ? min : null, isLow, isExpired };
   };
 
   const updateLine = (id: string, patch: Partial<CreateOrderLine>) =>
@@ -223,17 +225,26 @@ function CreateOrderForm({
                   />
                   {line.itemSearch && !line.itemId && (
                     <div className="order-item-dropdown">
-                      {filteredOptions(line.itemSearch).map((r) => (
-                        <button
-                          key={r.id}
-                          type="button"
-                          className="order-item-option"
-                          onClick={() => selectItem(line.id, r)}
-                        >
-                          {getItemName(r)}
-                          <span className="order-item-option-qty">Qty: {String(r.values.quantity ?? 0)}</span>
-                        </button>
-                      ))}
+                      {filteredOptions(line.itemSearch).map((r) => {
+                        const { qty, min, isLow, isExpired } = getRowStockStatus(r);
+                        return (
+                          <button
+                            key={r.id}
+                            type="button"
+                            className="order-item-option"
+                            onClick={() => selectItem(line.id, r)}
+                          >
+                            <span className="order-item-option-name">{getItemName(r)}</span>
+                            <span className="order-item-option-meta">
+                              {isExpired && <span className="reorder-item-status reorder-status-expired">Expired</span>}
+                              {isLow && !isExpired && <span className="reorder-item-status reorder-status-lowStock">Low</span>}
+                              <span className="order-item-option-qty">
+                                {min !== null ? `${qty}/${min}` : `Qty: ${qty}`}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
                       {line.itemSearch.trim() && (
                         <button
                           type="button"
@@ -668,8 +679,6 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [createInitialVendor, setCreateInitialVendor] = useState<string | undefined>();
-  const [createInitialItems, setCreateInitialItems] = useState<PlaceOrderItem[] | undefined>();
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [hasExpirationColumn, setHasExpirationColumn] = useState(false);
   const inventoryRowsRef = useRef<InventoryRow[]>([]);
@@ -724,9 +733,25 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
         setInventoryRows(updated);
         inventoryRowsRef.current = updated;
         if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
+
+        const orderItems: OrderItem[] = Array.isArray(event.data.orderItems) ? event.data.orderItems : [];
+        const domain: string = event.data.domain ?? "";
+        if (orderItems.length > 0) {
+          await createRestockOrder({
+            vendor: domain || undefined,
+            items: orderItems.map((item) => ({
+              ...(item.rowId ? { itemId: item.rowId } : {}),
+              itemName: item.name,
+              qtyOrdered: item.qty,
+              ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
+            })),
+          }).catch(() => {});
+          loadOrders();
+        }
       }
     };
     return () => channel.close();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Reorder callbacks (for ReorderTab orderedAt tracking)
@@ -744,7 +769,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
     if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
   }, []);
 
-  const handleMarkOrdered = useCallback(async (rowIds: string[]) => {
+  const handleMarkOrdered = useCallback(async (rowIds: string[], vendor: string, orderItems: OrderItem[]) => {
     const idSet = new Set(rowIds);
     const now = new Date().toISOString();
     const current = inventoryRowsRef.current;
@@ -757,28 +782,22 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
     setInventoryRows(updated);
     inventoryRowsRef.current = updated;
     if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
+
+    if (orderItems.length > 0) {
+      await createRestockOrder({
+        vendor: vendor || undefined,
+        items: orderItems.map((item) => ({
+          ...(item.rowId ? { itemId: item.rowId } : {}),
+          itemName: item.name,
+          qtyOrdered: item.qty,
+          ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
+        })),
+      }).catch(() => {});
+      loadOrders();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleReorderCheck = useCallback(async (rowId: string, checked: boolean) => {
-    const now = new Date().toISOString();
-    const current = inventoryRowsRef.current;
-    const rowIndex = current.findIndex((r) => r.id === rowId);
-    const original = current[rowIndex];
-    if (!original) return;
-    const updatedRow = { ...original, position: rowIndex, values: { ...original.values, reorderCheckedAt: checked ? now : null } };
-    const updated = current.map((r) =>
-      r.id === rowId ? { ...r, values: { ...r.values, reorderCheckedAt: checked ? now : null } } : r,
-    );
-    setInventoryRows(updated);
-    inventoryRowsRef.current = updated;
-    await saveInventoryItems([updatedRow], []);
-  }, []);
-
-  const handlePlaceOrder = useCallback((vendor: string, items: PlaceOrderItem[]) => {
-    setCreateInitialVendor(vendor);
-    setCreateInitialItems(items);
-    setShowCreate(true);
-  }, []);
 
   const openOrders = orders.filter((o) => o.status !== "closed");
   const closedOrders = orders.filter((o) => o.status === "closed");
@@ -808,11 +827,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
             <button
               type="button"
               className="button button-primary button-sm"
-              onClick={() => {
-                setCreateInitialVendor(undefined);
-                setCreateInitialItems(undefined);
-                setShowCreate(true);
-              }}
+              onClick={() => setShowCreate(true)}
               disabled={showCreate}
             >
               <PackagePlus size={14} /> New Order
@@ -822,8 +837,6 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
           {showCreate && (
             <CreateOrderForm
               rows={inventoryRows}
-              initialVendor={createInitialVendor}
-              initialItems={createInitialItems}
               onCreated={() => { setShowCreate(false); loadOrders(); }}
               onCancel={() => setShowCreate(false)}
             />
@@ -859,8 +872,6 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
               rows={inventoryRows}
               onClearOrderedAt={handleClearOrderedAt}
               onMarkOrdered={handleMarkOrdered}
-              onReorderCheck={handleReorderCheck}
-              onPlaceOrder={handlePlaceOrder}
             />
           </div>
 

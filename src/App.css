@@ -4598,6 +4598,13 @@ textarea.inventory-card-input {
   margin-bottom: 0.75rem;
 }
 
+.reorder-vendor-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
 .reorder-vendor-header {
   display: flex;
   align-items: center;
@@ -4921,19 +4928,120 @@ textarea.inventory-card-input {
   margin-top: 2px;
 }
 
-.checklist-done-banner {
-  padding: 0.75rem;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+/* ── Form-style checklist items (qty + cost inputs, used in popup + mobile) ── */
+
+.checklist-items-header {
+  display: grid;
+  grid-template-columns: 22px 1fr 60px 72px;
   gap: 0.5rem;
-  background: var(--surface-alt);
-  color: var(--primary);
+  padding: 0.375rem 1.25rem;
+  font-size: 0.7rem;
   font-weight: 600;
-  font-size: 0.9rem;
+  color: var(--text-muted, #999);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
 }
 
-.checklist-done-banner p {
+.checklist-item--form {
+  display: grid;
+  grid-template-columns: 22px 1fr 60px 72px;
+  gap: 0.5rem;
+  align-items: start;
+}
+
+.checklist-item--raw {
+  grid-template-columns: 16px 1fr 60px 72px 24px;
+}
+
+.checklist-qty-field,
+.checklist-cost-field {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 0.25rem 0.375rem !important;
+  font-size: 0.82rem !important;
+  box-sizing: border-box;
+}
+
+.checklist-raw-name-field {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 0.25rem 0.375rem !important;
+  font-size: 0.82rem !important;
+  box-sizing: border-box;
+}
+
+.checklist-raw-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary, #2472B1);
+  margin-top: 7px;
+  flex-shrink: 0;
+}
+
+.checklist-raw-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 3px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.checklist-raw-remove:hover {
+  color: var(--danger, #dc2626);
+  background: var(--surface-alt);
+}
+
+.checklist-add-raw-btn {
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--primary);
+  font-size: 0.82rem;
+  padding: 0.6rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  text-align: left;
+  flex-shrink: 0;
+}
+.checklist-add-raw-btn:hover {
+  background: var(--surface-alt);
+}
+
+.checklist-done-banner {
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  background: var(--surface-alt);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.checklist-done-banner-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.checklist-done-banner-count {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--primary);
+}
+
+.checklist-done-banner-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
   margin: 0;
 }
 
@@ -5085,11 +5193,29 @@ textarea.inventory-card-input {
 .reorder-mobile-checklist-footer {
   padding: 0.75rem 1rem;
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  flex-shrink: 0;
 }
 
-.reorder-mobile-checklist-footer .button {
-  width: 100%;
-  justify-content: center;
+.reorder-mobile-checklist-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.reorder-mobile-checklist-footer-count {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--primary);
+}
+
+.reorder-mobile-checklist-footer-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0;
 }
 
 @media (max-width: 780px) {
@@ -5488,6 +5614,22 @@ textarea.inventory-card-input {
   color: var(--text-muted);
   cursor: default;
   font-style: italic;
+}
+
+.order-item-option-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.order-item-option-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
 }
 
 .order-item-option-qty {

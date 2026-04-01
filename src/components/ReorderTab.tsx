@@ -1,17 +1,15 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
-import { ShoppingCart, ExternalLink, Link2Off, Package, PackageCheck, Undo2, Check, X } from "lucide-react";
-
-export type PlaceOrderItem = { itemId: string; itemName: string; suggestedQty: number };
+import { Check, ExternalLink, Link2Off, Package, PackageCheck, Plus, ShoppingCart, Undo2, X } from "lucide-react";
 
 interface ReorderTabProps {
   rows: InventoryRow[];
   onEditReorderLink?: (rowId: string) => void;
   onClearOrderedAt?: (rowIds: string[]) => void;
-  onMarkOrdered?: (rowIds: string[]) => void;
-  onReorderCheck?: (rowId: string, checked: boolean) => Promise<void>;
-  onPlaceOrder?: (vendor: string, items: PlaceOrderItem[]) => void;
+  onMarkOrdered?: (rowIds: string[], vendor: string, orderItems: OrderItem[]) => void;
 }
+
+export type OrderItem = { rowId: string | null; name: string; qty: number; unitCost?: number };
 
 const isMobile = () => window.innerWidth <= 780;
 
@@ -25,6 +23,7 @@ type ReorderItem = {
   stockLow: boolean;
   quantity: number;
   minQuantity: number;
+  suggestedQty: number;
 };
 
 type VendorGroup = {
@@ -58,9 +57,7 @@ const getDaysUntilExpiration = (value: string | number | boolean | null | undefi
   return Math.floor((targetStart - todayStart) / (1000 * 60 * 60 * 24));
 };
 
-const handleReorderVendor = (group: VendorGroup) => {
-  // Store checklist data in sessionStorage so we avoid URL length limits
-  // and only need to open ONE window (avoids popup blocker on second window.open)
+const openVendorChecklist = (group: VendorGroup) => {
   const data = {
     domain: group.domain,
     items: group.items.map((item) => ({
@@ -73,6 +70,8 @@ const handleReorderVendor = (group: VendorGroup) => {
       statusType: item.status,
       quantity: item.quantity,
       minQuantity: item.minQuantity,
+      suggestedQty: item.suggestedQty,
+      expirationDate: String(item.row.values.expirationDate ?? ""),
     })),
   };
   const storageKey = `wickops-reorder-${group.domain}`;
@@ -85,9 +84,253 @@ const handleReorderVendor = (group: VendorGroup) => {
   );
 };
 
-export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOrdered, onReorderCheck, onPlaceOrder }: ReorderTabProps) {
+// ── Mobile Checklist Overlay ─────────────────────────────────────────────────
+
+type MobileLineState = { rowId: string; name: string; link: string; checked: boolean; qty: string; unitCost: string };
+type MobileRawLine = { id: string; name: string; qty: string; unitCost: string };
+
+function MobileChecklist({
+  group,
+  onClose,
+  onPlaceOrder,
+}: {
+  group: VendorGroup;
+  onClose: () => void;
+  onPlaceOrder: (rowIds: string[], vendor: string, orderItems: OrderItem[]) => void;
+}) {
+  const [lines, setLines] = useState<MobileLineState[]>(() =>
+    group.items.map((item) => ({
+      rowId: item.row.id,
+      name: item.itemName,
+      link: item.reorderLink,
+      checked: false,
+      qty: String(item.suggestedQty),
+      unitCost: "",
+    })),
+  );
+  const [rawLines, setRawLines] = useState<MobileRawLine[]>([]);
+
+  const toggleLine = (rowId: string) =>
+    setLines((prev) => prev.map((l) => (l.rowId === rowId ? { ...l, checked: !l.checked } : l)));
+
+  const updateLine = (rowId: string, patch: Partial<MobileLineState>) =>
+    setLines((prev) => prev.map((l) => (l.rowId === rowId ? { ...l, ...patch } : l)));
+
+  const updateRaw = (id: string, patch: Partial<MobileRawLine>) =>
+    setRawLines((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+
+  const handleItemClick = (link: string, rowId: string) => {
+    setLines((prev) => prev.map((l) => (l.rowId === rowId ? { ...l, checked: true } : l)));
+    window.open(link, `wickops-vendor-${group.domain}`);
+  };
+
+  const checkedCount =
+    lines.filter((l) => l.checked).length +
+    rawLines.filter((r) => r.name.trim() && Number(r.qty) > 0).length;
+
+  const handlePlaceOrder = () => {
+    const inventoryItems = lines
+      .filter((l) => l.checked)
+      .map((l) => ({
+        rowId: l.rowId,
+        name: l.name,
+        qty: Math.max(1, Number(l.qty) || 1),
+        ...(l.unitCost.trim() ? { unitCost: Number(l.unitCost) } : {}),
+      }));
+    const freeformItems = rawLines
+      .filter((r) => r.name.trim() && Number(r.qty) > 0)
+      .map((r) => ({
+        rowId: null as string | null,
+        name: r.name.trim(),
+        qty: Number(r.qty),
+        ...(r.unitCost.trim() ? { unitCost: Number(r.unitCost) } : {}),
+      }));
+    const checkedRowIds = lines.filter((l) => l.checked).map((l) => l.rowId);
+    onPlaceOrder(checkedRowIds, group.domain, [...inventoryItems, ...freeformItems]);
+    onClose();
+  };
+
+  return (
+    <div className="reorder-mobile-overlay">
+      <div className="reorder-mobile-checklist">
+        <div className="reorder-mobile-checklist-header">
+          <div>
+            <h4 className="reorder-mobile-checklist-title">{group.domain}</h4>
+            <p className="reorder-mobile-checklist-subtitle">
+              {lines.filter((l) => l.checked).length}/{lines.length} items checked
+            </p>
+          </div>
+          <button
+            type="button"
+            className="reorder-mobile-checklist-close"
+            onClick={onClose}
+            aria-label="Close checklist"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="reorder-mobile-checklist-progress">
+          <div
+            className="reorder-mobile-checklist-progress-fill"
+            style={{
+              width: `${lines.length > 0 ? (lines.filter((l) => l.checked).length / lines.length) * 100 : 0}%`,
+            }}
+          />
+        </div>
+        <p className="reorder-mobile-checklist-instructions">
+          Tap an item to open it on {group.domain}. Set qty and price, then place your order.
+        </p>
+
+        <div className="checklist-items">
+          <div className="checklist-items-header">
+            <span />
+            <span>Item</span>
+            <span>Qty</span>
+            <span>Unit Cost</span>
+          </div>
+
+          {lines.map((line) => {
+            const itemData = group.items.find((i) => i.row.id === line.rowId);
+            return (
+              <div key={line.rowId} className={`checklist-item checklist-item--form${line.checked ? " checked" : ""}`}>
+                <button
+                  type="button"
+                  className={`checklist-checkbox${line.checked ? " checked" : ""}`}
+                  onClick={() => toggleLine(line.rowId)}
+                  aria-label={line.checked ? `Uncheck ${line.name}` : `Check ${line.name}`}
+                >
+                  {line.checked && <Check size={14} />}
+                </button>
+                <div className="checklist-item-info">
+                  <button
+                    type="button"
+                    className="checklist-item-name"
+                    onClick={() => handleItemClick(line.link, line.rowId)}
+                    title={`Open ${line.name} on ${group.domain}`}
+                  >
+                    {line.name}
+                    <ExternalLink size={12} />
+                  </button>
+                  {itemData && (
+                    <span className="checklist-item-detail">
+                      {itemData.status === "expired" ? (
+                        <>
+                          {itemData.row.values.expirationDate && (
+                            <span className="reorder-item-status reorder-status-expired">
+                              Exp: {new Date(String(itemData.row.values.expirationDate)).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                            </span>
+                          )}
+                          <span className="reorder-item-status reorder-status-stock">
+                            {itemData.minQuantity > 0 ? `${itemData.quantity}/${itemData.minQuantity}` : `On hand: ${itemData.quantity}`}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="reorder-item-status reorder-status-lowStock">
+                          Low: {itemData.quantity}/{itemData.minQuantity}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
+                <input
+                  className="field checklist-qty-field"
+                  type="number"
+                  min="1"
+                  placeholder="Qty"
+                  value={line.qty}
+                  onChange={(e) => updateLine(line.rowId, { qty: e.target.value })}
+                  onClick={() => !line.checked && toggleLine(line.rowId)}
+                />
+                <input
+                  className="field checklist-cost-field"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="$0.00"
+                  value={line.unitCost}
+                  onChange={(e) => updateLine(line.rowId, { unitCost: e.target.value })}
+                  onClick={() => !line.checked && toggleLine(line.rowId)}
+                />
+              </div>
+            );
+          })}
+
+          {rawLines.map((raw) => (
+            <div key={raw.id} className="checklist-item checklist-item--form checklist-item--raw">
+              <div className="checklist-raw-dot" />
+              <input
+                className="field checklist-raw-name-field"
+                placeholder="Item name"
+                value={raw.name}
+                onChange={(e) => updateRaw(raw.id, { name: e.target.value })}
+              />
+              <input
+                className="field checklist-qty-field"
+                type="number"
+                min="1"
+                placeholder="Qty"
+                value={raw.qty}
+                onChange={(e) => updateRaw(raw.id, { qty: e.target.value })}
+              />
+              <input
+                className="field checklist-cost-field"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="$0.00"
+                value={raw.unitCost}
+                onChange={(e) => updateRaw(raw.id, { unitCost: e.target.value })}
+              />
+              <button
+                type="button"
+                className="checklist-raw-remove"
+                onClick={() => setRawLines((prev) => prev.filter((r) => r.id !== raw.id))}
+                aria-label="Remove"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          className="checklist-add-raw-btn"
+          onClick={() =>
+            setRawLines((prev) => [...prev, { id: crypto.randomUUID(), name: "", qty: "1", unitCost: "" }])
+          }
+        >
+          <Plus size={13} /> Add item not listed
+        </button>
+
+        {checkedCount > 0 && (
+          <div className="reorder-mobile-checklist-footer">
+            <div className="reorder-mobile-checklist-footer-row">
+              <span className="reorder-mobile-checklist-footer-count">
+                {checkedCount} item{checkedCount !== 1 ? "s" : ""} selected
+              </span>
+              <button
+                type="button"
+                className="button button-primary button-sm"
+                onClick={handlePlaceOrder}
+              >
+                Mark as Ordered
+              </button>
+            </div>
+            <p className="reorder-mobile-checklist-footer-hint">
+              Unchecked items will stay in your reorder list.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── ReorderTab ───────────────────────────────────────────────────────────────
+
+export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOrdered }: ReorderTabProps) {
   const [reorderedVendors, setReorderedVendors] = useState<Set<string>>(new Set());
-  const [savingRowId, setSavingRowId] = useState<string | null>(null);
 
   const { vendorGroups, noLinkItems, orderedItems } = useMemo(() => {
     const reorderItems: ReorderItem[] = [];
@@ -119,9 +362,10 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
         ? `Expired ${Math.abs(daysUntil!)}d ago`
         : `Low: ${quantity}/${minQuantity}`;
       const stockLabel = isExpired
-        ? `${quantity}${hasMin ? `/${minQuantity}` : ""} in stock`
+        ? hasMin ? `${quantity}/${minQuantity}` : `On hand: ${quantity}`
         : "";
       const stockLow = isLowStock;
+      const suggestedQty = Math.max(1, hasMin && minQuantity > quantity ? Math.ceil(minQuantity - quantity) : 1);
 
       const item: ReorderItem = {
         row,
@@ -133,9 +377,9 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
         stockLow,
         quantity,
         minQuantity,
+        suggestedQty,
       };
 
-      // Items with orderedAt go to the ordered section
       if (row.values.orderedAt) {
         ordered.push(item);
       } else if (reorderLink) {
@@ -145,7 +389,6 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
       }
     }
 
-    // Group by vendor domain
     const groupMap = new Map<string, ReorderItem[]>();
     for (const item of reorderItems) {
       const domain = getVendorDomain(item.reorderLink);
@@ -169,27 +412,13 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
   const [mobileChecklistDomain, setMobileChecklistDomain] = useState<string | null>(null);
   const autoOpenedRef = useRef(false);
 
-  // Auto-open checklist if returning from vendor (items have reorderCheckedAt)
-  if (!autoOpenedRef.current && isMobile() && vendorGroups.length > 0) {
-    const group = vendorGroups.find((g) =>
-      g.items.some((item) => item.row.values.reorderCheckedAt)
-    );
-    if (group) {
-      autoOpenedRef.current = true;
-      // Set state synchronously during render to avoid flash
-      if (mobileChecklistDomain !== group.domain) {
-        setMobileChecklistDomain(group.domain);
-      }
-    }
-  }
-
-  const handleReorder = useCallback((group: VendorGroup) => {
+  const handleReorder = (group: VendorGroup) => {
     if (isMobile()) {
       setMobileChecklistDomain(group.domain);
     } else {
-      handleReorderVendor(group);
+      openVendorChecklist(group);
     }
-  }, []);
+  };
 
   const handleReorderAll = () => {
     for (const group of vendorGroups) {
@@ -243,34 +472,18 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
                 {group.items.length} item{group.items.length !== 1 ? "s" : ""}
               </span>
             </div>
-            {onPlaceOrder ? (
-              <button
-                type="button"
-                className="button button-primary button-sm"
-                onClick={() => onPlaceOrder(
-                  group.domain,
-                  group.items.map((item) => ({
-                    itemId: item.row.id,
-                    itemName: item.itemName,
-                    suggestedQty: Math.max(1, item.minQuantity > item.quantity ? Math.ceil(item.minQuantity - item.quantity) : 1),
-                  })),
-                )}
-              >
-                <ShoppingCart size={14} /> Place Order
-              </button>
-            ) : (
-              <button
-                type="button"
-                className={`button ${reorderedVendors.has(group.domain) ? "button-secondary" : "button-primary"} button-sm`}
-                onClick={() => {
-                  handleReorder(group);
-                  setReorderedVendors((prev) => new Set(prev).add(group.domain));
-                }}
-              >
-                <ExternalLink size={14} />
-                {reorderedVendors.has(group.domain) ? "Reopen" : "Reorder"}
-              </button>
-            )}
+            <button
+              type="button"
+              className={`button ${reorderedVendors.has(group.domain) ? "button-secondary" : "button-ghost"} button-sm`}
+              onClick={() => {
+                handleReorder(group);
+                setReorderedVendors((prev) => new Set(prev).add(group.domain));
+              }}
+              title="Open vendor checklist"
+            >
+              <ExternalLink size={14} />
+              {reorderedVendors.has(group.domain) ? "Reopen" : "Order"}
+            </button>
           </div>
           {(() => {
             const expired = group.items.filter((i) => i.status === "expired");
@@ -381,113 +594,12 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
       {mobileChecklistDomain && (() => {
         const group = vendorGroups.find((g) => g.domain === mobileChecklistDomain);
         if (!group) return null;
-        const checkedCount = group.items.filter((item) => item.row.values.reorderCheckedAt).length;
         return (
-          <div className="reorder-mobile-overlay">
-            <div className="reorder-mobile-checklist">
-              <div className="reorder-mobile-checklist-header">
-                <div>
-                  <h4 className="reorder-mobile-checklist-title">{group.domain}</h4>
-                  <p className="reorder-mobile-checklist-subtitle">
-                    {checkedCount}/{group.items.length} items checked
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="reorder-mobile-checklist-close"
-                  onClick={() => setMobileChecklistDomain(null)}
-                  aria-label="Close checklist"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-              <div className="reorder-mobile-checklist-progress">
-                <div
-                  className="reorder-mobile-checklist-progress-fill"
-                  style={{ width: `${group.items.length > 0 ? (checkedCount / group.items.length) * 100 : 0}%` }}
-                />
-              </div>
-              <p className="reorder-mobile-checklist-instructions">
-                Tap an item to open it on {group.domain}. Use your browser's back button to return here.
-              </p>
-              <div className="reorder-mobile-checklist-items">
-                {group.items.map((item) => {
-                  const isChecked = !!item.row.values.reorderCheckedAt;
-                  const isSaving = savingRowId === item.row.id;
-                  return (
-                    <div key={item.row.id} className={`reorder-mobile-checklist-item${isChecked ? " checked" : ""}`}>
-                      <button
-                        type="button"
-                        className={`reorder-mobile-checkbox${isChecked ? " checked" : ""}`}
-                        disabled={isSaving}
-                        onClick={async () => {
-                          if (!onReorderCheck) return;
-                          setSavingRowId(item.row.id);
-                          try {
-                            await onReorderCheck(item.row.id, !isChecked);
-                          } finally {
-                            setSavingRowId(null);
-                          }
-                        }}
-                      >
-                        {isChecked && <Check size={14} />}
-                      </button>
-                      <button
-                        type="button"
-                        className="reorder-mobile-checklist-item-info"
-                        disabled={isSaving}
-                        onClick={async () => {
-                          if (onReorderCheck && !isChecked) {
-                            setSavingRowId(item.row.id);
-                            try {
-                              await onReorderCheck(item.row.id, true);
-                            } finally {
-                              setSavingRowId(null);
-                            }
-                          }
-                          window.location.href = item.reorderLink;
-                        }}
-                      >
-                        <span className="reorder-mobile-checklist-item-name">
-                          {item.itemName}
-                          {isSaving
-                            ? <span className="app-spinner" style={{ width: 12, height: 12 }} />
-                            : <ExternalLink size={12} />}
-                        </span>
-                        <span className="reorder-mobile-checklist-item-detail">
-                          <span className={`reorder-item-status reorder-status-${item.status}`}>
-                            {item.statusLabel}
-                          </span>
-                          {item.stockLabel && (
-                            <span className={`reorder-item-status ${item.stockLow ? "reorder-status-lowStock" : "reorder-status-stock"}`}>
-                              {item.stockLabel}
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-              {checkedCount > 0 && onMarkOrdered && (
-                <div className="reorder-mobile-checklist-footer">
-                  <button
-                    type="button"
-                    className="button button-primary"
-                    onClick={() => {
-                      const checkedRowIds = group.items
-                        .filter((item) => item.row.values.reorderCheckedAt)
-                        .map((item) => item.row.id);
-                      onMarkOrdered(checkedRowIds);
-                      setMobileChecklistDomain(null);
-                    }}
-                  >
-                    Mark as Ordered
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
+          <MobileChecklist
+            group={group}
+            onClose={() => setMobileChecklistDomain(null)}
+            onPlaceOrder={onMarkOrdered ?? (() => {})}
+          />
         );
       })()}
 

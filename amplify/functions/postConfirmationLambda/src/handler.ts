@@ -53,7 +53,7 @@ const countPendingInvites = async (organizationId: string, tableName: string): P
 };
 
 export const handler: Handler = async (event) => {
-  console.log("PostConfirmation event:", JSON.stringify(event, null, 2));
+  console.log("PostConfirmation trigger:", event.userName, event.triggerSource);
 
   const email = event.request.userAttributes?.email;
   if (!email) throw new Error("Email attribute missing");

@@ -283,6 +283,7 @@ if (userPool) {
     }),
   );
   inventoryApiLambda.addEnvironment("USER_POOL_ID", userPool.userPoolId);
+  backend.sendInvites.resources.lambda.addEnvironment("USER_POOL_ID", userPool.userPoolId);
   inventoryApiLambda.addToRolePolicy(
     new PolicyStatement({
       actions: [

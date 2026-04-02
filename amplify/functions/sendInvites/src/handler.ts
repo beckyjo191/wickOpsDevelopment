@@ -31,11 +31,7 @@ type InviteRequest = {
   invites?: InviteInput[];
 };
 
-const parseUserPoolIdFromIssuer = (iss?: string): string | null => {
-  if (!iss) return null;
-  const parts = iss.split("/");
-  return parts[parts.length - 1] || null;
-};
+const USER_POOL_ID = process.env.USER_POOL_ID ?? "";
 
 const countOrgUsers = async (organizationId: string): Promise<number> => {
   const result = await ddb.send(
@@ -120,9 +116,8 @@ export const handler = async (event: any) => {
       event.requestContext?.authorizer?.claims;
 
     const requesterUserId = claims?.sub;
-    const userPoolId = parseUserPoolIdFromIssuer(claims?.iss);
 
-    if (!requesterUserId || !userPoolId) {
+    if (!requesterUserId || !USER_POOL_ID) {
       return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
     }
 
@@ -208,7 +203,7 @@ export const handler = async (event: any) => {
       try {
         await cognito.send(
           new AdminCreateUserCommand({
-            UserPoolId: userPoolId,
+            UserPoolId: USER_POOL_ID,
             Username: email,
             DesiredDeliveryMediums: ["EMAIL"],
             UserAttributes: [
@@ -242,7 +237,7 @@ export const handler = async (event: any) => {
         console.error("Invite failed", { email, error });
         failed.push({
           email,
-          error: error?.name ?? error?.message ?? "Unknown error",
+          error: "Failed to send invite",
         });
       }
     }
@@ -259,7 +254,7 @@ export const handler = async (event: any) => {
     console.error("sendInvites error", error);
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: error?.message ?? "Internal server error" }),
+      body: JSON.stringify({ error: "Internal server error" }),
     };
   }
 };

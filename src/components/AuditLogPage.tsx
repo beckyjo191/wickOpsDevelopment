@@ -25,12 +25,27 @@ interface AuditLogPageProps {
 }
 
 const ACTION_LABELS: Record<string, string> = {
+  ITEM_CREATE: "Added",
+  ITEM_EDIT: "Updated",
+  ITEM_DELETE: "Deleted",
+  ITEM_MOVE: "Moved",
+  ITEM_RESTOCK: "Restocked",
+  ITEM_QTY_ADJUST: "Adjusted qty",
+  USAGE_SUBMIT: "Usage logged",
+  USAGE_APPROVE: "Usage approved",
+  USAGE_REJECT: "Usage rejected",
+  COLUMN_CREATE: "Column added",
+  COLUMN_DELETE: "Column deleted",
+  COLUMN_UPDATE: "Column updated",
+  CSV_IMPORT: "CSV import",
+  TEMPLATE_APPLY: "Template applied",
+};
+
+// Labels for filter menu (more descriptive)
+const FILTER_LABELS: Record<string, string> = {
   ITEM_CREATE: "Added item",
   ITEM_EDIT: "Updated item",
   ITEM_DELETE: "Deleted item",
-  ITEM_MOVE: "Moved item",
-  ITEM_RESTOCK: "Restocked",
-  ITEM_QTY_ADJUST: "Adjusted qty",
   USAGE_SUBMIT: "Submitted usage",
   USAGE_APPROVE: "Approved usage",
   USAGE_REJECT: "Rejected usage",
@@ -44,23 +59,21 @@ const ACTION_LABELS: Record<string, string> = {
 const FIELD_LABELS: Record<string, string> = {
   itemName: "Name",
   quantity: "Qty",
-  minQuantity: "Min Qty",
-  expirationDate: "Expires",
-  orderedAt: "Ordered At",
+  minQuantity: "Min",
+  expirationDate: "Exp",
+  orderedAt: "Ordered",
   notes: "Notes",
   position: "Position",
 };
 
 function humanizeFieldName(field: string): string {
   if (FIELD_LABELS[field]) return FIELD_LABELS[field];
-  // camelCase → Title Case
   return field.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
 }
 
 function formatFieldValue(field: string, value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   const str = String(value);
-  // Detect ISO date strings
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(str)) {
     const isDateOnlyField = field === "expirationDate";
     const d = new Date(str);
@@ -83,9 +96,7 @@ function deriveAction(event: AuditEvent): DerivedAction {
     : [];
   const fields = changes.map((c) => c.field);
   const nonPositionFields = fields.filter((f) => f !== "position");
-
   if (fields.length > 0 && nonPositionFields.length === 0) return "ITEM_MOVE";
-
   if (nonPositionFields.length === 1 && nonPositionFields[0] === "quantity") {
     const qtyChange = changes.find((c) => c.field === "quantity");
     if (qtyChange) {
@@ -95,7 +106,6 @@ function deriveAction(event: AuditEvent): DerivedAction {
       if (to < from) return "ITEM_QTY_ADJUST";
     }
   }
-
   return "ITEM_EDIT";
 }
 
@@ -116,24 +126,12 @@ const ACTION_COLORS: Record<string, string> = {
   TEMPLATE_APPLY: "var(--primary)",
 };
 
-// Only include "real" backend actions in the filter menu (not derived display-only ones)
 const ALL_ACTIONS = [
   "ITEM_CREATE", "ITEM_EDIT", "ITEM_DELETE",
   "USAGE_SUBMIT", "USAGE_APPROVE", "USAGE_REJECT",
   "COLUMN_CREATE", "COLUMN_DELETE", "COLUMN_UPDATE",
   "CSV_IMPORT", "TEMPLATE_APPLY",
 ];
-
-function formatTimestamp(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  if (diffMs < 60000) return "just now";
-  if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
-  if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)}h ago`;
-  if (diffMs < 604800000) return `${Math.floor(diffMs / 86400000)}d ago`;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -150,132 +148,181 @@ function dayGroupLabel(iso: string): string {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
-function AuditEventCard({ event, onViewItemHistory }: { event: AuditEvent; onViewItemHistory?: (itemId: string, itemName: string) => void }) {
+function buildEventDetail(event: AuditEvent): string {
   const derivedAction = deriveAction(event);
-  const label = ACTION_LABELS[derivedAction] ?? ACTION_LABELS[event.action] ?? event.action;
-  const color = ACTION_COLORS[derivedAction] ?? ACTION_COLORS[event.action] ?? "var(--text-muted)";
   const details = event.details ?? {};
+  const parts: string[] = [];
 
-  // For ITEM_EDIT variants, filter out position changes (noise) and format fields.
-  // For restocks, also filter quantity since we show it as "+N received" in the snapshot line.
-  const visibleChanges = event.action === "ITEM_EDIT" && Array.isArray(details.changes)
-    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>).filter((c) => {
-        if (c.field === "position") return false;
-        if (c.field === "quantity" && deriveAction(event) === "ITEM_RESTOCK") return false;
-        return true;
-      })
-    : [];
-
-  // Snapshot context line — suppressed for moves (not meaningful for list reordering)
-  const snapshotParts: string[] = [];
-  if (derivedAction !== "ITEM_MOVE") {
-    const snapshot = (details.snapshot ?? {}) as Record<string, unknown>;
-    // Fall back to initialValues (ITEM_CREATE) or deletedValues (ITEM_DELETE)
-    const snapshotSource: Record<string, unknown> =
-      Object.keys(snapshot).length > 0
-        ? snapshot
-        : event.action === "ITEM_DELETE"
-          ? ((details.deletedValues ?? {}) as Record<string, unknown>)
-          : ((details.initialValues ?? {}) as Record<string, unknown>);
+  if (event.action === "ITEM_EDIT") {
+    const changes = Array.isArray(details.changes)
+      ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
+      : [];
 
     if (derivedAction === "ITEM_RESTOCK") {
-      // Show how many units were received, not the old stock's expiration
-      const qtyChange = visibleChanges.find((c) => c.field === "quantity");
+      const qtyChange = changes.find((c) => c.field === "quantity");
       if (qtyChange) {
         const delta = Number(qtyChange.to ?? 0) - Number(qtyChange.from ?? 0);
-        if (delta > 0) snapshotParts.push(`+${delta} received`);
+        if (delta > 0) parts.push(`+${delta} received`);
       }
-      const minQty = snapshotSource.minQuantity;
-      if (minQty !== undefined && minQty !== null) snapshotParts.push(`min ${minQty}`);
+    } else if (derivedAction === "ITEM_QTY_ADJUST") {
+      const qtyChange = changes.find((c) => c.field === "quantity");
+      if (qtyChange) {
+        parts.push(`Qty: ${formatFieldValue("quantity", qtyChange.from)} → ${formatFieldValue("quantity", qtyChange.to)}`);
+      }
     } else {
-      if (snapshotSource.quantity !== undefined && snapshotSource.quantity !== null) {
-        const qty = String(snapshotSource.quantity);
-        const minQty = snapshotSource.minQuantity !== undefined && snapshotSource.minQuantity !== null
-          ? String(snapshotSource.minQuantity)
-          : null;
-        snapshotParts.push(minQty ? `Qty: ${qty} (min ${minQty})` : `Qty: ${qty}`);
-      }
-      if (snapshotSource.expirationDate && String(snapshotSource.expirationDate).trim()) {
-        snapshotParts.push(`Exp: ${formatFieldValue("expirationDate", snapshotSource.expirationDate)}`);
+      const visible = changes.filter((c) => c.field !== "position");
+      for (const c of visible) {
+        parts.push(`${humanizeFieldName(c.field)}: ${formatFieldValue(c.field, c.from)} → ${formatFieldValue(c.field, c.to)}`);
       }
     }
+  } else if (event.action === "ITEM_CREATE") {
+    const snap = (details.initialValues ?? details.snapshot ?? {}) as Record<string, unknown>;
+    if (snap.quantity !== undefined && snap.quantity !== null) parts.push(`Qty: ${snap.quantity}`);
+    if (snap.minQuantity !== undefined && snap.minQuantity !== null) parts.push(`Min: ${snap.minQuantity}`);
+    if (snap.expirationDate) parts.push(`Exp: ${formatFieldValue("expirationDate", snap.expirationDate)}`);
+  } else if (event.action === "ITEM_DELETE") {
+    const snap = (details.deletedValues ?? details.snapshot ?? {}) as Record<string, unknown>;
+    if (snap.quantity !== undefined && snap.quantity !== null) parts.push(`Qty: ${snap.quantity}`);
+  } else if (event.action === "USAGE_SUBMIT") {
+    if (details.quantityUsed !== undefined) parts.push(`Used: ${String(details.quantityUsed)}`);
+    if (details.notes) parts.push(`"${String(details.notes)}"`);
+  } else if (event.action === "USAGE_APPROVE") {
+    parts.push(`Qty: ${String(details.quantityBefore ?? "?")} → ${String(details.quantityAfter ?? "?")} (used ${String(details.quantityUsed ?? "?")})`);
+    if (details.submittedByEmail) parts.push(`by ${String(details.submittedByEmail)}`);
+  } else if (event.action === "USAGE_REJECT" && details.reason) {
+    parts.push(`"${String(details.reason)}"`);
+  } else if (event.action === "CSV_IMPORT") {
+    parts.push(`${String(details.rowsCreated ?? 0)} created, ${String(details.rowsUpdated ?? 0)} updated`);
   }
 
+  return parts.join(" · ");
+}
+
+// ── Compact event row ─────────────────────────────────────────────────────────
+
+function AuditEventRow({
+  event,
+  onViewItemHistory,
+  showDate = false,
+}: {
+  event: AuditEvent;
+  onViewItemHistory?: (itemId: string, name: string) => void;
+  showDate?: boolean;
+}) {
+  const derivedAction = deriveAction(event);
+  const actionLabel = ACTION_LABELS[derivedAction] ?? event.action;
+  const color = ACTION_COLORS[derivedAction] ?? "var(--text-muted)";
+  const detail = buildEventDetail(event);
+  const d = new Date(event.timestamp);
+  const timeStr = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
   return (
-    <div className="audit-event-card">
-      <div className="audit-event-indicator" style={{ backgroundColor: color }} />
-      <div className="audit-event-body">
-        <div className="audit-event-header">
-          <span className="audit-event-action" style={{ color }}>{label}</span>
-          {event.itemName && (
-            <button
-              type="button"
-              className="audit-event-item-link"
-              onClick={() => event.itemId && onViewItemHistory?.(event.itemId, event.itemName!)}
-              title="View item history"
-            >
-              {event.itemName}
-            </button>
-          )}
-          <span className="audit-event-time" title={new Date(event.timestamp).toLocaleString()}>
-            {formatTimestamp(event.timestamp)}
-          </span>
-        </div>
-        <div className="audit-event-user">
-          <User size={12} />
-          <span>{event.userName || event.userEmail}</span>
-          {snapshotParts.length > 0 && (
-            <span className="audit-event-snapshot">{snapshotParts.join("  ·  ")}</span>
-          )}
-        </div>
-        {visibleChanges.length > 0 && (
-          <div className="audit-event-changes">
-            {visibleChanges.map((c, i) => (
-              <span key={i} className="audit-change-chip">
-                <strong>{humanizeFieldName(c.field)}</strong>
-                {": "}
-                {formatFieldValue(c.field, c.from)} → {formatFieldValue(c.field, c.to)}
-              </span>
-            ))}
-          </div>
-        )}
-        {event.action === "USAGE_SUBMIT" && (
-          <div className="audit-event-changes">
-            <span className="audit-change-chip">
-              Used: {String(details.quantityUsed ?? "?")}
-            </span>
-            {details.notes ? (
-              <span className="audit-change-chip">Note: {String(details.notes)}</span>
-            ) : null}
-          </div>
-        )}
-        {event.action === "USAGE_APPROVE" && (
-          <div className="audit-event-changes">
-            <span className="audit-change-chip">
-              Qty: {String(details.quantityBefore ?? "?")} → {String(details.quantityAfter ?? "?")}
-              {" "}(used {String(details.quantityUsed ?? "?")})
-            </span>
-            {details.submittedByEmail ? (
-              <span className="audit-change-chip">By: {String(details.submittedByEmail)}</span>
-            ) : null}
-          </div>
-        )}
-        {event.action === "USAGE_REJECT" && details.reason ? (
-          <div className="audit-event-changes">
-            <span className="audit-change-chip">Reason: {String(details.reason)}</span>
-          </div>
+    <div className="audit-event-row">
+      <span className="audit-event-row-time">
+        {showDate ? formatDate(event.timestamp) : timeStr}
+      </span>
+      <span className="audit-event-row-action" style={{ color }}>{actionLabel}</span>
+      <div className="audit-event-row-center">
+        {event.itemName ? (
+          <button
+            type="button"
+            className="audit-event-item-link"
+            onClick={() => event.itemId && onViewItemHistory?.(event.itemId, event.itemName!)}
+            title="View item history"
+          >
+            {event.itemName}
+          </button>
         ) : null}
-        {event.action === "CSV_IMPORT" && (
-          <div className="audit-event-changes">
-            <span className="audit-change-chip">
-              {String(details.rowsCreated ?? 0)} created, {String(details.rowsUpdated ?? 0)} updated
-            </span>
-          </div>
-        )}
+        {detail && <span className="audit-event-row-detail">{detail}</span>}
+      </div>
+      <span className="audit-event-row-user">
+        <User size={11} />
+        {event.userName || event.userEmail}
+      </span>
+    </div>
+  );
+}
+
+// ── Day report card ───────────────────────────────────────────────────────────
+
+const SUMMARY_ORDER: Array<[string, string]> = [
+  ["ITEM_RESTOCK", "restocked"],
+  ["ITEM_CREATE", "added"],
+  ["ITEM_QTY_ADJUST", "adjusted"],
+  ["ITEM_EDIT", "updated"],
+  ["ITEM_DELETE", "deleted"],
+  ["USAGE_APPROVE", "usage approved"],
+  ["USAGE_SUBMIT", "usage logged"],
+  ["CSV_IMPORT", "CSV import"],
+  ["TEMPLATE_APPLY", "template applied"],
+];
+
+function buildDaySummary(events: AuditEvent[]): string {
+  const counts: Record<string, number> = {};
+  for (const e of events) {
+    const a = deriveAction(e);
+    counts[a] = (counts[a] ?? 0) + 1;
+  }
+  const parts: string[] = [];
+  for (const [key, label] of SUMMARY_ORDER) {
+    if (counts[key]) parts.push(`${counts[key]} ${label}`);
+  }
+  if (parts.length === 0) return `${events.length} event${events.length !== 1 ? "s" : ""}`;
+  const shown = parts.slice(0, 3);
+  if (parts.length > 3) shown.push(`+${parts.length - 3} more`);
+  return shown.join(" · ");
+}
+
+function DayReport({
+  label,
+  events,
+  onViewItemHistory,
+}: {
+  label: string;
+  events: AuditEvent[];
+  onViewItemHistory?: (itemId: string, name: string) => void;
+}) {
+  const uniqueUsers = new Set(events.map((e) => e.userName || e.userEmail)).size;
+  const summary = buildDaySummary(events);
+
+  return (
+    <div className="audit-day-report app-card">
+      <div className="audit-day-report-header">
+        <span className="audit-day-report-label">{label}</span>
+        <span className="audit-day-report-summary">{summary}</span>
+        <span className="audit-day-report-users">
+          <User size={11} />
+          {uniqueUsers}
+        </span>
+      </div>
+      <div className="audit-day-report-rows">
+        {events.map((event) => (
+          <AuditEventRow
+            key={event.eventId}
+            event={event}
+            onViewItemHistory={onViewItemHistory}
+          />
+        ))}
       </div>
     </div>
   );
 }
+
+function groupEventsByDay(events: AuditEvent[]): Array<{ label: string; events: AuditEvent[] }> {
+  const groups: Array<{ label: string; events: AuditEvent[] }> = [];
+  for (const event of events) {
+    const label = dayGroupLabel(event.timestamp);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) {
+      last.events.push(event);
+    } else {
+      groups.push({ label, events: [event] });
+    }
+  }
+  return groups;
+}
+
+// ── Analytics sub-components ──────────────────────────────────────────────────
 
 function SimpleBarChart({ data, labelKey, valueKey, title }: {
   data: Array<Record<string, unknown>>;
@@ -285,7 +332,6 @@ function SimpleBarChart({ data, labelKey, valueKey, title }: {
 }) {
   if (!data.length) return <p className="audit-empty">No data for this period.</p>;
   const max = Math.max(...data.map((d) => Number(d[valueKey] ?? 0)), 1);
-
   return (
     <div className="audit-chart-card">
       <h4 className="audit-chart-title">{title}</h4>
@@ -320,7 +366,6 @@ function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: numbe
     val: d.totalUsed,
   }));
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
-
   return (
     <div className="audit-chart-card audit-chart-card--line">
       <h4 className="audit-chart-title">Usage Over Time</h4>
@@ -340,6 +385,8 @@ function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: numbe
   );
 }
 
+// ── Main page ─────────────────────────────────────────────────────────────────
+
 export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
   const [tab, setTab] = useState<AuditTab>("feed");
   const [events, setEvents] = useState<AuditEvent[]>([]);
@@ -349,41 +396,37 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
   const [actionFilter, setActionFilter] = useState<string[]>([]);
   const [showFilterMenu, setShowFilterMenu] = useState(false);
 
-  // Item history state
   const [historyItemId, setHistoryItemId] = useState<string | null>(null);
   const [historyItemName, setHistoryItemName] = useState("");
   const [historyEvents, setHistoryEvents] = useState<AuditEvent[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Analytics state
   const [analytics, setAnalytics] = useState<AuditAnalytics | null>(null);
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d" | "90d">("30d");
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
-  const loadFeed = useCallback(async (append = false) => {
+  const loadFeed = useCallback(async (append = false, cursor?: string | null) => {
     setLoading(true);
     setError(null);
     try {
       const filterStr = actionFilter.length > 0 ? actionFilter.join(",") : undefined;
       const res = await fetchAuditFeed({
         limit: 50,
-        startAfter: append ? (events[events.length - 1]?.timestamp ?? undefined) : undefined,
+        ...(append && cursor ? { cursor } : {}),
         action: filterStr,
       });
-      setEvents(append ? [...events, ...(res.events ?? [])] : (res.events ?? []));
+      setEvents((prev) => append ? [...prev, ...(res.events ?? [])] : (res.events ?? []));
       setNextCursor(res.nextCursor);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to load audit feed.");
+      setError(err instanceof Error ? err.message : "Failed to load activity.");
     } finally {
       setLoading(false);
     }
-  }, [actionFilter, events]);
+  }, [actionFilter]);
 
   useEffect(() => {
-    if (tab === "feed") {
-      loadFeed(false);
-    }
+    if (tab === "feed") loadFeed(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, actionFilter]);
 
@@ -431,6 +474,9 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
     );
   };
 
+  const feedGroups = groupEventsByDay(events);
+  const historyGroups = groupEventsByDay(historyEvents);
+
   return (
     <section className="app-page audit-page">
       <div className="audit-tabs">
@@ -473,7 +519,7 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
                         checked={actionFilter.includes(action)}
                         onChange={() => toggleFilter(action)}
                       />
-                      {ACTION_LABELS[action]}
+                      {FILTER_LABELS[action] ?? ACTION_LABELS[action]}
                     </label>
                   ))}
                   {actionFilter.length > 0 && (
@@ -500,17 +546,14 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
             </div>
           )}
 
-          {events.map((event, i) => {
-            const label = dayGroupLabel(event.timestamp);
-            const prevLabel = i > 0 ? dayGroupLabel(events[i - 1].timestamp) : null;
-            const showGroup = label !== prevLabel;
-            return (
-              <div key={event.eventId}>
-                {showGroup && <div className="audit-day-group">{label}</div>}
-                <AuditEventCard event={event} onViewItemHistory={viewItemHistory} />
-              </div>
-            );
-          })}
+          {feedGroups.map((group) => (
+            <DayReport
+              key={group.label}
+              label={group.label}
+              events={group.events}
+              onViewItemHistory={viewItemHistory}
+            />
+          ))}
 
           {loading && (
             <div className="audit-loading">
@@ -522,7 +565,7 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
             <button
               type="button"
               className="button button-ghost audit-load-more"
-              onClick={() => loadFeed(true)}
+              onClick={() => loadFeed(true, nextCursor)}
             >
               Load more
             </button>
@@ -540,7 +583,7 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
             <ChevronLeft size={14} /> Back to Activity
           </button>
           <h3 className="audit-item-history-title">
-            <Package size={18} /> History: {historyItemName}
+            <Package size={18} /> {historyItemName}
           </h3>
 
           {historyLoading && historyEvents.length === 0 && (
@@ -554,17 +597,13 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
             </div>
           )}
 
-          {historyEvents.map((event, i) => {
-            const label = dayGroupLabel(event.timestamp);
-            const prevLabel = i > 0 ? dayGroupLabel(historyEvents[i - 1].timestamp) : null;
-            const showGroup = label !== prevLabel;
-            return (
-              <div key={event.eventId}>
-                {showGroup && <div className="audit-day-group">{label}</div>}
-                <AuditEventCard event={event} />
-              </div>
-            );
-          })}
+          {historyGroups.map((group) => (
+            <DayReport
+              key={group.label}
+              label={group.label}
+              events={group.events}
+            />
+          ))}
 
           {!historyLoading && historyCursor && (
             <button
@@ -608,22 +647,9 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
                   </div>
                 </div>
               </div>
-
               <UsageLineChart data={analytics.usageOverTime} />
-
-              <SimpleBarChart
-                data={analytics.userComparison}
-                labelKey="name"
-                valueKey="total"
-                title="Activity by User"
-              />
-
-              <SimpleBarChart
-                data={analytics.topItems}
-                labelKey="itemName"
-                valueKey="changeCount"
-                title="Most Active Items"
-              />
+              <SimpleBarChart data={analytics.userComparison} labelKey="name" valueKey="total" title="Activity by User" />
+              <SimpleBarChart data={analytics.topItems} labelKey="itemName" valueKey="changeCount" title="Most Active Items" />
             </>
           )}
         </div>

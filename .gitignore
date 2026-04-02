@@ -23,6 +23,11 @@ dist-ssr
 *.sln
 *.sw?
 
+# environment files
+.env
+.env.*
+!.env.example
+
 # amplify
 .amplify
 amplify_outputs*

@@ -207,7 +207,7 @@ export const saveInventoryItemsSync = (
 ): void => {
   const token = getCachedAuthToken();
   if (!token) return;
-  const base = normalizeBaseUrl(import.meta.env.VITE_INVENTORY_API_URL);
+  const base = normalizeBaseUrl(import.meta.env.VITE_INVENTORY_API_BASE_URL);
   if (!base) return;
   try {
     fetch(`${base}/inventory/items/save`, {
@@ -934,6 +934,7 @@ export type AuditAnalytics = {
 
 export const fetchAuditFeed = async (params: {
   limit?: number;
+  cursor?: string;
   startAfter?: string;
   endBefore?: string;
   action?: string;
@@ -941,6 +942,7 @@ export const fetchAuditFeed = async (params: {
 }): Promise<AuditFeedResponse> => {
   const qs = new URLSearchParams();
   if (params.limit) qs.set("limit", String(params.limit));
+  if (params.cursor) qs.set("cursor", params.cursor);
   if (params.startAfter) qs.set("startAfter", params.startAfter);
   if (params.endBefore) qs.set("endBefore", params.endBefore);
   if (params.action) qs.set("action", params.action);

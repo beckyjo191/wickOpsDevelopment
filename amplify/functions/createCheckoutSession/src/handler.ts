@@ -70,6 +70,12 @@ export const handler = async (event: any) => {
     if (!userRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "User not found" }) };
     const user = userRes.Item;
 
+    // Only OWNER or ADMIN can manage billing
+    const role = String(user.role ?? "").toUpperCase();
+    if (role !== "OWNER" && role !== "ADMIN" && role !== "ACCOUNT_OWNER") {
+      return { statusCode: 403, body: JSON.stringify({ error: "Only account owners and admins can manage billing" }) };
+    }
+
     if (!user.organizationId) {
       return { statusCode: 500, body: JSON.stringify({ error: "User missing organizationId" }) };
     }
@@ -133,6 +139,6 @@ export const handler = async (event: any) => {
     return { statusCode: 200, body: JSON.stringify({ url: session.url }) };
   } catch (err: any) {
     console.error("createCheckoutSession error:", err);
-    return { statusCode: 500, body: JSON.stringify({ error: err.message ?? String(err) }) };
+    return { statusCode: 500, body: JSON.stringify({ error: "Internal server error" }) };
   }
 };

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
 import { Check, ExternalLink, Link2Off, Package, PackageCheck, Plus, ShoppingCart, Undo2, X } from "lucide-react";
 

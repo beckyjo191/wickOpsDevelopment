@@ -365,6 +365,7 @@ export function InventoryPage({
                 normalizeLinkValue={data.normalizeLinkValue}
                 beginCellEditSession={data.beginCellEditSession}
                 endCellEditSession={data.endCellEditSession}
+                getDaysUntilExpiration={filters.getDaysUntilExpiration}
               />
             ) : (
               <InventoryDesktopTable

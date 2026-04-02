@@ -106,7 +106,7 @@ export const handler = async (event: any) => {
       // overwrite plan or seatLimit with wrong defaults. Log for investigation.
       console.error(
         `[stripeWebhook] No plan resolved for subscription ${subscription.id}.` +
-        ` Price IDs: ${items.map((i) => i.price?.id).join(", ")}.` +
+        ` Price IDs: ${items.map((i: any) => i.price?.id).join(", ")}.` +
         ` PRICE_TO_PLAN keys: ${Object.keys(PRICE_TO_PLAN).join(", ") || "(empty — check STRIPE_PRICE_* env vars)"}.` +
         ` Only updating paymentStatus + stripe IDs.`
       );

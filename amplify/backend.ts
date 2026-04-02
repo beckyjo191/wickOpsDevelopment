@@ -181,11 +181,32 @@ inventoryApiLambda.addEnvironment(
 inventoryApiLambda.addEnvironment("ENABLE_PER_ORG_INVENTORY_TABLES", "true");
 inventoryApiLambda.addEnvironment("INVENTORY_ORG_TABLE_PREFIX", inventoryOrgTablePrefix);
 
-inventoryColumnTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
-inventoryItemTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
+const userTable = (backend.data.resources as any)?.tables?.user;
+const organizationTable = (backend.data.resources as any)?.tables?.organization;
+const inviteTable = (backend.data.resources as any)?.tables?.invite;
 
+if (userTable) {
+  inventoryApiLambda.addEnvironment("USER_TABLE", userTable.tableName);
+}
+if (organizationTable) {
+  inventoryApiLambda.addEnvironment("ORG_TABLE", organizationTable.tableName);
+}
+
+// Consolidate ALL DynamoDB permissions for inventoryApi into a single policy
+// statement to stay under the 20KB IAM policy size limit.
 const inventoryApiStack = Stack.of(inventoryApiLambda);
 const inventoryDynamicTableArn = `arn:aws:dynamodb:${inventoryApiStack.region}:${inventoryApiStack.account}:table/${inventoryOrgTablePrefix}-*`;
+const inventoryApiDdbResources: string[] = [
+  inventoryColumnTable.tableArn,
+  `${inventoryColumnTable.tableArn}/index/*`,
+  inventoryItemTable.tableArn,
+  `${inventoryItemTable.tableArn}/index/*`,
+  inventoryDynamicTableArn,
+  `${inventoryDynamicTableArn}/index/*`,
+];
+if (userTable) { inventoryApiDdbResources.push(userTable.tableArn, `${userTable.tableArn}/index/*`); }
+if (organizationTable) { inventoryApiDdbResources.push(organizationTable.tableArn, `${organizationTable.tableArn}/index/*`); }
+
 inventoryApiLambda.addToRolePolicy(
   new PolicyStatement({
     actions: [
@@ -200,26 +221,12 @@ inventoryApiLambda.addToRolePolicy(
       "dynamodb:BatchGetItem",
       "dynamodb:BatchWriteItem",
       "dynamodb:Scan",
+      "dynamodb:UpdateContinuousBackups",
+      "dynamodb:UpdateTimeToLive",
     ],
-    resources: [inventoryDynamicTableArn, `${inventoryDynamicTableArn}/index/*`],
+    resources: inventoryApiDdbResources,
   }),
 );
-
-const userTable = (backend.data.resources as any)?.tables?.user;
-const organizationTable = (backend.data.resources as any)?.tables?.organization;
-const inviteTable = (backend.data.resources as any)?.tables?.invite;
-
-if (userTable) {
-  inventoryApiLambda.addEnvironment("USER_TABLE", userTable.tableName);
-  userTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
-}
-
-// inventoryApi needs read-write on the org table for getAccessContext (two-layer module
-// access) and the new org-module management endpoints.
-if (organizationTable) {
-  inventoryApiLambda.addEnvironment("ORG_TABLE", organizationTable.tableName);
-  organizationTable.grantReadWriteData(backend.inventoryApi.resources.lambda);
-}
 
 const wireCoreDataTables = (
   fn: any,

@@ -192,39 +192,37 @@ if (organizationTable) {
   inventoryApiLambda.addEnvironment("ORG_TABLE", organizationTable.tableName);
 }
 
-// Consolidate ALL DynamoDB permissions for inventoryApi into a single policy
-// statement to stay under the 20KB IAM policy size limit.
 const inventoryApiStack = Stack.of(inventoryApiLambda);
 const inventoryDynamicTableArn = `arn:aws:dynamodb:${inventoryApiStack.region}:${inventoryApiStack.account}:table/${inventoryOrgTablePrefix}-*`;
-const inventoryApiDdbResources: string[] = [
-  inventoryColumnTable.tableArn,
-  `${inventoryColumnTable.tableArn}/index/*`,
-  inventoryItemTable.tableArn,
-  `${inventoryItemTable.tableArn}/index/*`,
-  inventoryDynamicTableArn,
-  `${inventoryDynamicTableArn}/index/*`,
+
+// Split into two least-privilege policies to stay under the 20KB limit:
+// 1) CRUD on all tables this Lambda touches (static + dynamic)
+const crudResources: string[] = [
+  inventoryColumnTable.tableArn, `${inventoryColumnTable.tableArn}/index/*`,
+  inventoryItemTable.tableArn, `${inventoryItemTable.tableArn}/index/*`,
+  inventoryDynamicTableArn, `${inventoryDynamicTableArn}/index/*`,
 ];
-if (userTable) { inventoryApiDdbResources.push(userTable.tableArn, `${userTable.tableArn}/index/*`); }
-if (organizationTable) { inventoryApiDdbResources.push(organizationTable.tableArn, `${organizationTable.tableArn}/index/*`); }
+if (userTable) crudResources.push(userTable.tableArn, `${userTable.tableArn}/index/*`);
+if (organizationTable) crudResources.push(organizationTable.tableArn, `${organizationTable.tableArn}/index/*`);
 
 inventoryApiLambda.addToRolePolicy(
   new PolicyStatement({
     actions: [
-      "dynamodb:CreateTable",
-      "dynamodb:DeleteTable",
-      "dynamodb:DescribeTable",
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:UpdateItem",
-      "dynamodb:DeleteItem",
-      "dynamodb:Query",
-      "dynamodb:BatchGetItem",
-      "dynamodb:BatchWriteItem",
-      "dynamodb:Scan",
-      "dynamodb:UpdateContinuousBackups",
-      "dynamodb:UpdateTimeToLive",
+      "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:Batch*",
     ],
-    resources: inventoryApiDdbResources,
+    resources: crudResources,
+  }),
+);
+
+// 2) Table management — only on dynamic per-org tables (not user/org/static tables)
+inventoryApiLambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: [
+      "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable",
+      "dynamodb:UpdateContinuousBackups", "dynamodb:UpdateTimeToLive",
+    ],
+    resources: [inventoryDynamicTableArn],
   }),
 );
 
@@ -291,16 +289,13 @@ if (userPool) {
   );
   inventoryApiLambda.addEnvironment("USER_POOL_ID", userPool.userPoolId);
   (backend.sendInvites.resources.lambda as any).addEnvironment("USER_POOL_ID", userPool.userPoolId);
+  // Cognito permissions for inventoryApi (user revocation)
   inventoryApiLambda.addToRolePolicy(
     new PolicyStatement({
-      actions: [
-        "cognito-idp:AdminDisableUser",
-        "cognito-idp:AdminUserGlobalSignOut",
-      ],
+      actions: ["cognito-idp:AdminDisableUser", "cognito-idp:AdminUserGlobalSignOut"],
       resources: [userPool.userPoolArn],
     }),
   );
-
 }
 
 // Customize the invite email Cognito sends when AdminCreateUser is called.

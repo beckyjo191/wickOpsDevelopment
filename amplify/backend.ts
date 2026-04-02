@@ -95,15 +95,13 @@ const createBillingPortalSessionIntegration = new HttpLambdaIntegration(
 // only needs to know where to forward requests — not which specific paths exist.
 // This keeps the Lambda resource-based policy at 2 statements instead of 34+,
 // permanently staying under the 20KB AWS limit regardless of future endpoints added.
-inventoryHttpApi.addRoutes({
-  path: "/",
-  methods: [HttpMethod.ANY],
-  integration: inventoryLambdaIntegration,
-  authorizer: inventoryAuthorizer,
-});
+// Use explicit methods instead of ANY so that OPTIONS preflight requests
+// are handled by API Gateway's built-in CORS handler (corsPreflight config above)
+// rather than hitting the Cognito authorizer (which rejects unauthenticated OPTIONS with 401).
+const inventoryMethods = [HttpMethod.GET, HttpMethod.POST, HttpMethod.DELETE];
 inventoryHttpApi.addRoutes({
   path: "/{proxy+}",
-  methods: [HttpMethod.ANY],
+  methods: inventoryMethods,
   integration: inventoryLambdaIntegration,
   authorizer: inventoryAuthorizer,
 });

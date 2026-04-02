@@ -1,4 +1,4 @@
-import type { RefObject, ChangeEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { ChangeEvent, MouseEvent as ReactMouseEvent } from "react";
 
 export type InventoryToolbarProps = {
   canEdit: boolean;
@@ -18,7 +18,7 @@ export type InventoryToolbarProps = {
   onChooseCsvImport: () => void;
   onOpenPasteImport: () => void;
   onDownloadTemplate: () => void;
-  importInputRef: RefObject<HTMLInputElement | null>;
+  importInputRef: any;
   locationOptions: string[];
   effectiveLocationFilter: string;
   importingCsv: boolean;

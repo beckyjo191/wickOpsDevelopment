@@ -381,15 +381,13 @@ export function CellEditor({
     );
   }
 
+  // Fallback for any unhandled column type
   return (
     <input
       type="text"
-      inputMode={column.type === "number" ? "numeric" : undefined}
-      pattern={column.type === "number" ? "[0-9]*" : undefined}
       value={String(value ?? "")}
       onFocus={(event) => {
-        if (column.type === "number") {
-          event.currentTarget.select();
+        {
           const el = event.currentTarget;
           const cancel = (e: Event) => { e.preventDefault(); el.removeEventListener("mouseup", cancel); };
           el.addEventListener("mouseup", cancel, { once: true });

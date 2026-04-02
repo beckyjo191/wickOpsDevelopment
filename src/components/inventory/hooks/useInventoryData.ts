@@ -1,11 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
-  addInventoryLocation,
-  approveUsageSubmission,
   convertImportFileToCsv,
-  deleteUsageSubmission,
   extractCsvHeaders,
-  generateAndDownloadInventoryTemplate,
   importInventoryCsv,
   isInventoryProvisioningError,
   loadInventoryBootstrap,
@@ -15,16 +11,13 @@ import {
   type InventoryColumn,
   type InventoryRow,
   type PendingEntry,
-  type PendingSubmission,
 } from "../../../lib/inventoryApi";
 import { pickLoadingLine } from "../../../lib/loadingLines";
 import type {
   ActiveTab,
   CsvImportDialogState,
-  InventoryFilter,
   InventorySnapshot,
   PasteImportDialogState,
-  SortDirection,
 } from "../inventoryTypes";
 import {
   AUTOSAVE_DELAY_MS,
@@ -72,15 +65,15 @@ const ORDERED_CLEAR_KEYS = new Set(["quantity", "expirationDate"]);
 export function useInventoryData({
   canEditInventory,
   initialEditCell,
-  selectedLocation,
-  onLocationChange,
+  selectedLocation: _selectedLocation,
+  onLocationChange: _onLocationChange,
   onSaveFnChange,
   effectiveLocationFilter,
   allColumns,
   locationColumn,
   filteredRows,
   filteredRowIds,
-  visibleColumns,
+  visibleColumns: _visibleColumns,
   UNASSIGNED_LOCATION,
   setSelectedRowIds,
   activeTab,
@@ -134,7 +127,7 @@ export function useInventoryData({
   const restoringSnapshotRef = useRef(false);
   const lastSavedSnapshotRef = useRef<Map<string, string>>(new Map());
   const pendingNewLocationRef = useRef<string | null>(null);
-  const onSaveRef = useRef<() => Promise<void>>(async () => {});
+  const onSaveRef = useRef<(silent?: boolean) => Promise<void>>(async () => {});
 
   // ── Ref sync ──
   useEffect(() => {

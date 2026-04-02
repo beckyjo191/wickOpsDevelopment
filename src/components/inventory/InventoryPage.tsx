@@ -1,7 +1,7 @@
 // ── InventoryPage orchestrator ───────────────────────────────────────────────
 // Wires custom hooks to sub-components. All state lives in hooks.
 import { useRef } from "react";
-import type { InventoryPageProps, ActiveTab } from "./inventoryTypes";
+import type { InventoryPageProps } from "./inventoryTypes";
 import { normalizeHeaderKey } from "./inventoryUtils";
 import {
   addInventoryLocation,
@@ -365,10 +365,6 @@ export function InventoryPage({
                 normalizeLinkValue={data.normalizeLinkValue}
                 beginCellEditSession={data.beginCellEditSession}
                 endCellEditSession={data.endCellEditSession}
-                isEditingLinkCell={data.isEditingLinkCell}
-                isEditingDateCell={data.isEditingDateCell}
-                setEditingLinkCell={data.setEditingLinkCell}
-                setEditingDateCell={data.setEditingDateCell}
               />
             ) : (
               <InventoryDesktopTable

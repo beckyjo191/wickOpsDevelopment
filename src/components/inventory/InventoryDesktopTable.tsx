@@ -1,4 +1,4 @@
-import type { RefObject, MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import type { InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
@@ -10,7 +10,7 @@ export type InventoryDesktopTableProps = {
   selectedRowId: string | null;
   canEdit: boolean;
   canEditTable: boolean;
-  selectAllCheckboxRef: RefObject<HTMLInputElement | null>;
+  selectAllCheckboxRef: any;
   allFilteredSelected: boolean;
   filteredRowIdsLength: number;
   onToggleRowSelection: (rowId: string) => void;
@@ -200,9 +200,9 @@ export function InventoryDesktopTable({
                     onLinkEditStart={(rowId, columnKey) => setEditingLinkCell({ rowId, columnKey })}
                     onLinkEditEnd={() => setEditingLinkCell(null)}
                     onDateEditStart={(rowId, columnKey) => setEditingDateCell({ rowId, columnKey })}
-                    onDateEditEnd={() => setEditingDateCell((prev: any) =>
-                      prev?.rowId === row.id && prev?.columnKey === column.key ? null : prev,
-                    )}
+                    onDateEditEnd={() => {
+                      setEditingDateCell(null);
+                    }}
                     getReadOnlyCellText={getReadOnlyCellText}
                     toDateInputValue={toDateInputValue}
                     normalizeLinkValue={normalizeLinkValue}

@@ -410,8 +410,6 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
   const totalReorderItems = vendorGroups.reduce((sum, g) => sum + g.items.length, 0);
 
   const [mobileChecklistDomain, setMobileChecklistDomain] = useState<string | null>(null);
-  const autoOpenedRef = useRef(false);
-
   const handleReorder = (group: VendorGroup) => {
     if (isMobile()) {
       setMobileChecklistDomain(group.domain);

@@ -306,6 +306,11 @@ if (userPool) {
 // Using cfnResources override because defineAuth's userInvitation gets silently
 // dropped during CDK synthesis (aws-cdk #30315).
 const { cfnUserPool } = backend.auth.resources.cfnResources;
+
+// Ensure email auto-verification is set (required when AttributesRequireVerificationBeforeUpdate
+// includes email — Cognito rejects updates if AutoVerifiedAttributes is missing the attribute).
+cfnUserPool.autoVerifiedAttributes = ["email"];
+
 cfnUserPool.adminCreateUserConfig = {
   ...cfnUserPool.adminCreateUserConfig as any,
   inviteMessageTemplate: {

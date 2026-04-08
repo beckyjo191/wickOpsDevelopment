@@ -269,7 +269,8 @@ export function useInventoryFilters({
         minQuantityRaw !== null &&
         minQuantityRaw !== undefined &&
         String(minQuantityRaw).trim() !== "" &&
-        Number.isFinite(minQuantity);
+        Number.isFinite(minQuantity) &&
+        minQuantity > 0;
       const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
       if (isLowStock) lowStock++;
     }
@@ -292,7 +293,8 @@ export function useInventoryFilters({
           minQuantityRaw !== null &&
           minQuantityRaw !== undefined &&
           String(minQuantityRaw).trim() !== "" &&
-          Number.isFinite(minQuantity);
+          Number.isFinite(minQuantity) &&
+          minQuantity > 0;
         const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
         const rowLocation = String(row.values.location ?? "").trim();
         const rowCategory = String(row.values.category ?? "").trim();

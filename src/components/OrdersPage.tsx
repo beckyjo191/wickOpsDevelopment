@@ -106,7 +106,7 @@ function CreateOrderForm({
     const qty = Number(r.values.quantity ?? 0);
     const minRaw = r.values.minQuantity;
     const min = Number(minRaw);
-    const hasMin = minRaw !== null && minRaw !== undefined && String(minRaw).trim() !== "" && Number.isFinite(min);
+    const hasMin = minRaw !== null && minRaw !== undefined && String(minRaw).trim() !== "" && Number.isFinite(min) && min > 0;
     const isLow = hasMin && Number.isFinite(qty) && qty < min;
     const expRaw = String(r.values.expirationDate ?? "").trim();
     let isExpired = false;

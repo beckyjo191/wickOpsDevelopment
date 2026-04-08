@@ -97,6 +97,15 @@ export function LandingPage() {
 
 
       </main>
+
+      <footer className="lp-footer">
+        <span className="lp-footer-copy">&copy; {new Date().getFullYear()} Wired Wick Consulting LLC</span>
+        <nav className="lp-footer-links">
+          <a href="/terms">Terms of Service</a>
+          <a href="/privacy">Privacy Policy</a>
+          <a href="/cookies">Cookie Policy</a>
+        </nav>
+      </footer>
     </div>
   );
 }

@@ -46,7 +46,8 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
       values.minQuantity !== null &&
       values.minQuantity !== undefined &&
       String(values.minQuantity).trim() !== "" &&
-      Number.isFinite(minQuantity);
+      Number.isFinite(minQuantity) &&
+      minQuantity > 0;
     if (hasMinQty && Number.isFinite(quantity) && quantity < minQuantity) {
       lowStockCount += 1;
       locCounts.lowStockCount += 1;

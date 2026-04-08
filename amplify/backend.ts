@@ -13,6 +13,7 @@ import { userSubscriptionCheck } from "./functions/userSubscriptionCheck/resourc
 import { sendInvites } from "./functions/sendInvites/resource";
 import { inventoryApi } from "./functions/inventoryApi/resource";
 import { createBillingPortalSession } from "./functions/createBillingPortalSession/resource";
+import { postConfirmationLambda } from "./functions/postConfirmationLambda/resource";
 
 const backend = defineBackend({
   auth,
@@ -23,6 +24,7 @@ const backend = defineBackend({
   sendInvites,
   inventoryApi,
   createBillingPortalSession,
+  postConfirmationLambda,
 });
 
 const deploymentEnv = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
@@ -143,7 +145,7 @@ const inventoryStack = backend.createStack("inventory-storage");
 const inventoryColumnTable = new Table(inventoryStack, "InventoryColumnTable", {
   partitionKey: { name: "id", type: AttributeType.STRING },
   billingMode: BillingMode.PAY_PER_REQUEST,
-  pointInTimeRecovery: true,
+  pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
   removalPolicy: RemovalPolicy.RETAIN,
 });
 inventoryColumnTable.addGlobalSecondaryIndex({
@@ -155,7 +157,7 @@ inventoryColumnTable.addGlobalSecondaryIndex({
 const inventoryItemTable = new Table(inventoryStack, "InventoryItemTable", {
   partitionKey: { name: "id", type: AttributeType.STRING },
   billingMode: BillingMode.PAY_PER_REQUEST,
-  pointInTimeRecovery: true,
+  pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
   removalPolicy: RemovalPolicy.RETAIN,
 });
 inventoryItemTable.addGlobalSecondaryIndex({
@@ -348,6 +350,12 @@ wireCoreDataTables(backend.createBillingPortalSession.resources.lambda, {
 wireCoreDataTables(backend.stripeWebhook.resources.lambda, {
   user: "write",
   organization: "write",
+});
+
+wireCoreDataTables(backend.postConfirmationLambda.resources.lambda, {
+  user: "readwrite",
+  organization: "readwrite",
+  invite: "readwrite",
 });
 
 // Forward Stripe price IDs (monthly + yearly for each plan) to the Lambdas that need them.

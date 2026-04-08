@@ -1,0 +1,148 @@
+/* ── Shared legal page styles ─────────────────────────────────────────────── */
+
+.legal-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 12% 10%, var(--lp-radial-a) 0%, transparent 42%),
+    radial-gradient(circle at 88% 90%, var(--lp-radial-b) 0%, transparent 45%),
+    linear-gradient(180deg, var(--lp-bg-start) 0%, var(--lp-bg-end) 100%);
+  color: var(--lp-text);
+  padding: 1.15rem;
+}
+
+.legal-content {
+  width: min(860px, 100%);
+  margin: 1.5rem auto 2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: clamp(1.5rem, 3vw, 3rem);
+  box-shadow: var(--shadow-soft);
+}
+
+.legal-content h1 {
+  font-size: 1.6rem;
+  color: var(--text-heading);
+  margin: 0 0 0.25rem;
+  line-height: 1.2;
+}
+
+.legal-content h2 {
+  font-size: 1.15rem;
+  color: var(--text-heading);
+  margin: 2rem 0 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.legal-content h2:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.legal-content h3 {
+  font-size: 1rem;
+  color: var(--text-heading);
+  margin: 1.25rem 0 0.4rem;
+}
+
+.legal-content p {
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text-muted);
+  margin: 0.5rem 0;
+}
+
+.legal-content ul,
+.legal-content ol {
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+
+.legal-content li {
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--text-muted);
+  margin: 0.3rem 0;
+}
+
+.legal-content a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.legal-content a:hover {
+  text-decoration: underline;
+}
+
+.legal-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  margin: 0 0 1.5rem;
+}
+
+.legal-toc {
+  margin: 1rem 0 1.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.legal-toc li {
+  margin: 0.25rem 0;
+}
+
+.legal-toc a {
+  font-size: 0.88rem;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.legal-toc a:hover {
+  text-decoration: underline;
+}
+
+.legal-contact {
+  margin-top: 0.5rem;
+}
+
+.legal-contact p {
+  margin: 0.15rem 0;
+}
+
+/* ── Table styles for privacy policy ─────────────────────────────────────── */
+
+.legal-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.85rem;
+}
+
+.legal-content th,
+.legal-content td {
+  border: 1px solid var(--border);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  color: var(--text-muted);
+}
+
+.legal-content th {
+  background: var(--table-header);
+  font-weight: 700;
+  color: var(--text-heading);
+}
+
+@media (max-width: 600px) {
+  .legal-content {
+    padding: 1.2rem;
+  }
+
+  .legal-content table {
+    font-size: 0.78rem;
+  }
+
+  .legal-content th,
+  .legal-content td {
+    padding: 0.4rem 0.5rem;
+  }
+}

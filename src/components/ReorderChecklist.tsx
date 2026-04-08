@@ -3,16 +3,14 @@ import { Check, ExternalLink, Plus, X } from "lucide-react";
 
 type ChecklistItem = {
   rowId: string;
+  allRowIds?: string[];
   name: string;
   link: string;
-  status: string;
-  stockLabel?: string;
-  stockLow?: boolean;
-  statusType?: "expired" | "lowStock";
-  quantity: number;
+  activeQty: number;
+  expiredQty: number;
   minQuantity: number;
   suggestedQty: number;
-  expirationDate?: string;
+  hasExpired: boolean;
 };
 
 type ChecklistData = {
@@ -66,7 +64,7 @@ export function ReorderChecklist() {
           name: item.name,
           link: item.link,
           checked: false,
-          qty: String(item.suggestedQty ?? Math.max(1, item.minQuantity - item.quantity || 1)),
+          qty: String(item.suggestedQty ?? Math.max(1, item.minQuantity - item.activeQty || 1)),
           unitCost: "",
         })),
       );
@@ -122,7 +120,13 @@ export function ReorderChecklist() {
       }));
 
     const orderItems = [...inventoryItems, ...freeformItems];
-    const checkedRowIds = lines.filter((l) => l.checked).map((l) => l.rowId);
+    // Use allRowIds so every lot in the group gets stamped as ordered
+    const checkedRowIds = lines
+      .filter((l) => l.checked)
+      .flatMap((l) => {
+        const item = data.items.find((i) => i.rowId === l.rowId);
+        return item?.allRowIds ?? [l.rowId];
+      });
 
     const channel = new BroadcastChannel("wickops-reorder");
     channel.postMessage({
@@ -197,23 +201,14 @@ export function ReorderChecklist() {
               {(() => {
                 const item = data.items.find((i) => i.rowId === line.rowId);
                 if (!item) return null;
-                const hasMin = Number.isFinite(item.minQuantity) && item.minQuantity > 0;
                 return (
                   <span className="checklist-item-detail">
-                    {item.statusType === "expired" ? (
-                      <>
-                        {item.expirationDate && (
-                          <span className="reorder-item-status reorder-status-expired">
-                            Exp: {new Date(item.expirationDate).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                          </span>
-                        )}
-                        <span className="reorder-item-status reorder-status-stock">
-                          {hasMin ? `${item.quantity}/${item.minQuantity}` : `On hand: ${item.quantity}`}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="reorder-item-status reorder-status-lowStock">
-                        Low: {item.quantity}/{item.minQuantity}
+                    <span className="reorder-item-status reorder-status-lowStock">
+                      Low: {item.activeQty}/{item.minQuantity}
+                    </span>
+                    {item.hasExpired && (
+                      <span className="reorder-item-status reorder-status-expired">
+                        {item.expiredQty} expired
                       </span>
                     )}
                   </span>

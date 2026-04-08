@@ -8,6 +8,9 @@ import './App.css';
 import '@aws-amplify/ui-react/styles.css';
 import { LandingPage } from './components/LandingPage';
 import { ReorderChecklist } from './components/ReorderChecklist';
+import { TermsPage } from './components/TermsPage';
+import { PrivacyPage } from './components/PrivacyPage';
+import { CookiePage } from './components/CookiePage';
 import { applyThemePreference, loadThemePreference } from './lib/themePreference';
 
 Amplify.configure(outputs);
@@ -18,10 +21,22 @@ const search = new URLSearchParams(window.location.search);
 const checkoutSuccess = search.get("checkout") === "success";
 const isReorderChecklist = search.has("reorder-checklist");
 const showLanding = pathname === "/" && !checkoutSuccess && !isReorderChecklist;
+const showTerms = pathname === "/terms";
+const showPrivacy = pathname === "/privacy";
+const showCookies = pathname === "/cookies";
 const authInitialState = pathname === "/signup" ? "signUp" : "signIn";
+
+function Root() {
+  if (isReorderChecklist) return <ReorderChecklist />;
+  if (showLanding) return <LandingPage />;
+  if (showTerms) return <TermsPage />;
+  if (showPrivacy) return <PrivacyPage />;
+  if (showCookies) return <CookiePage />;
+  return <AppWrapper initialState={authInitialState} />;
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {isReorderChecklist ? <ReorderChecklist /> : showLanding ? <LandingPage /> : <AppWrapper initialState={authInitialState} />}
+    <Root />
   </React.StrictMode>
 );

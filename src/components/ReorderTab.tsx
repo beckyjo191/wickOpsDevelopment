@@ -14,16 +14,16 @@ export type OrderItem = { rowId: string | null; name: string; qty: number; unitC
 const isMobile = () => window.innerWidth <= 780;
 
 type ReorderItem = {
-  row: InventoryRow;
+  row: InventoryRow;        // representative row (lowest active qty)
+  allRowIds: string[];      // all row IDs in this name+location group
   itemName: string;
   reorderLink: string;
-  status: "expired" | "lowStock";
-  statusLabel: string;
-  stockLabel: string;
-  stockLow: boolean;
-  quantity: number;
+  activeQty: number;        // non-expired qty summed across all rows
+  expiredQty: number;       // expired qty summed across all rows
   minQuantity: number;
   suggestedQty: number;
+  hasExpired: boolean;
+  orderedAt: string | null; // most recent orderedAt across all rows
 };
 
 type VendorGroup = {
@@ -62,16 +62,14 @@ const openVendorChecklist = (group: VendorGroup) => {
     domain: group.domain,
     items: group.items.map((item) => ({
       rowId: item.row.id,
+      allRowIds: item.allRowIds,
       name: item.itemName,
       link: item.reorderLink,
-      status: item.statusLabel,
-      stockLabel: item.stockLabel,
-      stockLow: item.stockLow,
-      statusType: item.status,
-      quantity: item.quantity,
+      activeQty: item.activeQty,
+      expiredQty: item.expiredQty,
       minQuantity: item.minQuantity,
       suggestedQty: item.suggestedQty,
-      expirationDate: String(item.row.values.expirationDate ?? ""),
+      hasExpired: item.hasExpired,
     })),
   };
   const storageKey = `wickops-reorder-${group.domain}`;
@@ -86,7 +84,15 @@ const openVendorChecklist = (group: VendorGroup) => {
 
 // ── Mobile Checklist Overlay ─────────────────────────────────────────────────
 
-type MobileLineState = { rowId: string; name: string; link: string; checked: boolean; qty: string; unitCost: string };
+type MobileLineState = {
+  rowId: string;
+  allRowIds: string[];
+  name: string;
+  link: string;
+  checked: boolean;
+  qty: string;
+  unitCost: string;
+};
 type MobileRawLine = { id: string; name: string; qty: string; unitCost: string };
 
 function MobileChecklist({
@@ -101,6 +107,7 @@ function MobileChecklist({
   const [lines, setLines] = useState<MobileLineState[]>(() =>
     group.items.map((item) => ({
       rowId: item.row.id,
+      allRowIds: item.allRowIds,
       name: item.itemName,
       link: item.reorderLink,
       checked: false,
@@ -145,7 +152,8 @@ function MobileChecklist({
         qty: Number(r.qty),
         ...(r.unitCost.trim() ? { unitCost: Number(r.unitCost) } : {}),
       }));
-    const checkedRowIds = lines.filter((l) => l.checked).map((l) => l.rowId);
+    // Use allRowIds so every lot in the group gets stamped as ordered
+    const checkedRowIds = lines.filter((l) => l.checked).flatMap((l) => l.allRowIds);
     onPlaceOrder(checkedRowIds, group.domain, [...inventoryItems, ...freeformItems]);
     onClose();
   };
@@ -213,20 +221,12 @@ function MobileChecklist({
                   </button>
                   {itemData && (
                     <span className="checklist-item-detail">
-                      {itemData.status === "expired" ? (
-                        <>
-                          {itemData.row.values.expirationDate && (
-                            <span className="reorder-item-status reorder-status-expired">
-                              Exp: {new Date(String(itemData.row.values.expirationDate)).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-                            </span>
-                          )}
-                          <span className="reorder-item-status reorder-status-stock">
-                            {itemData.minQuantity > 0 ? `${itemData.quantity}/${itemData.minQuantity}` : `On hand: ${itemData.quantity}`}
-                          </span>
-                        </>
-                      ) : (
-                        <span className="reorder-item-status reorder-status-lowStock">
-                          Low: {itemData.quantity}/{itemData.minQuantity}
+                      <span className="reorder-item-status reorder-status-lowStock">
+                        Low: {itemData.activeQty}/{itemData.minQuantity}
+                      </span>
+                      {itemData.hasExpired && (
+                        <span className="reorder-item-status reorder-status-expired">
+                          {itemData.expiredQty} expired
                         </span>
                       )}
                     </span>
@@ -333,74 +333,136 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
   const [reorderedVendors, setReorderedVendors] = useState<Set<string>>(new Set());
 
   const { vendorGroups, noLinkItems, orderedItems } = useMemo(() => {
+    // Aggregate rows by itemName + location into one entry per item
+    type ItemAgg = {
+      rows: InventoryRow[];
+      activeQty: number;
+      expiredQty: number;
+      minQuantity: number;
+      hasMin: boolean;
+      reorderLink: string;
+      latestOrderedAt: string | null;
+    };
+
+    const groupMap = new Map<string, ItemAgg>();
+
+    for (const row of rows) {
+      const itemName = String(row.values.itemName ?? "").trim();
+      if (!itemName) continue;
+      // Include location in key so items at different locations stay separate
+      const location = String(row.values.location ?? "").trim();
+      const key = `${itemName}\x00${location}`;
+
+      const quantity = Number.isFinite(Number(row.values.quantity)) ? Number(row.values.quantity) : 0;
+      const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
+      const isExpired = daysUntil !== null && daysUntil < 0;
+      const rowLink = normalizeLinkValue(String(row.values.reorderLink ?? "").trim());
+      const rowOrderedAt = row.values.orderedAt ? String(row.values.orderedAt) : null;
+
+      const existing = groupMap.get(key);
+      if (!existing) {
+        const minQuantityRaw = row.values.minQuantity;
+        const minQuantity = Number(minQuantityRaw);
+        const hasMin =
+          minQuantityRaw !== null &&
+          minQuantityRaw !== undefined &&
+          String(minQuantityRaw).trim() !== "" &&
+          Number.isFinite(minQuantity) &&
+          minQuantity > 0;
+
+        groupMap.set(key, {
+          rows: [row],
+          activeQty: isExpired ? 0 : quantity,
+          expiredQty: isExpired ? quantity : 0,
+          minQuantity: hasMin ? minQuantity : 0,
+          hasMin,
+          reorderLink: rowLink,
+          latestOrderedAt: rowOrderedAt,
+        });
+      } else {
+        existing.rows.push(row);
+        if (isExpired) {
+          existing.expiredQty += quantity;
+        } else {
+          existing.activeQty += quantity;
+        }
+        // Take the highest minQuantity across lots
+        const minQuantityRaw = row.values.minQuantity;
+        const minQuantity = Number(minQuantityRaw);
+        const hasMin =
+          minQuantityRaw !== null &&
+          minQuantityRaw !== undefined &&
+          String(minQuantityRaw).trim() !== "" &&
+          Number.isFinite(minQuantity) &&
+          minQuantity > 0;
+        if (hasMin && minQuantity > existing.minQuantity) {
+          existing.minQuantity = minQuantity;
+          existing.hasMin = true;
+        }
+        // Prefer any row with a reorder link
+        if (!existing.reorderLink && rowLink) {
+          existing.reorderLink = rowLink;
+        }
+        // Track most recent orderedAt across all rows
+        if (rowOrderedAt && (!existing.latestOrderedAt || rowOrderedAt > existing.latestOrderedAt)) {
+          existing.latestOrderedAt = rowOrderedAt;
+        }
+      }
+    }
+
     const reorderItems: ReorderItem[] = [];
     const noLink: ReorderItem[] = [];
     const ordered: ReorderItem[] = [];
 
-    for (const row of rows) {
-      const quantityRaw = row.values.quantity;
-      const minQuantityRaw = row.values.minQuantity;
-      const quantity = Number(quantityRaw);
-      const minQuantity = Number(minQuantityRaw);
-      const hasMin =
-        minQuantityRaw !== null &&
-        minQuantityRaw !== undefined &&
-        String(minQuantityRaw).trim() !== "" &&
-        Number.isFinite(minQuantity);
-      const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
-      const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
-      const isExpired = daysUntil !== null && daysUntil < 0;
+    for (const [key, agg] of groupMap.entries()) {
+      // Only show if actively low — expired qty doesn't count toward stock
+      if (!agg.hasMin || agg.activeQty >= agg.minQuantity) continue;
 
-      if (!isExpired && !isLowStock) continue;
+      const itemName = key.split("\x00")[0];
+      const suggestedQty = Math.max(1, Math.ceil(agg.minQuantity - agg.activeQty));
 
-      const rawLink = String(row.values.reorderLink ?? "").trim();
-      const reorderLink = normalizeLinkValue(rawLink);
-      const itemName = String(row.values.itemName ?? "").trim() || "Unnamed Item";
-
-      const status = isExpired ? "expired" : "lowStock";
-      const statusLabel = isExpired
-        ? `Expired ${Math.abs(daysUntil!)}d ago`
-        : `Low: ${quantity}/${minQuantity}`;
-      const stockLabel = isExpired
-        ? hasMin ? `${quantity}/${minQuantity}` : `On hand: ${quantity}`
-        : "";
-      const stockLow = isLowStock;
-      const suggestedQty = Math.max(1, hasMin && minQuantity > quantity ? Math.ceil(minQuantity - quantity) : 1);
+      // Representative row: prefer non-expired row with lowest active qty
+      const activeRows = agg.rows.filter((r) => {
+        const d = getDaysUntilExpiration(r.values.expirationDate);
+        return d === null || d >= 0;
+      });
+      const candidateRows = activeRows.length > 0 ? activeRows : agg.rows;
+      const repRow = candidateRows.reduce((best, r) =>
+        Number(r.values.quantity ?? 0) < Number(best.values.quantity ?? 0) ? r : best,
+      );
 
       const item: ReorderItem = {
-        row,
+        row: repRow,
+        allRowIds: agg.rows.map((r) => r.id),
         itemName,
-        reorderLink,
-        status,
-        statusLabel,
-        stockLabel,
-        stockLow,
-        quantity,
-        minQuantity,
+        reorderLink: agg.reorderLink,
+        activeQty: agg.activeQty,
+        expiredQty: agg.expiredQty,
+        minQuantity: agg.minQuantity,
         suggestedQty,
+        hasExpired: agg.expiredQty > 0,
+        orderedAt: agg.latestOrderedAt,
       };
 
-      if (row.values.orderedAt) {
+      if (agg.latestOrderedAt) {
         ordered.push(item);
-      } else if (reorderLink) {
+      } else if (agg.reorderLink) {
         reorderItems.push(item);
       } else {
         noLink.push(item);
       }
     }
 
-    const groupMap = new Map<string, ReorderItem[]>();
+    // Group reorder items by vendor domain
+    const domainMap = new Map<string, ReorderItem[]>();
     for (const item of reorderItems) {
       const domain = getVendorDomain(item.reorderLink);
-      const existing = groupMap.get(domain);
-      if (existing) {
-        existing.push(item);
-      } else {
-        groupMap.set(domain, [item]);
-      }
+      const existing = domainMap.get(domain);
+      if (existing) existing.push(item);
+      else domainMap.set(domain, [item]);
     }
 
-    const groups: VendorGroup[] = Array.from(groupMap.entries())
+    const groups: VendorGroup[] = Array.from(domainMap.entries())
       .map(([domain, items]) => ({ domain, items }))
       .sort((a, b) => b.items.length - a.items.length);
 
@@ -433,6 +495,19 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
       </div>
     );
   }
+
+  const renderItemBadges = (item: ReorderItem) => (
+    <span className="reorder-item-badges">
+      <span className="reorder-item-status reorder-status-lowStock">
+        Low: {item.activeQty}/{item.minQuantity}
+      </span>
+      {item.hasExpired && (
+        <span className="reorder-item-status reorder-status-expired">
+          {item.expiredQty} expired
+        </span>
+      )}
+    </span>
+  );
 
   return (
     <div className="reorder-tab">
@@ -483,47 +558,14 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
               {reorderedVendors.has(group.domain) ? "Reopen" : "Order"}
             </button>
           </div>
-          {(() => {
-            const expired = group.items.filter((i) => i.status === "expired");
-            const low = group.items.filter((i) => i.status === "lowStock");
-            return (
-              <>
-                {expired.length > 0 && (
-                  <>
-                    {low.length > 0 && <h5 className="reorder-section-label">Expired</h5>}
-                    <div className="reorder-item-list">
-                      {expired.map((item) => (
-                        <div key={item.row.id} className="reorder-item-row">
-                          <span className="reorder-item-name">{item.itemName}</span>
-                          <span className="reorder-item-badges">
-                            <span className="reorder-item-status reorder-status-expired">{item.statusLabel}</span>
-                            {item.stockLabel && (
-                              <span className={`reorder-item-status ${item.stockLow ? "reorder-status-lowStock" : "reorder-status-stock"}`}>{item.stockLabel}</span>
-                            )}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-                {low.length > 0 && (
-                  <>
-                    {expired.length > 0 && <h5 className="reorder-section-label">Low Stock</h5>}
-                    <div className="reorder-item-list">
-                      {low.map((item) => (
-                        <div key={item.row.id} className="reorder-item-row">
-                          <span className="reorder-item-name">{item.itemName}</span>
-                          <span className="reorder-item-badges">
-                            <span className="reorder-item-status reorder-status-lowStock">{item.statusLabel}</span>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </>
-            );
-          })()}
+          <div className="reorder-item-list">
+            {group.items.map((item) => (
+              <div key={item.row.id} className="reorder-item-row">
+                <span className="reorder-item-name">{item.itemName}</span>
+                {renderItemBadges(item)}
+              </div>
+            ))}
+          </div>
         </div>
       ))}
 
@@ -541,10 +583,8 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
           <p className="reorder-nolink-hint">
             Click an item name to jump to its reorder link field.
           </p>
-          {(() => {
-            const expired = noLinkItems.filter((i) => i.status === "expired");
-            const low = noLinkItems.filter((i) => i.status === "lowStock");
-            const renderRow = (item: ReorderItem) => (
+          <div className="reorder-item-list">
+            {noLinkItems.map((item) => (
               <div key={item.row.id} className="reorder-item-row">
                 {onEditReorderLink ? (
                   <button
@@ -557,35 +597,10 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
                 ) : (
                   <span className="reorder-item-name">{item.itemName}</span>
                 )}
-                <span className="reorder-item-badges">
-                  <span className={`reorder-item-status reorder-status-${item.status}`}>
-                    {item.statusLabel}
-                  </span>
-                  {item.stockLabel && (
-                    <span className={`reorder-item-status ${item.stockLow ? "reorder-status-lowStock" : "reorder-status-stock"}`}>
-                      {item.stockLabel}
-                    </span>
-                  )}
-                </span>
+                {renderItemBadges(item)}
               </div>
-            );
-            return (
-              <>
-                {expired.length > 0 && (
-                  <>
-                    {low.length > 0 && <h5 className="reorder-section-label">Expired</h5>}
-                    <div className="reorder-item-list">{expired.map(renderRow)}</div>
-                  </>
-                )}
-                {low.length > 0 && (
-                  <>
-                    {expired.length > 0 && <h5 className="reorder-section-label">Low Stock</h5>}
-                    <div className="reorder-item-list">{low.map(renderRow)}</div>
-                  </>
-                )}
-              </>
-            );
-          })()}
+            ))}
+          </div>
         </div>
       )}
 
@@ -614,9 +629,8 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
           </div>
           <div className="reorder-item-list">
             {orderedItems.map((item) => {
-              const orderedAt = String(item.row.values.orderedAt ?? "");
-              const daysAgo = orderedAt
-                ? Math.floor((Date.now() - new Date(orderedAt).getTime()) / (1000 * 60 * 60 * 24))
+              const daysAgo = item.orderedAt
+                ? Math.floor((Date.now() - new Date(item.orderedAt).getTime()) / (1000 * 60 * 60 * 24))
                 : null;
               return (
                 <div key={item.row.id} className="reorder-item-row">
@@ -630,7 +644,7 @@ export function ReorderTab({ rows, onEditReorderLink, onClearOrderedAt, onMarkOr
                         type="button"
                         className="reorder-undo-btn"
                         title="Move back to reorder list"
-                        onClick={() => onClearOrderedAt([item.row.id])}
+                        onClick={() => onClearOrderedAt(item.allRowIds)}
                       >
                         <Undo2 size={14} />
                       </button>

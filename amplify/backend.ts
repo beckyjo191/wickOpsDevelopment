@@ -1,10 +1,12 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { RemovalPolicy, Stack } from "aws-cdk-lib";
+import { CustomResource, RemovalPolicy, Stack } from "aws-cdk-lib";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { CorsHttpMethod, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
-import { PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { PolicyStatement, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import { Provider } from "aws-cdk-lib/custom-resources";
+import { Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
 import { auth } from "./auth/resource";
 import { data } from "./data/resource";
 import { createCheckoutSession } from "./functions/createCheckoutSession/resource";
@@ -42,7 +44,7 @@ const browserCorsMethods = [
   CorsHttpMethod.DELETE,
   CorsHttpMethod.OPTIONS,
 ];
-// All functions use resourceGroupName: "auth", so colocate API gateways in the
+// All functions use resourceGroupName: "data", so colocate API gateways in the
 // same stack to avoid cross-stack Lambda integration permissions (which cause
 // CloudFormation circular dependencies between nested stacks).
 const apiStack = Stack.of(backend.inventoryApi.resources.lambda);
@@ -338,6 +340,65 @@ cfnUserPool.adminCreateUserConfig = {
       "</div>",
   },
 };
+
+// ── Post-confirmation trigger wiring ────────────────────────────────────────
+// The trigger is set up in a dedicated "wiring" stack instead of defineAuth's
+// triggers property.  This avoids the auth ↔ data circular dependency:
+//   • data → auth  (allow.authenticated in defineData)
+//   • auth → data  (trigger referencing a data-stack Lambda)   ← eliminated
+// The wiring stack depends on both auth and data (one-way each), breaking the cycle.
+const wiringStack = backend.createStack("wiring");
+const postConfirmLambda = backend.postConfirmationLambda.resources.lambda;
+const userPoolForTrigger = backend.auth.resources.userPool;
+
+// Allow Cognito to invoke the Lambda
+postConfirmLambda.addPermission("CognitoPostConfirmInvoke", {
+  principal: new ServicePrincipal("cognito-idp.amazonaws.com"),
+  sourceArn: userPoolForTrigger.userPoolArn,
+});
+
+// Custom resource Lambda that calls UpdateUserPool to set the trigger
+const triggerSetterFn = new LambdaFunction(wiringStack, "TriggerSetterFn", {
+  runtime: Runtime.NODEJS_20_X,
+  handler: "index.handler",
+  code: Code.fromInline(`
+const { CognitoIdentityProviderClient, DescribeUserPoolCommand, UpdateUserPoolCommand } = require("@aws-sdk/client-cognito-identity-provider");
+exports.handler = async (event) => {
+  const props = event.ResourceProperties;
+  const client = new CognitoIdentityProviderClient({});
+  if (event.RequestType === "Delete") {
+    // On delete, remove the trigger by preserving existing config without PostConfirmation
+    const desc = await client.send(new DescribeUserPoolCommand({ UserPoolId: props.UserPoolId }));
+    const existing = desc.UserPool.LambdaConfig || {};
+    delete existing.PostConfirmation;
+    await client.send(new UpdateUserPoolCommand({ UserPoolId: props.UserPoolId, LambdaConfig: existing }));
+    return { PhysicalResourceId: event.PhysicalResourceId };
+  }
+  // Create/Update: merge PostConfirmation trigger into existing LambdaConfig
+  const desc = await client.send(new DescribeUserPoolCommand({ UserPoolId: props.UserPoolId }));
+  const existing = desc.UserPool.LambdaConfig || {};
+  existing.PostConfirmation = props.LambdaArn;
+  await client.send(new UpdateUserPoolCommand({ UserPoolId: props.UserPoolId, LambdaConfig: existing }));
+  return { PhysicalResourceId: "postconfirm-trigger" };
+};
+  `),
+});
+triggerSetterFn.addToRolePolicy(
+  new PolicyStatement({
+    actions: ["cognito-idp:DescribeUserPool", "cognito-idp:UpdateUserPool"],
+    resources: [userPoolForTrigger.userPoolArn],
+  }),
+);
+const triggerProvider = new Provider(wiringStack, "TriggerProvider", {
+  onEventHandler: triggerSetterFn,
+});
+new CustomResource(wiringStack, "PostConfirmTrigger", {
+  serviceToken: triggerProvider.serviceToken,
+  properties: {
+    UserPoolId: userPoolForTrigger.userPoolId,
+    LambdaArn: postConfirmLambda.functionArn,
+  },
+});
 
 wireCoreDataTables(backend.createCheckoutSession.resources.lambda, {
   user: "read",

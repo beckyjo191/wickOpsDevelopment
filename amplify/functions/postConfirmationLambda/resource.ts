@@ -5,5 +5,5 @@ import { defineFunction } from "@aws-amplify/backend";
 export const postConfirmationLambda = defineFunction({
   name: "postConfirmationLambda",
   entry: "./src/handler.ts",
-  resourceGroupName: "auth",
+  resourceGroupName: "data",
 });

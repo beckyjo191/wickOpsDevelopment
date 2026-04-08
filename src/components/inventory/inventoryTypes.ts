@@ -7,7 +7,7 @@ export type {
   PendingSubmission,
 } from "../../lib/inventoryApi";
 
-export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
+export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock" | "retired";
 export type ActiveTab = InventoryFilter | "pendingSubmissions";
 export type SortDirection = "asc" | "desc";
 

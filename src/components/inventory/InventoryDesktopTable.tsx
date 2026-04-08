@@ -1,5 +1,5 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
-import type { InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
+import type { ActiveTab, InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
 export type InventoryDesktopTableProps = {
@@ -39,6 +39,8 @@ export type InventoryDesktopTableProps = {
   isEditingDateCell: (rowId: string, columnKey: string) => boolean;
   setEditingLinkCell: (cell: { rowId: string; columnKey: string } | null) => void;
   setEditingDateCell: (cell: { rowId: string; columnKey: string } | null) => void;
+  activeTab?: ActiveTab;
+  onRetireRow?: (rowId: string) => void;
 };
 
 /**
@@ -75,7 +77,10 @@ export function InventoryDesktopTable({
   isEditingDateCell,
   setEditingLinkCell,
   setEditingDateCell,
+  activeTab,
+  onRetireRow,
 }: InventoryDesktopTableProps) {
+  const showRetire = activeTab === "expired" && !!onRetireRow;
   return (
     <div className="inventory-table-wrap">
       <table className="inventory-table">
@@ -94,6 +99,7 @@ export function InventoryDesktopTable({
                 />
               </th>
             ) : null}
+            {showRetire ? <th className="inventory-col-retire" /> : null}
             {visibleColumns.map((column) =>
               column.key === "category" ? (
                 <th
@@ -168,6 +174,18 @@ export function InventoryDesktopTable({
               className={row.id === selectedRowId ? "inventory-row-selected" : undefined}
               onClick={() => onSetSelectedRowId(row.id)}
             >
+              {showRetire ? (
+                <td className="inventory-col-retire" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="inventory-retire-btn"
+                    onClick={() => onRetireRow!(row.id)}
+                    title="Retire this expired item"
+                  >
+                    Retire
+                  </button>
+                </td>
+              ) : null}
               {canEditTable ? (
                 <td className="inventory-select-cell">
                   <input

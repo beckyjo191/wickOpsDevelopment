@@ -5,7 +5,7 @@ export type InventoryFilterBarProps = {
   onTabChange: (tab: ActiveTab) => void;
   searchTerm: string;
   onSearchChange: (term: string) => void;
-  tabCounts: { expired: number; exp30: number; exp60: number; lowStock: number };
+  tabCounts: { expired: number; exp30: number; exp60: number; lowStock: number; retired: number };
   hasExpirationColumn: boolean;
   hasMinQuantityColumn: boolean;
   canReviewSubmissions?: boolean;
@@ -45,6 +45,7 @@ export function InventoryFilterBar({
     { key: "exp30", label: "Expiring Within 30 Days", mobileLabel: "Expiring 30d", count: tabCounts.exp30, visible: hasExpirationColumn },
     { key: "exp60", label: "Expiring Within 60 Days", mobileLabel: "Expiring 60d", count: tabCounts.exp60, visible: hasExpirationColumn },
     { key: "lowStock", label: "Low Stock", mobileLabel: "Low Stock", count: tabCounts.lowStock, visible: hasMinQuantityColumn },
+    { key: "retired", label: "Retired", mobileLabel: "Retired", count: tabCounts.retired, visible: hasExpirationColumn && (tabCounts.retired > 0 || activeTab === "retired") },
     { key: "pendingSubmissions", label: "Pending Submissions", mobileLabel: "Pending", count: pendingCount, visible: !!canReviewSubmissions },
   ];
 

@@ -333,6 +333,21 @@ export function InventoryPage({
           />
         ) : (
           <>
+            {filters.activeTab === "expired" && canEditInventory && filters.filteredRows.length > 0 && (
+              <div className="inventory-retire-bar">
+                <span className="inventory-retire-bar-label">
+                  {filters.filteredRows.length} expired item{filters.filteredRows.length !== 1 ? "s" : ""}
+                </span>
+                <button
+                  type="button"
+                  className="inventory-retire-all-btn"
+                  onClick={() => void data.onRetireRows(filters.filteredRows.map((r) => r.row.id))}
+                >
+                  Retire All Expired
+                </button>
+              </div>
+            )}
+
             {isMobile ? (
               <InventoryMobileCards
                 paginatedRows={filters.paginatedRows}
@@ -366,6 +381,8 @@ export function InventoryPage({
                 beginCellEditSession={data.beginCellEditSession}
                 endCellEditSession={data.endCellEditSession}
                 getDaysUntilExpiration={filters.getDaysUntilExpiration}
+                activeTab={filters.activeTab}
+                onRetireRow={(rowId) => void data.onRetireRows([rowId])}
               />
             ) : (
               <InventoryDesktopTable
@@ -405,6 +422,8 @@ export function InventoryPage({
                 isEditingDateCell={data.isEditingDateCell}
                 setEditingLinkCell={data.setEditingLinkCell}
                 setEditingDateCell={data.setEditingDateCell}
+                activeTab={filters.activeTab}
+                onRetireRow={canEditInventory ? (rowId) => void data.onRetireRows([rowId]) : undefined}
               />
             )}
 

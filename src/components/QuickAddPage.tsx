@@ -418,18 +418,23 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         })
         .filter((row) => String(row.values.itemName ?? "").trim().length > 0);
 
-      // Deduplicate by name, aggregate quantities, use lowest-qty row as representative
-      const nameMap = new Map<string, { totalQty: number; rep: InventoryRow }>();
+      // Deduplicate by name. Aggregate only active (non-retired) qty, but include
+      // retired rows so fully-retired items stay discoverable for restocking.
+      // Use a non-retired row as rep when one exists; fall back to retired if all are retired.
+      const nameMap = new Map<string, { totalQty: number; rep: InventoryRow; hasActive: boolean }>();
       for (const row of filtered) {
         const name = getItemDisplayName(row);
-        const qty = Number(row.values.quantity ?? 0);
+        const isRetired = Boolean(row.values.retiredAt);
+        const qty = isRetired ? 0 : Number(row.values.quantity ?? 0);
         const existing = nameMap.get(name);
         if (!existing) {
-          nameMap.set(name, { totalQty: qty, rep: row });
+          nameMap.set(name, { totalQty: qty, rep: row, hasActive: !isRetired });
         } else {
           existing.totalQty += qty;
-          if (qty < Number(existing.rep.values.quantity ?? 0)) {
+          // Prefer a non-retired row as the representative template for new rows
+          if (!isRetired && (!existing.hasActive || Number(row.values.quantity ?? 0) < Number(existing.rep.values.quantity ?? 0))) {
             existing.rep = row;
+            existing.hasActive = true;
           }
         }
       }
@@ -439,7 +444,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         .map(([name, { totalQty, rep }]) => ({
           id: rep.id,
           name,
-          quantity: totalQty,
+          quantity: totalQty, // active qty only; 0 means all lots retired but item still stocked
         }));
     },
     [rows, locationKey],
@@ -669,54 +674,24 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       });
     }
 
-    // Expiration: reuse a zero-qty row when available, otherwise create new
-    const reusedRowIds = new Set<string>();
-
+    // Expiration: always create a new row for each incoming batch
     for (const entry of expirationEntries) {
       const originalRow = rowById.get(entry.itemId);
       if (!originalRow) continue;
-      const itemName = String(originalRow.values.itemName ?? "").trim();
-      const itemLocation = locationKey ? String(originalRow.values[locationKey] ?? "").trim() : "";
-
-      // Find a zero-qty row with the same name+location that we haven't already reused
-      const zeroRow = rows.find((r) => {
-        if (reusedRowIds.has(r.id)) return false;
-        if (r.id === entry.itemId) return false;
-        const rName = String(r.values.itemName ?? "").trim();
-        const rQty = Number(r.values.quantity ?? 0);
-        if (rName !== itemName || rQty !== 0) return false;
-        if (locationKey) {
-          const rLoc = String(r.values[locationKey] ?? "").trim();
-          if (rLoc !== itemLocation) return false;
-        }
-        return true;
+      newRowOffset++;
+      rowsToSave.push({
+        id: crypto.randomUUID(),
+        position: maxPosition + newRowOffset,
+        values: {
+          ...originalRow.values,
+          quantity: entry.quantityToAdd,
+          ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
+          orderedAt: null,
+          retiredAt: null,
+          retiredQty: null,
+          retiredExpDate: null,
+        },
       });
-
-      if (zeroRow) {
-        // Overwrite the zero-qty row with new quantity + expiration
-        reusedRowIds.add(zeroRow.id);
-        rowsToSave.push({
-          ...zeroRow,
-          values: {
-            ...zeroRow.values,
-            quantity: entry.quantityToAdd,
-            ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
-            orderedAt: null,
-          },
-        });
-      } else {
-        newRowOffset++;
-        rowsToSave.push({
-          id: crypto.randomUUID(),
-          position: maxPosition + newRowOffset,
-          values: {
-            ...originalRow.values,
-            quantity: entry.quantityToAdd,
-            ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
-            orderedAt: null,
-          },
-        });
-      }
     }
 
     const restockedNames = new Set(

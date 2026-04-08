@@ -112,7 +112,7 @@ export function useInventoryFilters({
     if (initialFilter) return initialFilter;
     try {
       const saved = localStorage.getItem("wickops.inventory.activeTab");
-      if (saved && ["all", "expired", "exp30", "exp60", "lowStock", "pendingSubmissions"].includes(saved)) {
+      if (saved && ["all", "expired", "exp30", "exp60", "lowStock", "retired", "pendingSubmissions"].includes(saved)) {
         return saved as ActiveTab;
       }
     } catch {}
@@ -248,6 +248,7 @@ export function useInventoryFilters({
     let exp30 = 0;
     let exp60 = 0;
     let lowStock = 0;
+    let retired = 0;
     for (const row of rows) {
       if (locationColumn && effectiveLocationFilter !== "All Locations") {
         const rowLocation = String(row.values[locationColumn.key] ?? "").trim();
@@ -255,6 +256,11 @@ export function useInventoryFilters({
           ? rowLocation === ""
           : rowLocation === effectiveLocationFilter;
         if (!matchesLocation) continue;
+      }
+      // Retired rows are counted separately and excluded from other tabs
+      if (row.values.retiredAt) {
+        retired++;
+        continue;
       }
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
       const isExpired = daysUntil !== null && daysUntil < 0;
@@ -274,7 +280,7 @@ export function useInventoryFilters({
       const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
       if (isLowStock) lowStock++;
     }
-    return { expired, exp30, exp60, lowStock };
+    return { expired, exp30, exp60, lowStock, retired };
   }, [rows, locationColumn, effectiveLocationFilter]);
 
   // ── THE BIG filteredRows memo ──
@@ -298,6 +304,11 @@ export function useInventoryFilters({
         const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
         const rowLocation = String(row.values.location ?? "").trim();
         const rowCategory = String(row.values.category ?? "").trim();
+
+        const isRetired = Boolean(row.values.retiredAt);
+        if (activeFilter === "retired") return isRetired;
+        // Exclude retired rows from all other tabs
+        if (isRetired) return false;
 
         let passesTab = true;
         if (activeFilter === "lowStock") {
@@ -400,7 +411,7 @@ export function useInventoryFilters({
   useEffect(() => {
     // Don't reset tabs while inventory is still loading -- columns aren't available yet
     if (loading) return;
-    if (!hasExpirationColumn && (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60")) {
+    if (!hasExpirationColumn && (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60" || activeFilter === "retired")) {
       setActiveFilter("all");
       return;
     }

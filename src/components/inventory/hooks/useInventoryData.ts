@@ -1082,6 +1082,34 @@ export function useInventoryData({
   // If no location selected yet but locations exist, auto-select the first one
   // (passed through from filters hook locationOptions)
 
+  // ── Retire rows ──
+  const onRetireRows = async (rowIds: string[]) => {
+    if (!canEditInventory || rowIds.length === 0) return;
+    const now = new Date().toISOString();
+    const idSet = new Set(rowIds);
+    pushUndoSnapshot();
+    setRows((prev) => {
+      const next = prev.map((row) => {
+        if (!idSet.has(row.id)) return row;
+        return {
+          ...row,
+          values: {
+            ...row.values,
+            retiredAt: now,
+            retiredQty: String(row.values.quantity ?? "0"),
+            retiredExpDate: String(row.values.expirationDate ?? ""),
+            quantity: 0,
+            expirationDate: "",
+          },
+        };
+      });
+      rowsRef.current = next;
+      return next;
+    });
+    markRowsDirty(rowIds);
+    await onSaveRef.current(false);
+  };
+
   // ── Computed derived values ──
   const selectedFilteredCount = useMemo(
     () => filteredRowIds.filter((rowId) => selectedRowIds.has(rowId)).length,
@@ -1170,6 +1198,7 @@ export function useInventoryData({
     onRequestDeleteSelectedRows,
     onConfirmDeleteSelectedRows,
     onMoveSelectedRows,
+    onRetireRows,
     onCellChange,
     // Cell edit sessions
     beginCellEditSession,

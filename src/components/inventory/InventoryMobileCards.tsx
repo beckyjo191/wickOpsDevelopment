@@ -1,4 +1,4 @@
-import type { InventoryColumn, InventoryRow } from "./inventoryTypes";
+import type { ActiveTab, InventoryColumn, InventoryRow } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
 export type InventoryMobileCardsProps = {
@@ -33,6 +33,8 @@ export type InventoryMobileCardsProps = {
   beginCellEditSession: (rowId: string, columnKey: string) => void;
   endCellEditSession: () => void;
   getDaysUntilExpiration: (value: string | number | boolean | null | undefined) => number | null;
+  activeTab?: ActiveTab;
+  onRetireRow?: (rowId: string) => void;
 };
 
 /**
@@ -67,7 +69,10 @@ export function InventoryMobileCards({
   beginCellEditSession,
   endCellEditSession,
   getDaysUntilExpiration,
+  activeTab,
+  onRetireRow,
 }: InventoryMobileCardsProps) {
+  const showRetire = activeTab === "expired" && !!onRetireRow;
   return (
     <div className="inventory-cards-wrap">
       {canEditTable && (
@@ -259,6 +264,17 @@ export function InventoryMobileCards({
                       />
                     </div>
                   ))}
+                  {showRetire && (
+                    <div className="inventory-card-retire-row">
+                      <button
+                        type="button"
+                        className="inventory-retire-btn"
+                        onClick={() => onRetireRow!(row.id)}
+                      >
+                        Retire Item
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -4681,6 +4681,73 @@ textarea.inventory-card-input {
   border: 1px solid var(--border);
 }
 
+/* ── Retire workflow ──────────────────────────────────────────────────────── */
+.inventory-retire-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--danger-surface);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  border-radius: 6px;
+  margin: 0 0 8px 0;
+  gap: 12px;
+}
+
+.inventory-retire-bar-label {
+  font-size: 0.85rem;
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.inventory-retire-all-btn {
+  font-size: 0.8rem;
+  padding: 4px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.inventory-retire-all-btn:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.inventory-col-retire {
+  width: 72px;
+  min-width: 72px;
+  text-align: center;
+}
+
+.inventory-retire-btn {
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.inventory-retire-btn:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.inventory-card-retire-row {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .reorder-item-badges {
   display: flex;
   gap: 6px;

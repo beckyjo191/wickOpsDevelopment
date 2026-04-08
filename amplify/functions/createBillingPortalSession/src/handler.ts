@@ -8,8 +8,26 @@ const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const USER_TABLE = process.env.USER_TABLE!;
 const ORG_TABLE = process.env.ORG_TABLE!;
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "";
-// Return URL after the user closes the portal — send them back to Settings
 const RETURN_URL = FRONTEND_URL ? `${FRONTEND_URL}/settings` : "";
+
+const DEPLOYMENT_ENV = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
+  .trim()
+  .toLowerCase();
+const CORS_ALLOW_ORIGIN =
+  DEPLOYMENT_ENV === "prod" || DEPLOYMENT_ENV === "production"
+    ? "https://systems.wickops.com"
+    : "http://localhost:5173";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+  "Access-Control-Allow-Headers": "Authorization,Content-Type",
+  "Access-Control-Allow-Methods": "POST,OPTIONS",
+  Vary: "Origin",
+};
+const json = (statusCode: number, body: unknown) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json", ...corsHeaders },
+  body: JSON.stringify(body),
+});
 
 export const handler = async (event: any) => {
   try {
@@ -20,37 +38,32 @@ export const handler = async (event: any) => {
 
     const userId = claims?.sub;
     if (!userId) {
-      return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
+      return json(401, { error: "Unauthorized" });
     }
 
     // Load user → organizationId
     const userRes = await ddb.send(new GetCommand({ TableName: USER_TABLE, Key: { id: userId } }));
-    if (!userRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "User not found" }) };
+    if (!userRes.Item) return json(404, { error: "User not found" });
     const user = userRes.Item;
 
     // Only OWNER or ADMIN can access the billing portal
     const role = String(user.role ?? "").toUpperCase();
     if (role !== "OWNER" && role !== "ADMIN" && role !== "ACCOUNT_OWNER") {
-      return { statusCode: 403, body: JSON.stringify({ error: "Only account owners and admins can manage billing" }) };
+      return json(403, { error: "Only account owners and admins can manage billing" });
     }
 
     if (!user.organizationId) {
-      return { statusCode: 400, body: JSON.stringify({ error: "User has no organization" }) };
+      return json(400, { error: "User has no organization" });
     }
 
     // Load org → stripeCustomerId
     const orgRes = await ddb.send(new GetCommand({ TableName: ORG_TABLE, Key: { id: user.organizationId } }));
-    if (!orgRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "Organization not found" }) };
+    if (!orgRes.Item) return json(404, { error: "Organization not found" });
     const org = orgRes.Item;
 
     const stripeCustomerId = org.stripeCustomerId;
     if (!stripeCustomerId) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({
-          error: "No billing account on file. Complete your initial checkout first.",
-        }),
-      };
+      return json(400, { error: "No billing account on file. Complete your initial checkout first." });
     }
 
     // Create Stripe Customer Portal session
@@ -59,9 +72,9 @@ export const handler = async (event: any) => {
       return_url: RETURN_URL || "https://app.wickops.com/settings",
     });
 
-    return { statusCode: 200, body: JSON.stringify({ url: session.url }) };
+    return json(200, { url: session.url });
   } catch (err: any) {
     console.error("createBillingPortalSession error:", err);
-    return { statusCode: 500, body: JSON.stringify({ error: "Internal server error" }) };
+    return json(500, { error: "Internal server error" });
   }
 };

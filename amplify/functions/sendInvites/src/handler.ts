@@ -19,6 +19,25 @@ const ORG_TABLE = process.env.ORG_TABLE!;
 const INVITE_TABLE = process.env.INVITE_TABLE!;
 const INVITE_ALLOWED_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 
+const DEPLOYMENT_ENV = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
+  .trim()
+  .toLowerCase();
+const CORS_ALLOW_ORIGIN =
+  DEPLOYMENT_ENV === "prod" || DEPLOYMENT_ENV === "production"
+    ? "https://systems.wickops.com"
+    : "http://localhost:5173";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+  "Access-Control-Allow-Headers": "Authorization,Content-Type",
+  "Access-Control-Allow-Methods": "POST,OPTIONS",
+  Vary: "Origin",
+};
+const json = (statusCode: number, body: unknown) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json", ...corsHeaders },
+  body: JSON.stringify(body),
+});
+
 type InviteRole = "ADMIN" | "EDITOR" | "VIEWER";
 
 type InviteInput = {
@@ -118,7 +137,7 @@ export const handler = async (event: any) => {
     const requesterUserId = claims?.sub;
 
     if (!requesterUserId || !USER_POOL_ID) {
-      return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
+      return json(401, { error: "Unauthorized" });
     }
 
     const rawBody = event.isBase64Encoded
@@ -145,7 +164,7 @@ export const handler = async (event: any) => {
     }));
 
     if (invites.length === 0) {
-      return { statusCode: 400, body: JSON.stringify({ error: "No invites provided" }) };
+      return json(400, { error: "No invites provided" });
     }
 
     const requesterRes = await ddb.send(
@@ -154,20 +173,17 @@ export const handler = async (event: any) => {
     const requester = requesterRes.Item;
 
     if (!requester) {
-      return { statusCode: 404, body: JSON.stringify({ error: "Requester not found" }) };
+      return json(404, { error: "Requester not found" });
     }
 
     const requesterRole = String(requester.role ?? "").trim().toUpperCase();
     if (!INVITE_ALLOWED_ROLES.has(requesterRole)) {
-      return {
-        statusCode: 403,
-        body: JSON.stringify({ error: "Only admins or account owners can invite users" }),
-      };
+      return json(403, { error: "Only admins or account owners can invite users" });
     }
 
     const orgId = requester.organizationId;
     if (!orgId) {
-      return { statusCode: 400, body: JSON.stringify({ error: "Requester missing organizationId" }) };
+      return json(400, { error: "Requester missing organizationId" });
     }
 
     const orgRes = await ddb.send(
@@ -175,7 +191,7 @@ export const handler = async (event: any) => {
     );
     const org = orgRes.Item;
     if (!org) {
-      return { statusCode: 404, body: JSON.stringify({ error: "Organization not found" }) };
+      return json(404, { error: "Organization not found" });
     }
 
     // Clean up expired invites first so they don't count against seats
@@ -187,12 +203,7 @@ export const handler = async (event: any) => {
     const seatsRemaining = Math.max(0, seatLimit - seatsUsed);
 
     if (invites.length > seatsRemaining) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({
-          error: `Only ${seatsRemaining} seat(s) available`,
-        }),
-      };
+      return json(400, { error: `Only ${seatsRemaining} seat(s) available` });
     }
 
     const invited: { name: string; email: string; role: InviteRole }[] = [];
@@ -242,19 +253,9 @@ export const handler = async (event: any) => {
       }
     }
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        invitedCount: invited.length,
-        invited,
-        failed,
-      }),
-    };
+    return json(200, { invitedCount: invited.length, invited, failed });
   } catch (error: any) {
     console.error("sendInvites error", error);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Internal server error" }),
-    };
+    return json(500, { error: "Internal server error" });
   }
 };

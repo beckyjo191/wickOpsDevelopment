@@ -2,15 +2,31 @@ import Stripe from "stripe";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 
-// Stripe initialization
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {});
-
-// DynamoDB client
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
 const USER_TABLE = process.env.USER_TABLE!;
 const ORG_TABLE = process.env.ORG_TABLE!;
 const FRONTEND_URL = process.env.FRONTEND_URL!;
+
+const DEPLOYMENT_ENV = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
+  .trim()
+  .toLowerCase();
+const CORS_ALLOW_ORIGIN =
+  DEPLOYMENT_ENV === "prod" || DEPLOYMENT_ENV === "production"
+    ? "https://systems.wickops.com"
+    : "http://localhost:5173";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+  "Access-Control-Allow-Headers": "Authorization,Content-Type",
+  "Access-Control-Allow-Methods": "POST,OPTIONS",
+  Vary: "Origin",
+};
+const json = (statusCode: number, body: unknown) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json", ...corsHeaders },
+  body: JSON.stringify(body),
+});
 
 type PlanKey = "Personal" | "Department" | "Organization";
 type BillingPeriod = "monthly" | "yearly";
@@ -42,18 +58,12 @@ export const handler = async (event: any) => {
     const orgName = String(requestBody.orgName ?? "").trim().slice(0, 100);
 
     if (!VALID_PLAN_KEYS.has(planKey) || !VALID_BILLING_PERIODS.has(billingPeriod)) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: "Invalid plan or billing period." }),
-      };
+      return json(400, { error: "Invalid plan or billing period." });
     }
 
     const priceId = PRICE_ID_MAP[planKey as PlanKey][billingPeriod as BillingPeriod];
     if (!priceId) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: "Price not configured for this plan. Contact support." }),
-      };
+      return json(500, { error: "Price not configured for this plan. Contact support." });
     }
 
     const claims =
@@ -62,27 +72,27 @@ export const handler = async (event: any) => {
 
     const userId = claims?.sub;
     if (!userId) {
-      return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized" }) };
+      return json(401, { error: "Unauthorized" });
     }
 
     // Load user
     const userRes = await ddb.send(new GetCommand({ TableName: USER_TABLE, Key: { id: userId } }));
-    if (!userRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "User not found" }) };
+    if (!userRes.Item) return json(404, { error: "User not found" });
     const user = userRes.Item;
 
     // Only OWNER or ADMIN can manage billing
     const role = String(user.role ?? "").toUpperCase();
     if (role !== "OWNER" && role !== "ADMIN" && role !== "ACCOUNT_OWNER") {
-      return { statusCode: 403, body: JSON.stringify({ error: "Only account owners and admins can manage billing" }) };
+      return json(403, { error: "Only account owners and admins can manage billing" });
     }
 
     if (!user.organizationId) {
-      return { statusCode: 500, body: JSON.stringify({ error: "User missing organizationId" }) };
+      return json(500, { error: "User missing organizationId" });
     }
 
     // Load organization
     const orgRes = await ddb.send(new GetCommand({ TableName: ORG_TABLE, Key: { id: user.organizationId } }));
-    if (!orgRes.Item) return { statusCode: 404, body: JSON.stringify({ error: "Organization not found" }) };
+    if (!orgRes.Item) return json(404, { error: "Organization not found" });
     const org = orgRes.Item;
 
     // Update org name if the user provided one on the subscription page
@@ -136,9 +146,9 @@ export const handler = async (event: any) => {
       },
     });
 
-    return { statusCode: 200, body: JSON.stringify({ url: session.url }) };
+    return json(200, { url: session.url });
   } catch (err: any) {
     console.error("createCheckoutSession error:", err);
-    return { statusCode: 500, body: JSON.stringify({ error: "Internal server error" }) };
+    return json(500, { error: "Internal server error" });
   }
 };

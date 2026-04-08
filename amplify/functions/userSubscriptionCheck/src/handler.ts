@@ -20,6 +20,25 @@ import { createHash } from "node:crypto";
 const rawDdb = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(rawDdb);
 
+const DEPLOYMENT_ENV = String(process.env.AMPLIFY_ENV ?? process.env.ENV ?? "")
+  .trim()
+  .toLowerCase();
+const CORS_ALLOW_ORIGIN =
+  DEPLOYMENT_ENV === "prod" || DEPLOYMENT_ENV === "production"
+    ? "https://systems.wickops.com"
+    : "http://localhost:5173";
+const corsHeaders = {
+  "Access-Control-Allow-Origin": CORS_ALLOW_ORIGIN,
+  "Access-Control-Allow-Headers": "Authorization,Content-Type",
+  "Access-Control-Allow-Methods": "GET,OPTIONS",
+  Vary: "Origin",
+};
+const json = (statusCode: number, body: unknown) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json", ...corsHeaders },
+  body: JSON.stringify(body),
+});
+
 const USER_TABLE = process.env.USER_TABLE!;
 const ORG_TABLE = process.env.ORG_TABLE!;
 const INVITE_TABLE = process.env.INVITE_TABLE!;
@@ -433,10 +452,7 @@ const userId = claims?.sub;
 const email = claims?.email ? normalizeEmail(claims.email) : undefined;
 
     if (!userId) {
-      return {
-        statusCode: 401,
-        body: JSON.stringify({ error: "Unauthorized" }),
-      };
+      return json(401, { error: "Unauthorized" });
     }
 
     // 1️⃣ Load user
@@ -467,10 +483,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
 
     if (!user) {
       if (!email) {
-        return {
-          statusCode: 404,
-          body: JSON.stringify({ error: "User not found" }),
-        };
+        return json(404, { error: "User not found" });
       }
 
       try {
@@ -489,10 +502,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
         const inviteStatusUsable =
           normalizedInvite?.status === "PENDING" || normalizedInvite?.status === "ACCEPTED";
         if (!inviteOrganizationId || !inviteStatusUsable) {
-          return {
-            statusCode: 404,
-            body: JSON.stringify({ error: "User not found" }),
-          };
+          return json(404, { error: "User not found" });
         }
 
         const orgResForInvite = await ddb.send(
@@ -503,10 +513,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
         );
 
         if (!orgResForInvite.Item) {
-          return {
-            statusCode: 404,
-            body: JSON.stringify({ error: "Organization not found" }),
-          };
+          return json(404, { error: "Organization not found" });
         }
 
         const role =
@@ -562,27 +569,16 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
               (typeof user.email === "string" ? normalizeEmail(user.email) : undefined);
             await reconcileInviteAcceptance(userId, reconcileEmail, user.organizationId);
           } else {
-            return {
-              statusCode: 404,
-              body: JSON.stringify({ error: "User not found" }),
-            };
+            return json(404, { error: "User not found" });
           }
         } else {
-          return {
-            statusCode: 404,
-            body: JSON.stringify({ error: "User not found" }),
-          };
+          return json(404, { error: "User not found" });
         }
       }
     }
 
     if (!user.organizationId) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({
-          error: "User missing organizationId",
-        }),
-      };
+      return json(500, { error: "User missing organizationId" });
     }
 
     const reconcileEmail =
@@ -606,10 +602,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
     );
 
     if (!orgRes.Item) {
-      return {
-        statusCode: 404,
-        body: JSON.stringify({ error: "Organization not found" }),
-      };
+      return json(404, { error: "Organization not found" });
     }
 
     const org = orgRes.Item;
@@ -670,41 +663,32 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
     // Only show onboarding when explicitly set to false (new orgs set this in postConfirmation).
     const onboardingCompleted = org.onboardingCompleted !== false;
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        displayName: String(user.displayName ?? ""),
-        organizationId: user.organizationId,
-        orgName: String(org.name ?? ""),
-        subscribed,
-        accessSuspended,
-        plan,
-        seatLimit: org.seatLimit ?? 1,
-        seatsUsed,
-        paymentStatus: org.paymentStatus ?? "Free",
-        role: normalizedRole,
-        canInviteUsers,
-        orgAvailableModules,
-        orgEnabledModules,
-        allowedModules,
-        onboardingCompleted,
-      }),
-    };
+    return json(200, {
+      displayName: String(user.displayName ?? ""),
+      organizationId: user.organizationId,
+      orgName: String(org.name ?? ""),
+      subscribed,
+      accessSuspended,
+      plan,
+      seatLimit: org.seatLimit ?? 1,
+      seatsUsed,
+      paymentStatus: org.paymentStatus ?? "Free",
+      role: normalizedRole,
+      canInviteUsers,
+      orgAvailableModules,
+      orgEnabledModules,
+      allowedModules,
+      onboardingCompleted,
+    });
   } catch (err) {
     if (err instanceof InventoryStorageProvisioningError || isResourceInUse(err)) {
-      return {
-        statusCode: 202,
-        body: JSON.stringify({
-          error: "Inventory storage is still provisioning",
-          code: "INVENTORY_STORAGE_PROVISIONING",
-          retryAfterMs: PROVISIONING_RETRY_AFTER_MS,
-        }),
-      };
+      return json(202, {
+        error: "Inventory storage is still provisioning",
+        code: "INVENTORY_STORAGE_PROVISIONING",
+        retryAfterMs: PROVISIONING_RETRY_AFTER_MS,
+      });
     }
     console.error("user-subscription error:", err);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: "Internal server error" }),
-    };
+    return json(500, { error: "Internal server error" });
   }
 };

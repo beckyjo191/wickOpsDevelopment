@@ -42,8 +42,13 @@ const browserCorsMethods = [
   CorsHttpMethod.DELETE,
   CorsHttpMethod.OPTIONS,
 ];
-const createAuthenticatedHttpApi = (stackName: string, id: string) =>
-  new HttpApi(backend.createStack(stackName), id, {
+// All functions use resourceGroupName: "auth", so colocate API gateways in the
+// same stack to avoid cross-stack Lambda integration permissions (which cause
+// CloudFormation circular dependencies between nested stacks).
+const apiStack = Stack.of(backend.inventoryApi.resources.lambda);
+
+const createHttpApiWithCors = (id: string) =>
+  new HttpApi(apiStack, id, {
     corsPreflight: {
       allowOrigins: corsAllowedOrigins,
       allowHeaders: corsAllowedHeaders,
@@ -51,13 +56,10 @@ const createAuthenticatedHttpApi = (stackName: string, id: string) =>
     },
   });
 
-const inventoryHttpApi = createAuthenticatedHttpApi("inventory-api-gateway", "InventoryHttpApi");
-const coreHttpApi = createAuthenticatedHttpApi("core-api-gateway", "CoreHttpApi");
-const invitesHttpApi = createAuthenticatedHttpApi("invites-api-gateway", "InvitesHttpApi");
-const billingWebhookHttpApi = new HttpApi(
-  backend.createStack("billing-webhook-api-gateway"),
-  "BillingWebhookHttpApi",
-);
+const inventoryHttpApi = createHttpApiWithCors("InventoryHttpApi");
+const coreHttpApi = createHttpApiWithCors("CoreHttpApi");
+const invitesHttpApi = createHttpApiWithCors("InvitesHttpApi");
+const billingWebhookHttpApi = new HttpApi(apiStack, "BillingWebhookHttpApi");
 
 const createUserPoolAuthorizer = (id: string) =>
   new HttpUserPoolAuthorizer(id, backend.auth.resources.userPool, {

@@ -4,6 +4,6 @@ import { defineFunction } from "@aws-amplify/backend";
 export const userSubscriptionCheck = defineFunction({
   name: "userSubscriptionCheck",
   entry: "./src/handler.ts",
-  resourceGroupName: "data",
+  resourceGroupName: "auth",
   timeoutSeconds: 30,
 });

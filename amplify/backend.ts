@@ -362,28 +362,46 @@ postConfirmLambda.addPermission("CognitoPostConfirmInvoke", {
   sourceArn: userPoolForTrigger.userPoolArn,
 });
 
-// Custom resource Lambda that calls UpdateUserPool to set the trigger
+// Custom resource Lambda that calls UpdateUserPool to set the trigger.
+// UpdateUserPool resets any field not explicitly included, so we must
+// pass through all critical settings from DescribeUserPool.
 const triggerSetterFn = new LambdaFunction(wiringStack, "TriggerSetterFn", {
   runtime: Runtime.NODEJS_20_X,
   handler: "index.handler",
   code: Code.fromInline(`
 const { CognitoIdentityProviderClient, DescribeUserPoolCommand, UpdateUserPoolCommand } = require("@aws-sdk/client-cognito-identity-provider");
+
+// Build an UpdateUserPool params object that preserves all existing settings.
+function buildUpdateParams(pool, overrideLambdaConfig) {
+  return {
+    UserPoolId: pool.Id,
+    LambdaConfig: overrideLambdaConfig,
+    // Preserve settings that UpdateUserPool resets if omitted
+    AutoVerifiedAttributes: pool.AutoVerifiedAttributes || [],
+    Policies: pool.Policies,
+    AdminCreateUserConfig: pool.AdminCreateUserConfig,
+    UserPoolAddOns: pool.UserPoolAddOns,
+    AccountRecoverySetting: pool.AccountRecoverySetting,
+    VerificationMessageTemplate: pool.VerificationMessageTemplate,
+    MfaConfiguration: pool.MfaConfiguration || "OFF",
+    UserAttributeUpdateSettings: pool.UserAttributeUpdateSettings,
+  };
+}
+
 exports.handler = async (event) => {
   const props = event.ResourceProperties;
   const client = new CognitoIdentityProviderClient({});
-  if (event.RequestType === "Delete") {
-    // On delete, remove the trigger by preserving existing config without PostConfirmation
-    const desc = await client.send(new DescribeUserPoolCommand({ UserPoolId: props.UserPoolId }));
-    const existing = desc.UserPool.LambdaConfig || {};
-    delete existing.PostConfirmation;
-    await client.send(new UpdateUserPoolCommand({ UserPoolId: props.UserPoolId, LambdaConfig: existing }));
-    return { PhysicalResourceId: event.PhysicalResourceId };
-  }
-  // Create/Update: merge PostConfirmation trigger into existing LambdaConfig
   const desc = await client.send(new DescribeUserPoolCommand({ UserPoolId: props.UserPoolId }));
-  const existing = desc.UserPool.LambdaConfig || {};
-  existing.PostConfirmation = props.LambdaArn;
-  await client.send(new UpdateUserPoolCommand({ UserPoolId: props.UserPoolId, LambdaConfig: existing }));
+  const pool = desc.UserPool;
+  const lambdaCfg = { ...(pool.LambdaConfig || {}) };
+
+  if (event.RequestType === "Delete") {
+    delete lambdaCfg.PostConfirmation;
+  } else {
+    lambdaCfg.PostConfirmation = props.LambdaArn;
+  }
+
+  await client.send(new UpdateUserPoolCommand(buildUpdateParams(pool, lambdaCfg)));
   return { PhysicalResourceId: "postconfirm-trigger" };
 };
   `),

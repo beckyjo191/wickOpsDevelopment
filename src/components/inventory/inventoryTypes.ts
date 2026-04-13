@@ -11,12 +11,15 @@ export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock"
 export type ActiveTab = InventoryFilter | "pendingSubmissions";
 export type SortDirection = "asc" | "desc";
 
+export type InventoryInitialAction = "import-csv" | "paste-import" | "download-template";
+
 export interface InventoryPageProps {
   canEditInventory: boolean;
   canReviewSubmissions?: boolean;
   initialFilter?: InventoryFilter;
   initialSearch?: string;
   initialEditCell?: { rowId: string; columnKey: string };
+  initialAction?: InventoryInitialAction;
   selectedLocation: string | null;
   onLocationChange: (location: string | null) => void;
   /** Called with the async save function when the component mounts, null when it unmounts.

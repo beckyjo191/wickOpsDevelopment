@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { RouteContext } from "../types";
 import { json } from "../http";
 import { ensureColumns } from "../columns";
-import { listAllItems } from "../items";
+import { listAllItems, listItemsPage } from "../items";
 import { getDaysUntilExpiration } from "../csv";
 import { getRegisteredLocations } from "../locations";
 import { ddb } from "../clients";
@@ -80,14 +80,18 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
 export const handleBootstrap = async (ctx: RouteContext) => {
   const { storage, access } = ctx;
   const columns = await ensureColumns(access.organizationId);
-  let [items, registeredLocations] = await Promise.all([
-    listAllItems(storage, access.organizationId),
+
+  // Use paginated fetch to stay well under Lambda's 6 MB response limit.
+  // Each item is ~200 bytes JSON, so 10k items ≈ 2 MB — safe margin under 6 MB.
+  const BOOTSTRAP_PAGE_SIZE = 10_000;
+  let [page, registeredLocations] = await Promise.all([
+    listItemsPage(storage, access.organizationId, BOOTSTRAP_PAGE_SIZE),
     getRegisteredLocations(storage),
   ]);
+  let items = page.items;
+  let nextToken = page.nextToken;
 
   // Seed a single blank row so new orgs never see an empty table.
-  // Wrapped in try-catch so a seed failure (e.g. table still provisioning)
-  // doesn't take down the entire bootstrap response.
   if (items.length === 0) {
     try {
       const rowId = randomUUID();
@@ -118,8 +122,8 @@ export const handleBootstrap = async (ctx: RouteContext) => {
         }),
       );
       items = [{ id: rowId, organizationId: access.organizationId, module: "inventory", position: 0, valuesJson, createdAt: now, updatedAtCustom: now }];
+      nextToken = null;
     } catch (err) {
-      // Non-critical: frontend will create a blank row in memory if items is empty
       console.warn("Failed to seed blank row for new org", err);
     }
   }
@@ -130,6 +134,6 @@ export const handleBootstrap = async (ctx: RouteContext) => {
     items,
     registeredLocations,
     columnVisibilityOverrides: access.columnVisibilityOverrides,
-    nextToken: null,
+    nextToken,
   });
 };

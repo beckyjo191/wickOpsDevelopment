@@ -160,6 +160,31 @@ export const loadInventoryBootstrap = async (): Promise<{
   };
 };
 
+/** Fetch a page of inventory items (used to load remaining pages after bootstrap). */
+export const loadInventoryItems = async (
+  nextToken: string,
+  limit = 250,
+): Promise<{ items: InventoryRow[]; nextToken: string | null }> => {
+  const base = requireBaseUrl();
+  const params = new URLSearchParams({ nextToken, limit: String(limit) });
+  const res = await authFetch(`${base}/inventory/items?${params}`);
+  if (!res.ok) {
+    throw new Error((await res.text()) || "Failed to load inventory items");
+  }
+  const data = await res.json();
+  return {
+    items: ((data.items ?? []) as ApiItem[])
+      .map((item) => ({
+        id: item.id,
+        position: Number(item.position ?? 0),
+        values: parseValues(item.valuesJson),
+        createdAt: item.createdAt,
+      }))
+      .sort((a, b) => a.position - b.position),
+    nextToken: data.nextToken ?? null,
+  };
+};
+
 export const saveUserColumnVisibility = async (
   overrides: ColumnVisibilityOverrides,
 ): Promise<void> => {

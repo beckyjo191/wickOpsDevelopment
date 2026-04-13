@@ -5,6 +5,7 @@ import {
   importInventoryCsv,
   isInventoryProvisioningError,
   loadInventoryBootstrap,
+  loadInventoryItems,
   saveInventoryItems,
   saveInventoryItemsSync,
   type ColumnVisibilityOverrides,
@@ -114,6 +115,10 @@ export function useInventoryData({
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const editingRowIdRef = useRef<string | null>(null);
+  /** Row that was recently blurred — autosave still skips it for a short grace period
+   *  so rapid cross-cell edits within the same row don't produce intermediate audit entries. */
+  const recentlyEditedRowIdRef = useRef<string | null>(null);
+  const recentlyEditedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingScrollToRowRef = useRef<string | null>(null);
   const editSessionCellRef = useRef<string | null>(null);
   const rowsRef = useRef(rows);
@@ -293,6 +298,12 @@ export function useInventoryData({
     if (editSessionCellRef.current === cellKey) return;
     editSessionCellRef.current = cellKey;
     editingRowIdRef.current = rowId;
+    // Clear grace-period timer if the user is resuming edits on the same row
+    if (recentlyEditedRowIdRef.current === rowId) {
+      if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
+      recentlyEditedRowIdRef.current = null;
+      recentlyEditedTimerRef.current = null;
+    }
     // Defer state updates so they don't cause a re-render that clears
     // the text selection from select(). Also re-select after the deferred
     // re-render in case a pending state update (from a previous edit)
@@ -312,8 +323,20 @@ export function useInventoryData({
   };
 
   const endCellEditSession = () => {
+    const rowId = editingRowIdRef.current;
     editSessionCellRef.current = null;
     editingRowIdRef.current = null;
+    // Keep the row protected from autosave for a short grace period so
+    // rapid cross-cell edits (blur → focus next cell) don't create
+    // intermediate audit entries for each field.
+    if (rowId) {
+      recentlyEditedRowIdRef.current = rowId;
+      if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
+      recentlyEditedTimerRef.current = setTimeout(() => {
+        recentlyEditedRowIdRef.current = null;
+        recentlyEditedTimerRef.current = null;
+      }, 5000);
+    }
   };
 
   // ── Cell change ──
@@ -646,13 +669,13 @@ export function useInventoryData({
   const diffRowsAgainstSnapshot = (
     currentRows: InventoryRow[],
     snap: Map<string, string>,
-    /** Row ID to skip (the one being actively edited) — deferred until blur/manual save */
-    skipRowId?: string | null,
+    /** Row IDs to skip (actively edited + recently blurred grace period) */
+    skipRowIds?: Set<string> | null,
   ) => {
     const changed: InventoryRow[] = [];
     for (let i = 0; i < currentRows.length; i++) {
       const row = currentRows[i];
-      if (skipRowId && row.id === skipRowId) continue;
+      if (skipRowIds && skipRowIds.has(row.id)) continue;
       const prev = snap.get(row.id);
       const serialized = serializeRowForSnapshot(row, i);
       if (prev === serialized) continue;
@@ -681,13 +704,24 @@ export function useInventoryData({
     const pendingDeleted = Array.from(deletedRowIdsRef.current);
     const snap = lastSavedSnapshotRef.current;
 
-    // During autosave (silent), skip the row being actively edited so
-    // intermediate keystrokes don't generate separate audit entries.
+    // During autosave (silent), skip rows being actively edited AND rows
+    // in the post-blur grace period so rapid cross-cell edits within one
+    // row don't generate intermediate audit entries for each field.
     // Manual save (Save button / blur) saves everything.
+    let skipIds: Set<string> | null = null;
+    if (silent) {
+      const editing = editingRowIdRef.current;
+      const recent = recentlyEditedRowIdRef.current;
+      if (editing || recent) {
+        skipIds = new Set<string>();
+        if (editing) skipIds.add(editing);
+        if (recent) skipIds.add(recent);
+      }
+    }
     const changedRows = diffRowsAgainstSnapshot(
       currentRows,
       snap,
-      silent ? editingRowIdRef.current : null,
+      skipIds,
     );
 
     if (changedRows.length === 0 && pendingDeleted.length === 0) return;
@@ -863,7 +897,7 @@ export function useInventoryData({
 
   // ── Effects ──
 
-  // Bootstrap loading with provisioning retry
+  // Bootstrap loading with provisioning retry + paginated fetch of remaining items
   useEffect(() => {
     let cancelled = false;
 
@@ -872,13 +906,14 @@ export function useInventoryData({
       setLoadError("");
       setLoadingMessage(pickLoadingLine());
 
+      // 1. Bootstrap (first page of items + columns + access)
+      let bootstrap: Awaited<ReturnType<typeof loadInventoryBootstrap>> | null = null;
       while (!cancelled) {
         try {
-          const bootstrap = await loadInventoryBootstrap();
+          bootstrap = await loadInventoryBootstrap();
           if (cancelled) return;
           applyBootstrap(bootstrap);
-          setLoading(false);
-          return;
+          break;
         } catch (err: any) {
           if (cancelled) return;
           if (isInventoryProvisioningError(err)) {
@@ -894,6 +929,35 @@ export function useInventoryData({
           return;
         }
       }
+
+      // 2. Fetch remaining pages in the background
+      if (bootstrap?.nextToken) {
+        let token: string | null = bootstrap.nextToken;
+        while (token && !cancelled) {
+          try {
+            const page = await loadInventoryItems(token);
+            if (cancelled) return;
+            token = page.nextToken;
+            // Append new rows and update snapshot so autosave doesn't flag them dirty
+            setRows((prev) => {
+              const next = [...prev, ...page.items];
+              rowsRef.current = next;
+              const snap = lastSavedSnapshotRef.current;
+              for (let i = 0; i < page.items.length; i++) {
+                const row = page.items[i];
+                snap.set(row.id, JSON.stringify({ values: row.values, position: prev.length + i }));
+              }
+              return next;
+            });
+          } catch {
+            // Non-critical: user has first page, remaining pages failed
+            console.warn("Failed to load remaining inventory pages");
+            break;
+          }
+        }
+      }
+
+      if (!cancelled) setLoading(false);
     };
 
     load();
@@ -1034,22 +1098,6 @@ export function useInventoryData({
       onAddRow("above");
     }
   }, [effectiveLocationFilter]);
-
-  // Ensure every location tab always has at least one row.
-  // When the user switches to a location that has zero matching items
-  // (e.g. freshly registered, or after a page reload), automatically
-  // insert a blank row assigned to that location.
-  // Only on the "all" tab — filter tabs (lowStock, expired, etc.) legitimately
-  // show zero rows and a blank row wouldn't match those filters, causing a loop.
-  useEffect(() => {
-    if (!canEditTable) return;
-    if (activeTab !== "all") return;
-    if (effectiveLocationFilter === "All Locations") return;
-    if (filteredRows.length > 0) return;
-    // Skip if the pending-new-location effect already fired / will fire
-    if (pendingNewLocationRef.current) return;
-    onAddRow("above");
-  }, [filteredRows, effectiveLocationFilter, canEditTable, activeTab]);
 
   // Clear selections when switching locations
   useEffect(() => {

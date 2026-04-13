@@ -1,4 +1,4 @@
-import type { ChangeEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 
 export type InventoryToolbarProps = {
   canEdit: boolean;
@@ -15,14 +15,8 @@ export type InventoryToolbarProps = {
   onMoveSelectedRows: (location: string) => void;
   onRequestDelete: () => void;
   onSave: () => void;
-  onChooseCsvImport: () => void;
-  onOpenPasteImport: () => void;
-  onDownloadTemplate: () => void;
-  importInputRef: any;
   locationOptions: string[];
   effectiveLocationFilter: string;
-  importingCsv: boolean;
-  onCsvSelected: (event: ChangeEvent<HTMLInputElement>) => void;
   rowCount: number;
   searchTerm: string;
   onSearchChange: (term: string) => void;
@@ -47,14 +41,8 @@ export function InventoryToolbar({
   onMoveSelectedRows,
   onRequestDelete,
   onSave,
-  onChooseCsvImport,
-  onOpenPasteImport,
-  onDownloadTemplate,
-  importInputRef,
   locationOptions,
   effectiveLocationFilter,
-  importingCsv,
-  onCsvSelected,
   rowCount,
   searchTerm,
   onSearchChange,
@@ -63,15 +51,6 @@ export function InventoryToolbar({
 
   return (
     <div className="inventory-header-actions">
-      <input
-        ref={importInputRef}
-        type="file"
-        accept=".csv,.CSV,.tsv,.TSV,.xlsx,.XLSX,.xls,.XLS,text/csv,text/tab-separated-values,application/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/octet-stream"
-        onChange={(event) => {
-          void onCsvSelected(event);
-        }}
-        style={{ display: "none" }}
-      />
       {canEditTable ? (
         <>
           {isMobile ? (
@@ -85,7 +64,7 @@ export function InventoryToolbar({
           ) : (
             <details className="inventory-import-menu">
               <summary className="inventory-import-trigger">Add Row</summary>
-              <div className="inventory-import-panel">
+              <div className="inventory-import-panel inventory-import-panel-left">
                 <button
                   type="button"
                   className="inventory-import-option"
@@ -137,39 +116,6 @@ export function InventoryToolbar({
           ) : null}
         </>
       ) : null}
-      {!isMobile && (
-        <details className="inventory-import-menu">
-          <summary className="inventory-import-trigger">
-            {importingCsv ? "Importing..." : "Import"}
-          </summary>
-          <div className="inventory-import-panel">
-            <button
-              type="button"
-              className="inventory-import-option"
-              onClick={onChooseCsvImport}
-              disabled={importingCsv || saving}
-            >
-              Upload CSV/XLSX
-            </button>
-            <button
-              type="button"
-              className="inventory-import-option"
-              onClick={onOpenPasteImport}
-              disabled={importingCsv || saving}
-            >
-              Paste Data
-            </button>
-            <button
-              type="button"
-              className="inventory-import-option"
-              onClick={onDownloadTemplate}
-              disabled={importingCsv || saving}
-            >
-              Download Template
-            </button>
-          </div>
-        </details>
-      )}
       <div className="inventory-search-wrap inventory-toolbar-search">
         <input
           className="inventory-search-input"

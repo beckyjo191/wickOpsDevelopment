@@ -1,6 +1,6 @@
 // ── InventoryPage orchestrator ───────────────────────────────────────────────
 // Wires custom hooks to sub-components. All state lives in hooks.
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { InventoryPageProps } from "./inventoryTypes";
 import { normalizeHeaderKey } from "./inventoryUtils";
 import {
@@ -36,6 +36,7 @@ export function InventoryPage({
   initialFilter,
   initialSearch,
   initialEditCell,
+  initialAction,
   selectedLocation,
   onLocationChange,
   onSaveFnChange,
@@ -82,6 +83,17 @@ export function InventoryPage({
     editingRowIdRef: data.editingRowIdRef,
   });
   filtersRef.current = filters;
+
+  // ── Auto-paginate to the selected row (e.g. after Add Row) ────────────────
+  useEffect(() => {
+    if (!data.selectedRowId) return;
+    const idx = filters.filteredRows.findIndex(({ row }) => row.id === data.selectedRowId);
+    if (idx < 0) return;
+    const targetPage = Math.floor(idx / ROWS_PER_PAGE) + 1;
+    if (targetPage !== filters.safePage) {
+      filters.setCurrentPage(targetPage);
+    }
+  }, [data.selectedRowId, filters.filteredRows]);
 
   // ── Column resize hook ────────────────────────────────────────────────────
   const resize = useColumnResize(data.organizationId);
@@ -143,6 +155,16 @@ export function InventoryPage({
     });
   };
 
+  // ── Trigger initial action (e.g. navigated from Settings → Import) ──────
+  const initialActionFired = useRef(false);
+  useEffect(() => {
+    if (initialActionFired.current || data.loading || !initialAction) return;
+    initialActionFired.current = true;
+    if (initialAction === "import-csv") data.onChooseCsvImport();
+    else if (initialAction === "paste-import") data.onOpenPasteImport();
+    else if (initialAction === "download-template") handleDownloadTemplate();
+  }, [data.loading, initialAction]);
+
   // ── Loading state ─────────────────────────────────────────────────────────
   if (data.loading) {
     return (
@@ -168,6 +190,13 @@ export function InventoryPage({
     <section className="app-content">
       <div className="app-card app-card--inventory">
         {data.saving && <div className="inventory-save-bar" />}
+        <input
+          ref={data.importInputRef}
+          type="file"
+          accept=".csv,.CSV,.tsv,.TSV,.xlsx,.XLSX,.xls,.XLS,text/csv,text/tab-separated-values,application/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/octet-stream"
+          onChange={(event) => { void data.onCsvSelected(event); }}
+          style={{ display: "none" }}
+        />
         <InventoryToolbar
           canEdit={canEditInventory}
           canEditTable={data.canEditTable}
@@ -183,14 +212,8 @@ export function InventoryPage({
           onMoveSelectedRows={data.onMoveSelectedRows}
           onRequestDelete={data.onRequestDeleteSelectedRows}
           onSave={() => void data.onSave(false)}
-          onChooseCsvImport={data.onChooseCsvImport}
-          onOpenPasteImport={data.onOpenPasteImport}
-          onDownloadTemplate={handleDownloadTemplate}
-          importInputRef={data.importInputRef}
           locationOptions={filters.locationOptions}
           effectiveLocationFilter={filters.effectiveLocationFilter}
-          importingCsv={data.importingCsv}
-          onCsvSelected={data.onCsvSelected}
           rowCount={data.rows.length}
           searchTerm={filters.searchTerm}
           onSearchChange={filters.setSearchTerm}

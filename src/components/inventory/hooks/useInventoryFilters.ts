@@ -86,8 +86,10 @@ function compareForSort(
   const leftMissing = left === null || left === "";
   const rightMissing = right === null || right === "";
   if (leftMissing && rightMissing) return 0;
-  if (leftMissing) return 1;
-  if (rightMissing) return -1;
+  // Respect sort direction for empty values so flipping the column header
+  // actually moves blank rows between the top and the bottom of the list.
+  if (leftMissing) return direction === "asc" ? 1 : -1;
+  if (rightMissing) return direction === "asc" ? -1 : 1;
 
   const base =
     typeof left === "number" && typeof right === "number"

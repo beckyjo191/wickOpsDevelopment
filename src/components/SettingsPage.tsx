@@ -31,13 +31,14 @@ import type { ThemePreference } from "../lib/themePreference";
 import { ChevronUp, ChevronDown, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns" | "help";
+type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns" | "importData" | "help";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
   userModuleAccess: true,
   locations: true,
   inventoryColumns: false,
+  importData: false,
   help: false,
 };
 
@@ -58,6 +59,7 @@ interface SettingsPageProps {
   onCurrentUserEmailChange: (email: string) => void;
   onUserRevoked: (userId: string, newSeatsUsed: number) => void;
   onInviteUsers: () => void;
+  onNavigateToImport: (action: "import-csv" | "paste-import" | "download-template") => void;
   userName?: string;
   onLogout?: () => void;
 }
@@ -79,6 +81,7 @@ export function SettingsPage({
   onCurrentUserEmailChange,
   onUserRevoked,
   onInviteUsers,
+  onNavigateToImport,
   userName,
   onLogout,
 }: SettingsPageProps) {
@@ -1257,6 +1260,42 @@ export function SettingsPage({
             </p>
           )}
         </details>
+
+        {canManageInventoryColumns && (
+          <details
+            className="settings-section"
+            open={disclosures.importData}
+            onToggle={(event) => onDisclosureToggle("importData", event.currentTarget.open)}
+          >
+            <summary className="settings-section-title">Import Data</summary>
+            <p className="settings-section-copy">
+              Import inventory items from a spreadsheet or paste data directly.
+            </p>
+            <div className="settings-import-actions">
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={() => onNavigateToImport("import-csv")}
+              >
+                Upload CSV / XLSX
+              </button>
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={() => onNavigateToImport("paste-import")}
+              >
+                Paste Data
+              </button>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => onNavigateToImport("download-template")}
+              >
+                Download Template
+              </button>
+            </div>
+          </details>
+        )}
 
         <details
           className="settings-section"

@@ -55,6 +55,7 @@ export default function App() {
   const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);
   const [inventoryInitialSearch, setInventoryInitialSearch] = useState<string | undefined>(undefined);
   const [inventoryInitialEditCell, setInventoryInitialEditCell] = useState<{ rowId: string; columnKey: string } | undefined>(undefined);
+  const [inventoryInitialAction, setInventoryInitialAction] = useState<import("./components/inventory/inventoryTypes").InventoryInitialAction | undefined>(undefined);
   const [inventoryKey, setInventoryKey] = useState(0);
   const [dashboardKey, setDashboardKey] = useState(0);
   const setView = (v: AppView) => {
@@ -62,6 +63,7 @@ export default function App() {
       setInventoryInitialFilter(undefined);
       setInventoryInitialSearch(undefined);
       setInventoryInitialEditCell(undefined);
+      setInventoryInitialAction(undefined);
     }
     if (v === "dashboard") setDashboardKey((k) => k + 1);
     setViewRaw(v);
@@ -459,6 +461,11 @@ export default function App() {
           if (!canInviteMore) return;
           setView("invite");
         }}
+        onNavigateToImport={(action) => {
+          setInventoryInitialAction(action);
+          setInventoryKey((k) => k + 1);
+          setView("inventory");
+        }}
         userName={userName}
         onLogout={signOut}
       />
@@ -472,6 +479,7 @@ export default function App() {
         initialFilter={inventoryInitialFilter}
         initialSearch={inventoryInitialSearch}
         initialEditCell={inventoryInitialEditCell}
+        initialAction={inventoryInitialAction}
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
         onSaveFnChange={(fn) => { inventorySaveFnRef.current = fn; }}

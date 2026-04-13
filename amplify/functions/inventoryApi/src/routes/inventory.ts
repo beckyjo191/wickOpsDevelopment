@@ -9,7 +9,7 @@ import { buildAuditEvent, writeAuditEvents, computeValuesDiff } from "../audit";
 
 export const handleListItems = async (ctx: RouteContext) => {
   const { storage, access, query } = ctx;
-  const limit = Math.min(Math.max(Number(query.limit ?? 100), 1), 250);
+  const limit = Math.min(Math.max(Number(query.limit ?? 500), 1), 10_000);
   const start = parseNextToken(query.nextToken);
   const page = await listItemsPage(storage, access.organizationId, limit, start);
   return json(200, page);
@@ -108,20 +108,34 @@ export const handleSaveItems = async (ctx: RouteContext) => {
       throw err;
     }
 
-    // Build audit event
+    // Build audit event — defer ITEM_CREATE until the row has meaningful
+    // content so the activity log shows the real item name, not "Item 07ec…"
     const itemName = String(values.itemName ?? "").trim() || `Item ${rowId.slice(0, 8)}`;
     const oldValues = oldValuesMap.get(rowId);
     const snapshot: Record<string, unknown> = {};
     if (values.quantity !== undefined && values.quantity !== null) snapshot.quantity = values.quantity;
     if (values.minQuantity !== undefined && values.minQuantity !== null) snapshot.minQuantity = values.minQuantity;
     if (values.expirationDate !== undefined && values.expirationDate !== null && values.expirationDate !== "") snapshot.expirationDate = values.expirationDate;
+
+    /** True when every value is an empty string, zero, or null/undefined — i.e. a blank row. */
+    const isAllDefaults = (vals: Record<string, unknown>): boolean =>
+      Object.values(vals).every((v) => v === null || v === undefined || v === "" || v === 0);
+
     if (oldValues) {
       const changes = computeValuesDiff(oldValues, values as Record<string, unknown>);
       if (changes.length > 0) {
-        auditEvents.push(buildAuditEvent(access, "ITEM_EDIT", rowId, itemName, { changes, snapshot }));
+        // If old values were all defaults, this is the first meaningful edit —
+        // treat it as the real "create" event with the actual item name.
+        const action = isAllDefaults(oldValues) ? "ITEM_CREATE" as const : "ITEM_EDIT" as const;
+        auditEvents.push(buildAuditEvent(access, action, rowId, itemName, action === "ITEM_CREATE"
+          ? { initialValues: values, snapshot }
+          : { changes, snapshot }));
       }
     } else {
-      auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, { initialValues: values, snapshot }));
+      // Brand new row — only log creation if it has actual content
+      if (!isAllDefaults(values as Record<string, unknown>)) {
+        auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, { initialValues: values, snapshot }));
+      }
     }
   }
 

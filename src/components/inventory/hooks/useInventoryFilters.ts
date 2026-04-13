@@ -194,9 +194,19 @@ export function useInventoryFilters({
       ? rows.map((row) => String(row.values[locationColumn.key] ?? "").trim()).filter((v) => v.length > 0)
       : [];
     const named = Array.from(new Set([...fromItems, ...registeredLocations])).sort((a, b) => a.localeCompare(b));
-    // If any items have no location assigned, add an "Unassigned" option
+    // Only show "Unassigned" when there are rows with real data that lack a location.
+    // A row counts as "has data" if any non-location field has a non-empty, non-zero value.
     const hasUnassigned = locationColumn
-      ? rows.some((row) => String(row.values[locationColumn.key] ?? "").trim() === "")
+      ? rows.some((row) => {
+          const loc = String(row.values[locationColumn.key] ?? "").trim();
+          if (loc !== "") return false;
+          // Check if row has any meaningful content
+          return Object.entries(row.values).some(([key, val]) => {
+            if (key === locationColumn.key) return false;
+            if (val === null || val === undefined || val === "" || val === 0) return false;
+            return true;
+          });
+        })
       : false;
     if (hasUnassigned && named.length > 0) named.push(UNASSIGNED_LOCATION);
     return named;

@@ -1018,6 +1018,19 @@ export function useInventoryData({
     }
   }, [effectiveLocationFilter]);
 
+  // Ensure every location tab always has at least one row.
+  // When the user switches to a location that has zero matching items
+  // (e.g. freshly registered, or after a page reload), automatically
+  // insert a blank row assigned to that location.
+  useEffect(() => {
+    if (!canEditTable) return;
+    if (effectiveLocationFilter === "All Locations") return;
+    if (filteredRows.length > 0) return;
+    // Skip if the pending-new-location effect already fired / will fire
+    if (pendingNewLocationRef.current) return;
+    onAddRow("above");
+  }, [filteredRows, effectiveLocationFilter, canEditTable]);
+
   // Clear selections when switching locations
   useEffect(() => {
     setSelectedRowIds(new Set());

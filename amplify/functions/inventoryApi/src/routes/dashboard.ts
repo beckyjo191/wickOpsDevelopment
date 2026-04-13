@@ -85,36 +85,43 @@ export const handleBootstrap = async (ctx: RouteContext) => {
     getRegisteredLocations(storage),
   ]);
 
-  // Seed a single blank row so new orgs never see an empty table
+  // Seed a single blank row so new orgs never see an empty table.
+  // Wrapped in try-catch so a seed failure (e.g. table still provisioning)
+  // doesn't take down the entire bootstrap response.
   if (items.length === 0) {
-    const rowId = randomUUID();
-    const now = new Date().toISOString();
-    const blankValues: Record<string, string | number> = {};
-    for (const col of columns) {
-      if (col.type === "number") blankValues[col.key] = 0;
-      else blankValues[col.key] = "";
+    try {
+      const rowId = randomUUID();
+      const now = new Date().toISOString();
+      const blankValues: Record<string, string | number> = {};
+      for (const col of columns) {
+        if (col.type === "number") blankValues[col.key] = 0;
+        else blankValues[col.key] = "";
+      }
+      const valuesJson = JSON.stringify(blankValues);
+      await ddb.send(
+        new UpdateCommand({
+          TableName: storage.itemTable,
+          Key: { id: rowId },
+          UpdateExpression:
+            "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, updatedAtCustom = :now, createdAt = :now",
+          ExpressionAttributeNames: {
+            "#module": "module",
+            "#position": "position",
+          },
+          ExpressionAttributeValues: {
+            ":org": access.organizationId,
+            ":module": "inventory",
+            ":position": 0,
+            ":values": valuesJson,
+            ":now": now,
+          },
+        }),
+      );
+      items = [{ id: rowId, organizationId: access.organizationId, module: "inventory", position: 0, valuesJson, createdAt: now, updatedAtCustom: now }];
+    } catch (err) {
+      // Non-critical: frontend will create a blank row in memory if items is empty
+      console.warn("Failed to seed blank row for new org", err);
     }
-    const valuesJson = JSON.stringify(blankValues);
-    await ddb.send(
-      new UpdateCommand({
-        TableName: storage.itemTable,
-        Key: { id: rowId },
-        UpdateExpression:
-          "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, updatedAtCustom = :now, createdAt = :now",
-        ExpressionAttributeNames: {
-          "#module": "module",
-          "#position": "position",
-        },
-        ExpressionAttributeValues: {
-          ":org": access.organizationId,
-          ":module": "inventory",
-          ":position": 0,
-          ":values": valuesJson,
-          ":now": now,
-        },
-      }),
-    );
-    items = [{ id: rowId, organizationId: access.organizationId, module: "inventory", position: 0, valuesJson, createdAt: now, updatedAtCustom: now }];
   }
 
   return json(200, {

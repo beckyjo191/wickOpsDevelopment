@@ -1757,6 +1757,10 @@ details[open] > .settings-section-title::after {
   max-width: min(320px, 100%);
 }
 
+.inventory-toolbar-search {
+  margin-left: auto;
+}
+
 .inventory-header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1968,6 +1972,29 @@ details[open] > .settings-section-title::after {
 .inventory-search-clear:hover {
   background: var(--surface-alt);
   color: var(--text-heading);
+}
+
+/* ── Autosave progress bar ── */
+.app-card--inventory {
+  position: relative;
+  overflow: hidden;
+}
+
+.inventory-save-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 40%;
+  background: var(--primary, #2472B1);
+  border-radius: 0 1px 1px 0;
+  animation: save-bar-slide 1s ease-in-out infinite;
+  z-index: 20;
+}
+
+@keyframes save-bar-slide {
+  0%   { left: -40%; }
+  100% { left: 100%; }
 }
 
 .inventory-columns-menu {
@@ -3892,16 +3919,10 @@ textarea.inventory-card-input {
     min-width: 0;
   }
 
-  .inventory-filter-right {
-    margin-left: 0;
-    width: 100%;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .inventory-search-wrap {
+  .inventory-toolbar-search {
     width: 100%;
     max-width: 100%;
+    margin-left: 0;
   }
 
   .inventory-search-input {

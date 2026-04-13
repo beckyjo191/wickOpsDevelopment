@@ -3,8 +3,6 @@ import type { ActiveTab } from "./inventoryTypes";
 export type InventoryFilterBarProps = {
   activeTab: ActiveTab;
   onTabChange: (tab: ActiveTab) => void;
-  searchTerm: string;
-  onSearchChange: (term: string) => void;
   tabCounts: { expired: number; exp30: number; exp60: number; lowStock: number; retired: number };
   hasExpirationColumn: boolean;
   hasMinQuantityColumn: boolean;
@@ -30,8 +28,6 @@ type TabDef = {
 export function InventoryFilterBar({
   activeTab,
   onTabChange,
-  searchTerm,
-  onSearchChange,
   tabCounts,
   hasExpirationColumn,
   hasMinQuantityColumn,
@@ -83,27 +79,6 @@ export function InventoryFilterBar({
           ))}
         </div>
       )}
-      <div className="inventory-filter-right">
-        <div className="inventory-search-wrap">
-          <input
-            className="inventory-search-input"
-            placeholder="Search inventory..."
-            value={searchTerm}
-            onChange={(event) => onSearchChange(event.target.value)}
-          />
-          {searchTerm ? (
-            <button
-              type="button"
-              className="inventory-search-clear"
-              onClick={() => onSearchChange("")}
-              aria-label="Clear search"
-              title="Clear search"
-            >
-              ×
-            </button>
-          ) : null}
-        </div>
-      </div>
     </div>
   );
 }

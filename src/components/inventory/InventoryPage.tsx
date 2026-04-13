@@ -167,6 +167,7 @@ export function InventoryPage({
   return (
     <section className="app-content">
       <div className="app-card app-card--inventory">
+        {data.saving && <div className="inventory-save-bar" />}
         <InventoryToolbar
           canEdit={canEditInventory}
           canEditTable={data.canEditTable}
@@ -191,6 +192,8 @@ export function InventoryPage({
           importingCsv={data.importingCsv}
           onCsvSelected={data.onCsvSelected}
           rowCount={data.rows.length}
+          searchTerm={filters.searchTerm}
+          onSearchChange={filters.setSearchTerm}
         />
 
         {/* Location Pills */}
@@ -278,8 +281,6 @@ export function InventoryPage({
         <InventoryFilterBar
           activeTab={filters.activeTab}
           onTabChange={filters.setActiveTabRaw}
-          searchTerm={filters.searchTerm}
-          onSearchChange={filters.setSearchTerm}
           tabCounts={filters.tabCounts}
           hasExpirationColumn={filters.hasExpirationColumn}
           hasMinQuantityColumn={filters.hasMinQuantityColumn}

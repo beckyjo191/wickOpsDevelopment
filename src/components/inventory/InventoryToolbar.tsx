@@ -24,6 +24,8 @@ export type InventoryToolbarProps = {
   importingCsv: boolean;
   onCsvSelected: (event: ChangeEvent<HTMLInputElement>) => void;
   rowCount: number;
+  searchTerm: string;
+  onSearchChange: (term: string) => void;
 };
 
 /**
@@ -54,6 +56,8 @@ export function InventoryToolbar({
   importingCsv,
   onCsvSelected,
   rowCount,
+  searchTerm,
+  onSearchChange,
 }: InventoryToolbarProps) {
   if (!canEdit) return null;
 
@@ -166,12 +170,31 @@ export function InventoryToolbar({
           </div>
         </details>
       )}
+      <div className="inventory-search-wrap inventory-toolbar-search">
+        <input
+          className="inventory-search-input"
+          placeholder="Search inventory..."
+          value={searchTerm}
+          onChange={(event) => onSearchChange(event.target.value)}
+        />
+        {searchTerm ? (
+          <button
+            type="button"
+            className="inventory-search-clear"
+            onClick={() => onSearchChange("")}
+            aria-label="Clear search"
+            title="Clear search"
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
       <button
         className="button button-primary"
         onClick={onSave}
         disabled={saving || (!hasDirtyRows && !hasDeletedRows && !showSaved)}
       >
-        {saving ? "Saving..." : showSaved ? "Saved \u2713" : "Save Changes"}
+        Save
       </button>
     </div>
   );

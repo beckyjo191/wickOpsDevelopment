@@ -1,10 +1,13 @@
 // ── Route handlers: dashboard ───────────────────────────────────────────────
+import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { randomUUID } from "node:crypto";
 import type { RouteContext } from "../types";
 import { json } from "../http";
 import { ensureColumns } from "../columns";
 import { listAllItems } from "../items";
 import { getDaysUntilExpiration } from "../csv";
 import { getRegisteredLocations } from "../locations";
+import { ddb } from "../clients";
 
 export const handleAlertSummary = async (ctx: RouteContext) => {
   const { storage } = ctx;
@@ -77,10 +80,43 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
 export const handleBootstrap = async (ctx: RouteContext) => {
   const { storage, access } = ctx;
   const columns = await ensureColumns(access.organizationId);
-  const [items, registeredLocations] = await Promise.all([
+  let [items, registeredLocations] = await Promise.all([
     listAllItems(storage, access.organizationId),
     getRegisteredLocations(storage),
   ]);
+
+  // Seed a single blank row so new orgs never see an empty table
+  if (items.length === 0) {
+    const rowId = randomUUID();
+    const now = new Date().toISOString();
+    const blankValues: Record<string, string | number> = {};
+    for (const col of columns) {
+      if (col.type === "number") blankValues[col.key] = 0;
+      else blankValues[col.key] = "";
+    }
+    const valuesJson = JSON.stringify(blankValues);
+    await ddb.send(
+      new UpdateCommand({
+        TableName: storage.itemTable,
+        Key: { id: rowId },
+        UpdateExpression:
+          "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, updatedAtCustom = :now, createdAt = :now",
+        ExpressionAttributeNames: {
+          "#module": "module",
+          "#position": "position",
+        },
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":module": "inventory",
+          ":position": 0,
+          ":values": valuesJson,
+          ":now": now,
+        },
+      }),
+    );
+    items = [{ id: rowId, organizationId: access.organizationId, module: "inventory", position: 0, valuesJson, createdAt: now, updatedAtCustom: now }];
+  }
+
   return json(200, {
     access,
     columns,

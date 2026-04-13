@@ -362,6 +362,14 @@ postConfirmLambda.addPermission("CognitoPostConfirmInvoke", {
   sourceArn: userPoolForTrigger.userPoolArn,
 });
 
+// Grant postConfirmationLambda Cognito permissions (previously auto-granted by defineAuth triggers)
+postConfirmLambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ["cognito-idp:AdminAddUserToGroup"],
+    resources: [userPoolForTrigger.userPoolArn],
+  }),
+);
+
 // Custom resource Lambda that calls UpdateUserPool to set the trigger.
 // UpdateUserPool resets any field not explicitly included, so we must
 // pass through all critical settings from DescribeUserPool.

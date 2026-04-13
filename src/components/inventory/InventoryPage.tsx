@@ -394,7 +394,10 @@ export function InventoryPage({
                 canEdit={canEditInventory}
                 canEditTable={data.canEditTable}
                 selectAllCheckboxRef={data.selectAllCheckboxRef}
-                allFilteredSelected={data.allFilteredSelected}
+                allFilteredSelected={
+                  filters.filteredRowIds.length > 0 &&
+                  filters.filteredRowIds.every((id) => filters.selectedRowIds.has(id))
+                }
                 filteredRowIdsLength={filters.filteredRowIds.length}
                 onToggleRowSelection={data.onToggleRowSelection}
                 onToggleSelectAllFiltered={data.onToggleSelectAllFiltered}

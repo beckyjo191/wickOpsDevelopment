@@ -643,18 +643,28 @@ export function useInventoryData({
   /** Return rows that differ from the last-saved snapshot, with positions set.
    *  Skips new blank rows (no createdAt, all values at defaults) -- those
    *  shouldn't auto-save until the user has filled something in. */
-  const diffRowsAgainstSnapshot = (currentRows: InventoryRow[], snap: Map<string, string>) => {
+  const diffRowsAgainstSnapshot = (
+    currentRows: InventoryRow[],
+    snap: Map<string, string>,
+    /** Row ID to skip (the one being actively edited) — deferred until blur/manual save */
+    skipRowId?: string | null,
+  ) => {
     const changed: InventoryRow[] = [];
     for (let i = 0; i < currentRows.length; i++) {
       const row = currentRows[i];
+      if (skipRowId && row.id === skipRowId) continue;
       const prev = snap.get(row.id);
       const serialized = serializeRowForSnapshot(row, i);
       if (prev === serialized) continue;
-      // New row (not in snapshot) with all-default values -- skip until user edits it
+      // New row (not in snapshot) with all-default values -- skip until user edits it.
+      // Ignore the location key: it's auto-set when adding rows under a location filter
+      // and doesn't count as user-entered content.
       if (prev === undefined && !row.createdAt) {
-        const hasContent = Object.entries(row.values).some(([, v]) =>
-          typeof v === "string" ? v.trim() !== "" : typeof v === "number" ? v !== 0 : v != null,
-        );
+        const locationKey = locationColumn?.key;
+        const hasContent = Object.entries(row.values).some(([k, v]) => {
+          if (k === locationKey) return false;
+          return typeof v === "string" ? v.trim() !== "" : typeof v === "number" ? v !== 0 : v != null;
+        });
         if (!hasContent) continue;
       }
       changed.push({ ...row, position: i });
@@ -671,7 +681,14 @@ export function useInventoryData({
     const pendingDeleted = Array.from(deletedRowIdsRef.current);
     const snap = lastSavedSnapshotRef.current;
 
-    const changedRows = diffRowsAgainstSnapshot(currentRows, snap);
+    // During autosave (silent), skip the row being actively edited so
+    // intermediate keystrokes don't generate separate audit entries.
+    // Manual save (Save button / blur) saves everything.
+    const changedRows = diffRowsAgainstSnapshot(
+      currentRows,
+      snap,
+      silent ? editingRowIdRef.current : null,
+    );
 
     if (changedRows.length === 0 && pendingDeleted.length === 0) return;
 
@@ -1022,14 +1039,17 @@ export function useInventoryData({
   // When the user switches to a location that has zero matching items
   // (e.g. freshly registered, or after a page reload), automatically
   // insert a blank row assigned to that location.
+  // Only on the "all" tab — filter tabs (lowStock, expired, etc.) legitimately
+  // show zero rows and a blank row wouldn't match those filters, causing a loop.
   useEffect(() => {
     if (!canEditTable) return;
+    if (activeTab !== "all") return;
     if (effectiveLocationFilter === "All Locations") return;
     if (filteredRows.length > 0) return;
     // Skip if the pending-new-location effect already fired / will fire
     if (pendingNewLocationRef.current) return;
     onAddRow("above");
-  }, [filteredRows, effectiveLocationFilter, canEditTable]);
+  }, [filteredRows, effectiveLocationFilter, canEditTable, activeTab]);
 
   // Clear selections when switching locations
   useEffect(() => {

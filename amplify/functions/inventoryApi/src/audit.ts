@@ -61,6 +61,13 @@ export const writeAuditEvents = async (
   }
 };
 
+/** Normalize a value for comparison: treat null, undefined, and "" as equivalent
+ *  empty values, and compare numbers numerically so 0 !== "0" doesn't trigger. */
+const normalizeForDiff = (v: unknown): string => {
+  if (v === null || v === undefined || v === "") return "";
+  return String(v);
+};
+
 export const computeValuesDiff = (
   oldValues: Record<string, unknown>,
   newValues: Record<string, unknown>,
@@ -70,7 +77,7 @@ export const computeValuesDiff = (
   for (const key of allKeys) {
     const oldVal = oldValues[key] ?? null;
     const newVal = newValues[key] ?? null;
-    if (String(oldVal) !== String(newVal)) {
+    if (normalizeForDiff(oldVal) !== normalizeForDiff(newVal)) {
       changes.push({ field: key, from: oldVal, to: newVal });
     }
   }

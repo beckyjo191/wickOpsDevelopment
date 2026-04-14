@@ -26,12 +26,13 @@ import {
   type ColumnVisibilityOverrides,
   type InventoryColumn,
   type InventoryRow,
+  exportInventoryData,
 } from "../lib/inventoryApi";
 import type { ThemePreference } from "../lib/themePreference";
 import { ChevronUp, ChevronDown, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns" | "importData" | "help";
+type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns" | "importData" | "exportData" | "help";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
@@ -39,6 +40,7 @@ const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   locations: true,
   inventoryColumns: false,
   importData: false,
+  exportData: false,
   help: false,
 };
 
@@ -114,6 +116,7 @@ export function SettingsPage({
   const [revokingUserId, setRevokingUserId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string>("");
   const [portalLoading, setPortalLoading] = useState(false);
+  const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "done" | "error">("idle");
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [newLocationName, setNewLocationName] = useState("");
@@ -624,6 +627,16 @@ export function SettingsPage({
     }
   };
 
+  const onExportData = async () => {
+    setExportStatus("exporting");
+    try {
+      await exportInventoryData();
+      setExportStatus("done");
+    } catch {
+      setExportStatus("error");
+    }
+  };
+
   const onDisclosureToggle = (key: DisclosureKey, isOpen: boolean) => {
     if (loadedDisclosureKey !== disclosureStorageKey) return;
     setDisclosures((prev) => {
@@ -840,6 +853,70 @@ export function SettingsPage({
           </div>
         </details>
 
+        {canManageInventoryColumns && (
+          <details
+            className="settings-section"
+            open={disclosures.importData}
+            onToggle={(event) => onDisclosureToggle("importData", event.currentTarget.open)}
+          >
+            <summary className="settings-section-title">Import Data</summary>
+            <p className="settings-section-copy">
+              Import inventory items from a spreadsheet or paste data directly.
+            </p>
+            <div className="settings-import-actions">
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={() => onNavigateToImport("import-csv")}
+              >
+                Upload CSV / XLSX
+              </button>
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={() => onNavigateToImport("paste-import")}
+              >
+                Paste Data
+              </button>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => onNavigateToImport("download-template")}
+              >
+                Download Template
+              </button>
+            </div>
+          </details>
+        )}
+
+        {canManageInventoryColumns && (
+          <details
+            className="settings-section"
+            open={disclosures.exportData}
+            onToggle={(event) => onDisclosureToggle("exportData", event.currentTarget.open)}
+          >
+            <summary className="settings-section-title">Export Data</summary>
+            <p className="settings-section-copy">
+              Download all inventory data as a spreadsheet. Includes all items, columns, and locations.
+            </p>
+            <div className="settings-import-actions">
+              <button
+                type="button"
+                className="button button-primary button-sm"
+                onClick={() => void onExportData()}
+                disabled={exportStatus === "exporting"}
+              >
+                {exportStatus === "exporting" ? "Exporting..." : "Export Inventory Data"}
+              </button>
+            </div>
+            {exportStatus === "done" && (
+              <p className="settings-export-status settings-export-success">Export complete — check your downloads folder.</p>
+            )}
+            {exportStatus === "error" && (
+              <p className="settings-export-status settings-export-error">Export failed. Please try again.</p>
+            )}
+          </details>
+        )}
 
         <details
           className="settings-section"
@@ -1260,42 +1337,6 @@ export function SettingsPage({
             </p>
           )}
         </details>
-
-        {canManageInventoryColumns && (
-          <details
-            className="settings-section"
-            open={disclosures.importData}
-            onToggle={(event) => onDisclosureToggle("importData", event.currentTarget.open)}
-          >
-            <summary className="settings-section-title">Import Data</summary>
-            <p className="settings-section-copy">
-              Import inventory items from a spreadsheet or paste data directly.
-            </p>
-            <div className="settings-import-actions">
-              <button
-                type="button"
-                className="button button-secondary button-sm"
-                onClick={() => onNavigateToImport("import-csv")}
-              >
-                Upload CSV / XLSX
-              </button>
-              <button
-                type="button"
-                className="button button-secondary button-sm"
-                onClick={() => onNavigateToImport("paste-import")}
-              >
-                Paste Data
-              </button>
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => onNavigateToImport("download-template")}
-              >
-                Download Template
-              </button>
-            </div>
-          </details>
-        )}
 
         <details
           className="settings-section"

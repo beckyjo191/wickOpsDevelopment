@@ -1,6 +1,6 @@
 // ── InventoryPage orchestrator ───────────────────────────────────────────────
 // Wires custom hooks to sub-components. All state lives in hooks.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { InventoryPageProps } from "./inventoryTypes";
 import { normalizeHeaderKey } from "./inventoryUtils";
 import {
@@ -156,11 +156,15 @@ export function InventoryPage({
   };
 
   // ── Trigger initial action (e.g. navigated from Settings → Import) ──────
+  // Paste and template actions can fire programmatically (they open React dialogs).
+  // CSV import requires a real user gesture to open the file picker, so we show
+  // a visible prompt instead.
+  const [showCsvImportPrompt, setShowCsvImportPrompt] = useState(false);
   const initialActionFired = useRef(false);
   useEffect(() => {
     if (initialActionFired.current || data.loading || !initialAction) return;
     initialActionFired.current = true;
-    if (initialAction === "import-csv") data.onChooseCsvImport();
+    if (initialAction === "import-csv") setShowCsvImportPrompt(true);
     else if (initialAction === "paste-import") data.onOpenPasteImport();
     else if (initialAction === "download-template") handleDownloadTemplate();
   }, [data.loading, initialAction]);
@@ -191,12 +195,30 @@ export function InventoryPage({
       <div className="app-card app-card--inventory">
         {data.saving && <div className="inventory-save-bar" />}
         <input
+          id="csv-import-input"
           ref={data.importInputRef}
           type="file"
           accept=".csv,.CSV,.tsv,.TSV,.xlsx,.XLSX,.xls,.XLS,text/csv,text/tab-separated-values,application/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,application/octet-stream"
-          onChange={(event) => { void data.onCsvSelected(event); }}
+          onChange={(event) => {
+            setShowCsvImportPrompt(false);
+            void data.onCsvSelected(event);
+          }}
           style={{ display: "none" }}
         />
+        {showCsvImportPrompt && (
+          <div className="inventory-import-prompt">
+            <label htmlFor="csv-import-input" className="button button-primary">
+              Choose CSV / XLSX File
+            </label>
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() => setShowCsvImportPrompt(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         <InventoryToolbar
           canEdit={canEditInventory}
           canEditTable={data.canEditTable}

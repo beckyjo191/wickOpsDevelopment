@@ -1054,6 +1054,17 @@ details[open] > .settings-section-title::after {
   margin-top: 0.5rem;
 }
 
+.settings-export-status {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+.settings-export-success {
+  color: var(--success, #16a34a);
+}
+.settings-export-error {
+  color: var(--danger);
+}
+
 .settings-legend {
   display: flex;
   flex-direction: column;
@@ -1997,6 +2008,19 @@ details[open] > .settings-section-title::after {
   border-radius: 0 1px 1px 0;
   animation: save-bar-slide 1s ease-in-out infinite;
   z-index: 20;
+}
+
+.inventory-import-prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.inventory-import-prompt label {
+  cursor: pointer;
 }
 
 @keyframes save-bar-slide {

@@ -910,6 +910,55 @@ export const generateAndDownloadInventoryTemplate = async (
   XLSX.writeFile(wb, "wickops-inventory-template.xlsx");
 };
 
+// ─── Inventory Data Export ────────────────────────────────────────────────────
+
+export const exportInventoryData = async (): Promise<void> => {
+  const XLSX = await import("xlsx");
+
+  // Fetch bootstrap (columns, first page of items, locations)
+  const bootstrap = await loadInventoryBootstrap();
+  const columns = bootstrap.columns.slice().sort((a, b) => a.sortOrder - b.sortOrder);
+  const allItems: InventoryRow[] = [...bootstrap.items];
+
+  // Paginate through remaining items
+  let nextToken = bootstrap.nextToken;
+  while (nextToken) {
+    const page = await loadInventoryItems(nextToken);
+    allItems.push(...page.items);
+    nextToken = page.nextToken;
+  }
+
+  // --- Sheet 1: Inventory ---
+  const headers = columns.map((c) => c.label);
+  const rows = allItems.map((item) =>
+    columns.map((col) => {
+      const val = item.values[col.key];
+      if (val == null) return "";
+      if (col.type === "boolean") return val ? "Yes" : "No";
+      return val;
+    }),
+  );
+
+  const inventoryWs = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  inventoryWs["!cols"] = columns.map((col) => ({
+    wch: Math.max(col.label.length + 4, 15),
+  }));
+
+  // --- Sheet 2: Locations ---
+  const locationRows = (bootstrap.registeredLocations ?? []).map((loc) => [loc]);
+  const locationsWs = XLSX.utils.aoa_to_sheet([["Location"], ...locationRows]);
+  locationsWs["!cols"] = [{ wch: 30 }];
+
+  // --- Build workbook ---
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, inventoryWs, "Inventory");
+  XLSX.utils.book_append_sheet(wb, locationsWs, "Locations");
+
+  const today = new Date();
+  const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  XLSX.writeFile(wb, `wickops-inventory-export-${dateStr}.xlsx`);
+};
+
 // ─── Billing Portal ───────────────────────────────────────────────────────────
 
 /**

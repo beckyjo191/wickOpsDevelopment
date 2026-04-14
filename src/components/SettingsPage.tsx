@@ -221,6 +221,14 @@ export function SettingsPage({
           typeof parsed.inventoryColumns === "boolean"
             ? parsed.inventoryColumns
             : DEFAULT_DISCLOSURE_STATE.inventoryColumns,
+        importData:
+          typeof parsed.importData === "boolean"
+            ? parsed.importData
+            : DEFAULT_DISCLOSURE_STATE.importData,
+        exportData:
+          typeof parsed.exportData === "boolean"
+            ? parsed.exportData
+            : DEFAULT_DISCLOSURE_STATE.exportData,
         help:
           typeof parsed.help === "boolean"
             ? parsed.help

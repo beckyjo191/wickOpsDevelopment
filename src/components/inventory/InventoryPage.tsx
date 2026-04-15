@@ -250,50 +250,44 @@ export function InventoryPage({
           onSearchChange={filters.setSearchTerm}
         />
 
-        {/* Location Pills */}
-        {filters.showLocationPills ? (
+        {/* Mobile: combined location pills + filter in one row */}
+        {isMobile && filters.showLocationPills ? (
           <>
-            <LocationPills
-              locations={filters.locationOptions.map((loc) => ({ location: loc }))}
-              selectedLocation={selectedLocation}
-              onLocationChange={onLocationChange}
-            >
-              {canEditInventory && !data.addingLocation ? (
-                <button
-                  type="button"
-                  className="location-pill location-pill--add"
-                  onClick={() => {
-                    data.setAddingLocation(true);
-                    data.setAddLocationError(null);
-                    filters.setSelectedRowIds(new Set());
-                  }}
-                  aria-label="Add location"
+            <div className="inventory-mobile-filter-row">
+              <div className="inventory-mobile-pills-area">
+                <LocationPills
+                  locations={filters.locationOptions.map((loc) => ({ location: loc }))}
+                  selectedLocation={selectedLocation}
+                  onLocationChange={onLocationChange}
                 >
-                  +
-                </button>
-              ) : null}
-              {data.addingLocation && !isMobile ? (
-                <AddLocationForm
-                  newLocationName={data.newLocationName}
-                  onNameChange={(v) => {
-                    data.setNewLocationName(v);
-                    data.setAddLocationError(null);
-                  }}
-                  onAdd={handleAddLocation}
-                  onCancel={() => {
-                    data.setNewLocationName("");
-                    data.setAddingLocation(false);
-                    data.setAddLocationError(null);
-                  }}
-                  error={data.addLocationError}
-                  registeredLocations={data.registeredLocations}
-                  compact
-                />
-              ) : null}
-            </LocationPills>
-
-            {/* Mobile add location form (below pills) */}
-            {data.addingLocation && isMobile ? (
+                  {canEditInventory && !data.addingLocation ? (
+                    <button
+                      type="button"
+                      className="location-pill location-pill--add"
+                      onClick={() => {
+                        data.setAddingLocation(true);
+                        data.setAddLocationError(null);
+                        filters.setSelectedRowIds(new Set());
+                      }}
+                      aria-label="Add location"
+                    >
+                      +
+                    </button>
+                  ) : null}
+                </LocationPills>
+              </div>
+              <InventoryFilterBar
+                activeTab={filters.activeTab}
+                onTabChange={filters.setActiveTabRaw}
+                tabCounts={filters.tabCounts}
+                hasExpirationColumn={filters.hasExpirationColumn}
+                hasMinQuantityColumn={filters.hasMinQuantityColumn}
+                canReviewSubmissions={canReviewSubmissions}
+                pendingCount={pending.pendingSubmissions.length}
+                isMobile={isMobile}
+              />
+            </div>
+            {data.addingLocation && (
               <AddLocationForm
                 newLocationName={data.newLocationName}
                 onNameChange={(v) => {
@@ -309,39 +303,82 @@ export function InventoryPage({
                 error={data.addLocationError}
                 registeredLocations={data.registeredLocations}
               />
-            ) : null}
+            )}
           </>
-        ) : canEditInventory && filters.locationOptions.length === 0 ? (
-          /* Empty state — no locations yet */
-          data.addingLocation ? (
-            <AddLocationForm
-              newLocationName={data.newLocationName}
-              onNameChange={(v) => {
-                data.setNewLocationName(v);
-                data.setAddLocationError(null);
-              }}
-              onAdd={handleAddLocation}
-              onCancel={() => {
-                data.setNewLocationName("");
-                data.setAddingLocation(false);
-                data.setAddLocationError(null);
-              }}
-              error={data.addLocationError}
-              registeredLocations={data.registeredLocations}
-            />
-          ) : null
-        ) : null}
+        ) : (
+          <>
+            {/* Desktop: separate rows */}
+            {filters.showLocationPills ? (
+              <LocationPills
+                locations={filters.locationOptions.map((loc) => ({ location: loc }))}
+                selectedLocation={selectedLocation}
+                onLocationChange={onLocationChange}
+              >
+                {canEditInventory && !data.addingLocation ? (
+                  <button
+                    type="button"
+                    className="location-pill location-pill--add"
+                    onClick={() => {
+                      data.setAddingLocation(true);
+                      data.setAddLocationError(null);
+                      filters.setSelectedRowIds(new Set());
+                    }}
+                    aria-label="Add location"
+                  >
+                    +
+                  </button>
+                ) : null}
+                {data.addingLocation ? (
+                  <AddLocationForm
+                    newLocationName={data.newLocationName}
+                    onNameChange={(v) => {
+                      data.setNewLocationName(v);
+                      data.setAddLocationError(null);
+                    }}
+                    onAdd={handleAddLocation}
+                    onCancel={() => {
+                      data.setNewLocationName("");
+                      data.setAddingLocation(false);
+                      data.setAddLocationError(null);
+                    }}
+                    error={data.addLocationError}
+                    registeredLocations={data.registeredLocations}
+                    compact
+                  />
+                ) : null}
+              </LocationPills>
+            ) : canEditInventory && filters.locationOptions.length === 0 ? (
+              data.addingLocation ? (
+                <AddLocationForm
+                  newLocationName={data.newLocationName}
+                  onNameChange={(v) => {
+                    data.setNewLocationName(v);
+                    data.setAddLocationError(null);
+                  }}
+                  onAdd={handleAddLocation}
+                  onCancel={() => {
+                    data.setNewLocationName("");
+                    data.setAddingLocation(false);
+                    data.setAddLocationError(null);
+                  }}
+                  error={data.addLocationError}
+                  registeredLocations={data.registeredLocations}
+                />
+              ) : null
+            ) : null}
 
-        <InventoryFilterBar
-          activeTab={filters.activeTab}
-          onTabChange={filters.setActiveTabRaw}
-          tabCounts={filters.tabCounts}
-          hasExpirationColumn={filters.hasExpirationColumn}
-          hasMinQuantityColumn={filters.hasMinQuantityColumn}
-          canReviewSubmissions={canReviewSubmissions}
-          pendingCount={pending.pendingSubmissions.length}
-          isMobile={isMobile}
-        />
+            <InventoryFilterBar
+              activeTab={filters.activeTab}
+              onTabChange={filters.setActiveTabRaw}
+              tabCounts={filters.tabCounts}
+              hasExpirationColumn={filters.hasExpirationColumn}
+              hasMinQuantityColumn={filters.hasMinQuantityColumn}
+              canReviewSubmissions={canReviewSubmissions}
+              pendingCount={pending.pendingSubmissions.length}
+              isMobile={isMobile}
+            />
+          </>
+        )}
 
         {filters.activeTab === "pendingSubmissions" ? (
           <PendingSubmissionsTab
@@ -527,6 +564,17 @@ export function InventoryPage({
           />
         ) : null}
       </div>
+
+      {isMobile && canEditInventory && data.canEditTable && (
+        <button
+          type="button"
+          className="inventory-fab"
+          onClick={(event) => data.onAddRow("below", event)}
+          aria-label="Add item"
+        >
+          +
+        </button>
+      )}
     </section>
   );
 }

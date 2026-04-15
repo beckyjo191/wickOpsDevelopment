@@ -178,8 +178,11 @@ export function InventoryMobileCards({
               onClick={() => {
                 if (selectMode) {
                   onToggleRowSelection(row.id);
+                } else if (isExpanded) {
+                  onExpandCard(null);
+                  onSetSelectedRowId(null);
                 } else {
-                  onExpandCard(isExpanded ? null : row.id);
+                  onExpandCard(row.id);
                   onSetSelectedRowId(row.id);
                 }
               }}

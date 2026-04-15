@@ -275,6 +275,13 @@ export function InventoryMobileCards({
                       </button>
                     </div>
                   )}
+                  <button
+                    type="button"
+                    className="inventory-card-collapse-btn"
+                    onClick={() => onExpandCard(null)}
+                  >
+                    Collapse ▲
+                  </button>
                 </div>
               )}
             </div>

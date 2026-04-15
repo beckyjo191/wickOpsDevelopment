@@ -81,11 +81,20 @@ export function InventoryPage({
     userColumnOverrides: data.userColumnOverrides,
     loading: data.loading,
     editingRowIdRef: data.editingRowIdRef,
+    recentlyEditedRowIdRef: data.recentlyEditedRowIdRef,
+    newRowAnchorIdRef: data.newRowAnchorIdRef,
+    newRowPositionRef: data.newRowPositionRef,
+    sortEpoch: data.sortEpoch,
   });
   filtersRef.current = filters;
 
   // ── Auto-paginate to the selected row (e.g. after Add Row) ────────────────
+  // Only navigate when the selectedRowId itself changes (not when sort/filter
+  // reorders filteredRows), so it doesn't fight the page-reset on sort.
+  const prevSelectedRowIdRef = useRef(data.selectedRowId);
   useEffect(() => {
+    if (data.selectedRowId === prevSelectedRowIdRef.current) return;
+    prevSelectedRowIdRef.current = data.selectedRowId;
     if (!data.selectedRowId) return;
     const idx = filters.filteredRows.findIndex(({ row }) => row.id === data.selectedRowId);
     if (idx < 0) return;

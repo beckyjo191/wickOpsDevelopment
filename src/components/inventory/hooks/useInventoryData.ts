@@ -121,6 +121,12 @@ export function useInventoryData({
   const recentlyEditedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingScrollToRowRef = useRef<string | null>(null);
   const editSessionCellRef = useRef<string | null>(null);
+  /** Anchor row ID that a newly-added row was inserted above/below */
+  const newRowAnchorIdRef = useRef<string | null>(null);
+  const newRowPositionRef = useRef<"above" | "below">("below");
+  const anchorReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Bumped when editing ends to force filteredRows memo to re-sort */
+  const [sortEpoch, setSortEpoch] = useState(0);
   const rowsRef = useRef(rows);
   const dirtyRowIdsRef = useRef(dirtyRowIds);
   const deletedRowIdsRef = useRef(deletedRowIds);
@@ -298,11 +304,25 @@ export function useInventoryData({
     if (editSessionCellRef.current === cellKey) return;
     editSessionCellRef.current = cellKey;
     editingRowIdRef.current = rowId;
-    // Clear grace-period timer if the user is resuming edits on the same row
+    // Clear grace-period timers if the user is resuming edits on the same row
     if (recentlyEditedRowIdRef.current === rowId) {
       if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
       recentlyEditedRowIdRef.current = null;
       recentlyEditedTimerRef.current = null;
+      if (anchorReleaseTimerRef.current) clearTimeout(anchorReleaseTimerRef.current);
+      anchorReleaseTimerRef.current = null;
+    } else if (recentlyEditedRowIdRef.current && recentlyEditedRowIdRef.current !== rowId) {
+      // User moved to a different row — clear the old grace timers and
+      // release the anchor immediately so the previous row re-sorts now.
+      if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
+      recentlyEditedRowIdRef.current = null;
+      recentlyEditedTimerRef.current = null;
+      if (anchorReleaseTimerRef.current) clearTimeout(anchorReleaseTimerRef.current);
+      anchorReleaseTimerRef.current = null;
+      if (newRowAnchorIdRef.current) {
+        newRowAnchorIdRef.current = null;
+        setSortEpoch((n) => n + 1);
+      }
     }
     // Defer state updates so they don't cause a re-render that clears
     // the text selection from select(). Also re-select after the deferred
@@ -336,6 +356,18 @@ export function useInventoryData({
         recentlyEditedRowIdRef.current = null;
         recentlyEditedTimerRef.current = null;
       }, 5000);
+      // Short timer for releasing the sort anchor — just long enough to
+      // survive the blur→focus gap when tabbing between cells (~200ms).
+      if (newRowAnchorIdRef.current) {
+        if (anchorReleaseTimerRef.current) clearTimeout(anchorReleaseTimerRef.current);
+        anchorReleaseTimerRef.current = setTimeout(() => {
+          anchorReleaseTimerRef.current = null;
+          if (newRowAnchorIdRef.current) {
+            newRowAnchorIdRef.current = null;
+            setSortEpoch((n) => n + 1);
+          }
+        }, 300);
+      }
     }
   };
 
@@ -416,6 +448,9 @@ export function useInventoryData({
       filteredRows.find(({ row }) => row.id === selectedRowId)?.row;
     const anchorRowId = anchorFromFiltered?.id ?? null;
     const newRowId = crypto.randomUUID();
+    editingRowIdRef.current = newRowId;
+    newRowAnchorIdRef.current = anchorRowId;
+    newRowPositionRef.current = position;
     setSelectedRowId(newRowId);
     setDirtyRowIds((ids) => {
       const next = new Set(ids);
@@ -1256,6 +1291,10 @@ export function useInventoryData({
     importInputRef,
     selectAllCheckboxRef,
     editingRowIdRef,
+    recentlyEditedRowIdRef,
+    newRowAnchorIdRef,
+    newRowPositionRef,
+    sortEpoch,
     pendingScrollToRowRef,
     editSessionCellRef,
     rowsRef,

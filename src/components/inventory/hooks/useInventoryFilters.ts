@@ -21,6 +21,14 @@ interface UseInventoryFiltersParams {
   loading: boolean;
   /** The editing row ID ref — rows being edited always pass through filtering */
   editingRowIdRef: React.RefObject<string | null>;
+  /** Recently-edited row ID ref — survives brief blur events (e.g. sort-induced unmount) */
+  recentlyEditedRowIdRef: React.RefObject<string | null>;
+  /** Anchor row ID that a newly-added row should stay adjacent to during sort */
+  newRowAnchorIdRef: React.RefObject<string | null>;
+  /** Whether the new row was added above or below the anchor */
+  newRowPositionRef: React.RefObject<"above" | "below">;
+  /** Bumped when editing ends to force filteredRows to re-sort */
+  sortEpoch: number;
 }
 
 const UNASSIGNED_LOCATION = "Unassigned";
@@ -108,6 +116,10 @@ export function useInventoryFilters({
   userColumnOverrides,
   loading,
   editingRowIdRef,
+  recentlyEditedRowIdRef,
+  newRowAnchorIdRef,
+  newRowPositionRef,
+  sortEpoch,
 }: UseInventoryFiltersParams) {
   // ── Tab state ──
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => {
@@ -303,6 +315,7 @@ export function useInventoryFilters({
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => {
         if (editingRowIdRef.current && row.id === editingRowIdRef.current) return true;
+        if (recentlyEditedRowIdRef.current && row.id === recentlyEditedRowIdRef.current) return true;
         const quantityRaw = row.values.quantity;
         const minQuantityRaw = row.values.minQuantity;
         const quantity = Number(quantityRaw);
@@ -354,9 +367,24 @@ export function useInventoryFilters({
         });
       });
 
-    let sorted = filtered;
+    // If a new row has an anchor, pull it out before sorting so it doesn't
+    // get pushed to the end (blank values sort last). After sorting we
+    // reinsert it next to its anchor row.
+    const anchorId = newRowAnchorIdRef.current;
+    const editingId = editingRowIdRef.current;
+    let newRowEntry: (typeof filtered)[number] | null = null;
+    let toSort = filtered;
+    if (editingId && anchorId) {
+      const idx = filtered.findIndex(({ row }) => row.id === editingId);
+      if (idx >= 0) {
+        newRowEntry = filtered[idx];
+        toSort = filtered.filter(({ row }) => row.id !== editingId);
+      }
+    }
+
+    let sorted = toSort;
     if (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60") {
-      sorted = [...filtered].sort((a, b) => {
+      sorted = [...toSort].sort((a, b) => {
         const aDays = getDaysUntilExpiration(a.row.values.expirationDate);
         const bDays = getDaysUntilExpiration(b.row.values.expirationDate);
         if (aDays === null && bDays === null) return a.index - b.index;
@@ -366,7 +394,7 @@ export function useInventoryFilters({
         return a.index - b.index;
       });
     } else if (activeFilter === "lowStock") {
-      sorted = [...filtered].sort((a, b) => {
+      sorted = [...toSort].sort((a, b) => {
         const aQty = Number(a.row.values.quantity);
         const bQty = Number(b.row.values.quantity);
         const safeA = Number.isFinite(aQty) ? aQty : Number.POSITIVE_INFINITY;
@@ -389,6 +417,19 @@ export function useInventoryFilters({
       }
     }
 
+    // Reinsert new row next to its anchor
+    if (newRowEntry && anchorId) {
+      sorted = [...sorted];
+      const anchorIdx = sorted.findIndex(({ row }) => row.id === anchorId);
+      if (anchorIdx >= 0) {
+        const insertAt = newRowPositionRef.current === "above" ? anchorIdx : anchorIdx + 1;
+        sorted.splice(insertAt, 0, newRowEntry);
+      } else {
+        // Anchor not in filtered results — append at end
+        sorted.push(newRowEntry);
+      }
+    }
+
     return sorted;
   }, [
     rows,
@@ -401,6 +442,7 @@ export function useInventoryFilters({
     categoryColumn,
     effectiveCategoryFilter,
     sortStateByTab,
+    sortEpoch,
   ]);
 
   const filteredRowIds = useMemo(
@@ -414,10 +456,10 @@ export function useInventoryFilters({
   const pageStart = (safePage - 1) * ROWS_PER_PAGE;
   const paginatedRows = filteredRows.slice(pageStart, pageStart + ROWS_PER_PAGE);
 
-  // Reset page on filter change
+  // Reset page on filter or sort change
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearchTerm, activeFilter, effectiveLocationFilter, effectiveCategoryFilter]);
+  }, [debouncedSearchTerm, activeFilter, effectiveLocationFilter, effectiveCategoryFilter, sortStateByTab]);
 
   // Reset invalid filter tabs when columns change
   useEffect(() => {

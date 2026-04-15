@@ -4799,6 +4799,24 @@ textarea.inventory-card-input {
   color: #fff;
 }
 
+.inventory-card-collapse-btn {
+  margin-top: 0.5rem;
+  align-self: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 1.25rem;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.inventory-card-collapse-btn:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
 .inventory-card-retire-row {
   margin-top: 12px;
   display: flex;

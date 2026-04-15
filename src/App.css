@@ -4800,19 +4800,24 @@ textarea.inventory-card-input {
 }
 
 .inventory-card-collapse-btn {
-  margin-top: 0.5rem;
-  align-self: center;
-  background: none;
+  margin-top: 0.75rem;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0.35rem 1.25rem;
-  font-size: 0.78rem;
+  padding: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
   color: var(--text-soft);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
-.inventory-card-collapse-btn:hover {
+.inventory-card-collapse-btn:active {
   background: var(--surface-soft);
   color: var(--text);
 }

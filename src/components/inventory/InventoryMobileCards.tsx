@@ -239,9 +239,11 @@ export function InventoryMobileCards({
                     })}
                   </div>
                 </div>
-                <span className="inventory-card-chevron" aria-hidden="true">
-                  {isExpanded ? "\u25B2" : "\u25BC"}
-                </span>
+                {!isExpanded && (
+                  <span className="inventory-card-chevron" aria-hidden="true">
+                    ▼
+                  </span>
+                )}
               </div>
 
               {isExpanded && (
@@ -278,9 +280,13 @@ export function InventoryMobileCards({
                   <button
                     type="button"
                     className="inventory-card-collapse-btn"
-                    onClick={() => onExpandCard(null)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onExpandCard(row.id);
+                      onSetSelectedRowId(null);
+                    }}
                   >
-                    Collapse ▲
+                    ▲ Collapse
                   </button>
                 </div>
               )}

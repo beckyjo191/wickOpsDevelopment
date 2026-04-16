@@ -83,6 +83,17 @@ const FIELD_LABELS: Record<string, string> = {
   position: "Position",
 };
 
+// Machine-managed valuesJson keys. Stamped by the server during save — they
+// carry no user-visible semantics so they must never render as "field changed"
+// rows in the activity feed. Also used to drop events whose ONLY change is one
+// of these (e.g. the one-time parentItemId backfill on legacy rows).
+const SYSTEM_FIELDS = new Set<string>([
+  "parentItemId",
+  "retiredAt",
+  "retiredQty",
+  "retirementReason",
+]);
+
 function humanizeFieldName(field: string): string {
   if (FIELD_LABELS[field]) return FIELD_LABELS[field];
   return field.replace(/([A-Z])/g, " $1").replace(/^./, (s) => s.toUpperCase());
@@ -108,9 +119,11 @@ type DerivedAction = keyof typeof ACTION_LABELS;
 function deriveAction(event: AuditEvent): DerivedAction {
   if (event.action !== "ITEM_EDIT") return event.action as DerivedAction;
   const details = event.details ?? {};
-  const changes = Array.isArray(details.changes)
+  const rawChanges = Array.isArray(details.changes)
     ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
     : [];
+  // Ignore system-field stamps for the purpose of classifying the edit.
+  const changes = rawChanges.filter((c) => !SYSTEM_FIELDS.has(c.field));
   const fields = changes.map((c) => c.field);
   const nonPositionFields = fields.filter((f) => f !== "position");
   if (fields.length > 0 && nonPositionFields.length === 0) return "ITEM_MOVE";
@@ -124,6 +137,21 @@ function deriveAction(event: AuditEvent): DerivedAction {
     }
   }
   return "ITEM_EDIT";
+}
+
+/**
+ * True when an event carries no user-visible information and should be hidden
+ * from the activity feed — notably ITEM_EDIT events whose only change is a
+ * system-field stamp (parentItemId backfill, retiredAt markers, etc.).
+ */
+function isNoiseEvent(event: AuditEvent): boolean {
+  if (event.action !== "ITEM_EDIT") return false;
+  const details = event.details ?? {};
+  const rawChanges = Array.isArray(details.changes)
+    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
+    : [];
+  if (rawChanges.length === 0) return true;
+  return rawChanges.every((c) => SYSTEM_FIELDS.has(c.field));
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -177,9 +205,11 @@ function buildEventDetail(event: AuditEvent): string {
   const parts: string[] = [];
 
   if (event.action === "ITEM_EDIT") {
-    const changes = Array.isArray(details.changes)
+    const rawChanges = Array.isArray(details.changes)
       ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
       : [];
+    // Strip system-field stamps so they never render as "Parent Item Id: — → …"
+    const changes = rawChanges.filter((c) => !SYSTEM_FIELDS.has(c.field));
 
     if (derivedAction === "ITEM_RESTOCK") {
       const qtyChange = changes.find((c) => c.field === "quantity");
@@ -692,8 +722,13 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
     );
   };
 
-  const feedGroups = groupEventsByDay(events);
-  const historyGroups = groupEventsByDay(historyEvents);
+  // Strip system-field-only ITEM_EDIT events before display. Without this, the
+  // one-time parentItemId backfill on every legacy row floods the feed with
+  // "Parent Item Id: — → {uuid}" rows — pure machine noise.
+  const visibleEvents = events.filter((e) => !isNoiseEvent(e));
+  const visibleHistoryEvents = historyEvents.filter((e) => !isNoiseEvent(e));
+  const feedGroups = groupEventsByDay(visibleEvents);
+  const historyGroups = groupEventsByDay(visibleHistoryEvents);
 
   return (
     <section className="app-page audit-page">

@@ -5308,6 +5308,7 @@ textarea.inventory-card-input {
   color: var(--primary, #2472B1);
   cursor: pointer;
   text-align: left;
+  text-decoration: none;
 }
 
 .checklist-item-name:hover {

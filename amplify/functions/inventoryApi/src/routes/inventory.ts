@@ -8,6 +8,16 @@ import { json, parseNextToken } from "../http";
 import { getParentItemId, listItemsPage, validateNonNegativeField } from "../items";
 import { buildAuditEvent, writeAuditEvents, computeValuesDiff, hasProtectedHistory } from "../audit";
 
+// Machine-managed fields in valuesJson. Changes to these shouldn't produce
+// ITEM_EDIT audit events — they're either identity (parentItemId) or state
+// already captured by a dedicated audit action (retire/restock).
+const SYSTEM_FIELDS = new Set<string>([
+  "parentItemId",
+  "retiredAt",
+  "retiredQty",
+  "retirementReason",
+]);
+
 export const handleListItems = async (ctx: RouteContext) => {
   const { storage, access, query } = ctx;
   const limit = Math.min(Math.max(Number(query.limit ?? 500), 1), 10_000);
@@ -152,14 +162,20 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         snapshot,
       }));
     } else if (oldValues) {
-      const changes = computeValuesDiff(oldValues, values as Record<string, unknown>);
-      if (changes.length > 0) {
+      const allChanges = computeValuesDiff(oldValues, values as Record<string, unknown>);
+      // System fields are machine-managed — they'd flood the activity feed with
+      // noise the first time every row gets stamped with parentItemId or when
+      // retire/restock flows touch their markers. The dedicated RESTOCK_ADDED /
+      // ITEM_RETIRE events already carry that context, so we strip them from
+      // the generic ITEM_EDIT diff.
+      const userChanges = allChanges.filter((c) => !SYSTEM_FIELDS.has(c.field));
+      if (userChanges.length > 0) {
         // If old values were all defaults, this is the first meaningful edit —
         // treat it as the real "create" event with the actual item name.
         const action = isAllDefaults(oldValues) ? "ITEM_CREATE" as const : "ITEM_EDIT" as const;
         auditEvents.push(buildAuditEvent(access, action, rowId, itemName, action === "ITEM_CREATE"
           ? { initialValues: values, snapshot }
-          : { changes, snapshot }));
+          : { changes: userChanges, snapshot }));
       }
     } else {
       // Brand new row — only log creation if it has actual content

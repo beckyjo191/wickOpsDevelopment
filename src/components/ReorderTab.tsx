@@ -332,9 +332,8 @@ function VendorChecklistCard({
   const updateLine = (rowId: string, patch: Partial<LineState>) =>
     setLines((prev) => prev.map((l) => (l.rowId === rowId ? { ...l, ...patch } : l)));
 
-  const handleItemClick = (link: string, rowId: string) => {
+  const markLineChecked = (rowId: string) => {
     setLines((prev) => prev.map((l) => (l.rowId === rowId ? { ...l, checked: true } : l)));
-    window.open(link, `wickops-vendor-${group.domain}`);
   };
 
   const checkedCount =
@@ -402,15 +401,17 @@ function VendorChecklistCard({
                 {line.checked && <Check size={14} />}
               </button>
               <div className="checklist-item-info">
-                <button
-                  type="button"
+                <a
                   className="checklist-item-name"
-                  onClick={() => handleItemClick(line.link, line.rowId)}
+                  href={normalizeLinkValue(line.link)}
+                  target={`wickops-vendor-${group.domain}`}
+                  rel="noopener noreferrer"
+                  onClick={() => markLineChecked(line.rowId)}
                   title={`Open ${line.name} on ${group.domain}`}
                 >
                   {line.name}
                   <ExternalLink size={12} />
-                </button>
+                </a>
                 {itemData && (
                   <span className="checklist-item-detail">
                     <span className="reorder-item-status reorder-status-lowStock">

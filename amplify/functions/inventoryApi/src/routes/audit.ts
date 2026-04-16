@@ -6,6 +6,36 @@ import { ddb } from "../clients";
 import { json, parseNextToken, encodeNextToken } from "../http";
 import { AUDIT_BY_TIMESTAMP_INDEX, AUDIT_BY_USER_INDEX } from "../config";
 
+// Machine-managed valuesJson keys. ITEM_EDIT events whose only changes are in
+// this set are pure noise — the one-time parentItemId backfill or retire-row
+// markers that the dedicated ITEM_RETIRE / RESTOCK_* events already cover.
+// Kept in sync with the client filter in AuditLogPage.tsx.
+const SYSTEM_FIELDS = new Set<string>([
+  "parentItemId",
+  "retiredAt",
+  "retiredQty",
+  "retirementReason",
+]);
+
+/**
+ * True when the raw DynamoDB audit item is a system-field-only ITEM_EDIT.
+ * Filters it out of the feed before it takes up a pagination slot.
+ */
+const isNoiseAuditItem = (item: Record<string, unknown>): boolean => {
+  if (item.action !== "ITEM_EDIT") return false;
+  let details: { changes?: unknown } = {};
+  try {
+    details = JSON.parse(String(item.detailsJson ?? "{}"));
+  } catch {
+    return false;
+  }
+  const rawChanges = Array.isArray(details.changes)
+    ? (details.changes as Array<{ field: string }>)
+    : [];
+  if (rawChanges.length === 0) return false;
+  return rawChanges.every((c) => SYSTEM_FIELDS.has(c.field));
+};
+
 export const handleAuditFeed = async (ctx: RouteContext) => {
   const { access, storage, query } = ctx;
   const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 200);
@@ -69,21 +99,62 @@ export const handleAuditFeed = async (ctx: RouteContext) => {
     filterExpression = filterExpression ? `${filterExpression} AND ${orgFilter}` : orgFilter;
   }
 
-  const result = await ddb.send(
-    new QueryCommand({
-      TableName: storage.auditTable,
-      IndexName: useUserIndex ? AUDIT_BY_USER_INDEX : AUDIT_BY_TIMESTAMP_INDEX,
-      KeyConditionExpression: keyCondition,
-      ...(filterExpression ? { FilterExpression: filterExpression } : {}),
-      ExpressionAttributeValues: exprValues,
-      ...(Object.keys(exprNames).length > 0 ? { ExpressionAttributeNames: exprNames } : {}),
-      ScanIndexForward: false,
-      Limit: limit,
-      ...(cursor ? { ExclusiveStartKey: cursor } : {}),
-    }),
-  );
+  // Paginate through DynamoDB, dropping noise events (system-field-only ITEM_EDIT
+  // rows from the one-time parentItemId backfill), until we've collected `limit`
+  // real events or run out of data. Without this loop, a page full of noise
+  // returns almost nothing and forces the UI to click "Load more" repeatedly to
+  // reach real history — which users read as "my history disappeared".
+  const MAX_ROUND_TRIPS = 6;
+  const collected: Array<Record<string, unknown>> = [];
+  // The key identifying the last RAW item we consumed from DDB (noise or not).
+  // This is what we hand back as the cursor when we stop mid-page: DDB will
+  // resume the next query strictly after this point.
+  let lastConsumedKey: Record<string, unknown> | null = null;
+  let exclusiveStartKey = cursor;
+  let hasMorePages = true;
+  let roundTrips = 0;
 
-  const events = (result.Items ?? []).map((item) => ({
+  outer: while (collected.length < limit && roundTrips < MAX_ROUND_TRIPS) {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: storage.auditTable,
+        IndexName: useUserIndex ? AUDIT_BY_USER_INDEX : AUDIT_BY_TIMESTAMP_INDEX,
+        KeyConditionExpression: keyCondition,
+        ...(filterExpression ? { FilterExpression: filterExpression } : {}),
+        ExpressionAttributeValues: exprValues,
+        ...(Object.keys(exprNames).length > 0 ? { ExpressionAttributeNames: exprNames } : {}),
+        ScanIndexForward: false,
+        // Over-fetch so noise-heavy windows still fill the requested page.
+        Limit: Math.min(limit * 2, 200),
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+      }),
+    );
+    roundTrips += 1;
+    const items = (page.Items ?? []) as Array<Record<string, unknown>>;
+
+    for (const it of items) {
+      // Track every item we've consumed so the cursor is exact, even if we
+      // stop mid-page after skipping noise.
+      lastConsumedKey = useUserIndex
+        ? { userId: it.userId, timestamp: it.timestamp, pk: it.pk, sk: it.sk }
+        : { orgId: it.orgId, timestamp: it.timestamp, pk: it.pk, sk: it.sk };
+      if (!isNoiseAuditItem(it)) collected.push(it);
+      if (collected.length >= limit) {
+        hasMorePages = page.LastEvaluatedKey != null
+          || items.indexOf(it) < items.length - 1;
+        break outer;
+      }
+    }
+
+    const nextKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+    if (!nextKey) {
+      hasMorePages = false;
+      break;
+    }
+    exclusiveStartKey = nextKey;
+  }
+
+  const events = collected.map((item) => ({
     eventId: item.eventId,
     action: item.action,
     timestamp: item.timestamp,
@@ -95,8 +166,8 @@ export const handleAuditFeed = async (ctx: RouteContext) => {
     details: JSON.parse(String(item.detailsJson ?? "{}")),
   }));
 
-  const nextCursor = result.LastEvaluatedKey
-    ? encodeNextToken(result.LastEvaluatedKey as Record<string, unknown>)
+  const nextCursor = hasMorePages && lastConsumedKey
+    ? encodeNextToken(lastConsumedKey)
     : null;
 
   return json(200, { events, nextCursor });
@@ -111,18 +182,44 @@ export const handleAuditItemHistory = async (ctx: RouteContext) => {
   const limit = Math.min(Math.max(Number(query.limit) || 50, 1), 200);
   const cursor = parseNextToken(query.cursor);
 
-  const result = await ddb.send(
-    new QueryCommand({
-      TableName: storage.auditTable,
-      KeyConditionExpression: "pk = :pk",
-      ExpressionAttributeValues: { ":pk": `ITEM#${itemId}` },
-      ScanIndexForward: false,
-      Limit: limit,
-      ...(cursor ? { ExclusiveStartKey: cursor } : {}),
-    }),
-  );
+  // Same noise-filtering loop as the main feed — see handleAuditFeed for
+  // rationale. Without it, an item with 50 parentItemId-backfill events in its
+  // history would render an empty first page.
+  const MAX_ROUND_TRIPS = 6;
+  const collected: Array<Record<string, unknown>> = [];
+  let lastConsumedKey: Record<string, unknown> | null = null;
+  let exclusiveStartKey = cursor;
+  let hasMorePages = true;
+  let roundTrips = 0;
 
-  const events = (result.Items ?? []).map((item) => ({
+  outer: while (collected.length < limit && roundTrips < MAX_ROUND_TRIPS) {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: storage.auditTable,
+        KeyConditionExpression: "pk = :pk",
+        ExpressionAttributeValues: { ":pk": `ITEM#${itemId}` },
+        ScanIndexForward: false,
+        Limit: Math.min(limit * 2, 200),
+        ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+      }),
+    );
+    roundTrips += 1;
+    const items = (page.Items ?? []) as Array<Record<string, unknown>>;
+    for (const it of items) {
+      lastConsumedKey = { pk: it.pk, sk: it.sk };
+      if (!isNoiseAuditItem(it)) collected.push(it);
+      if (collected.length >= limit) {
+        hasMorePages = page.LastEvaluatedKey != null
+          || items.indexOf(it) < items.length - 1;
+        break outer;
+      }
+    }
+    const nextKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+    if (!nextKey) { hasMorePages = false; break; }
+    exclusiveStartKey = nextKey;
+  }
+
+  const events = collected.map((item) => ({
     eventId: item.eventId,
     action: item.action,
     timestamp: item.timestamp,
@@ -134,8 +231,8 @@ export const handleAuditItemHistory = async (ctx: RouteContext) => {
     details: JSON.parse(String(item.detailsJson ?? "{}")),
   }));
 
-  const nextCursor = result.LastEvaluatedKey
-    ? encodeNextToken(result.LastEvaluatedKey as Record<string, unknown>)
+  const nextCursor = hasMorePages && lastConsumedKey
+    ? encodeNextToken(lastConsumedKey)
     : null;
 
   return json(200, { events, nextCursor });

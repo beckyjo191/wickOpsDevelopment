@@ -143,6 +143,10 @@ function deriveAction(event: AuditEvent): DerivedAction {
  * True when an event carries no user-visible information and should be hidden
  * from the activity feed — notably ITEM_EDIT events whose only change is a
  * system-field stamp (parentItemId backfill, retiredAt markers, etc.).
+ *
+ * Mirrors the server-side filter in routes/audit.ts `isNoiseAuditItem`. The
+ * server does the heavy lifting so pagination stays correct; this is a safety
+ * net for any noise that slipped through before the server filter landed.
  */
 function isNoiseEvent(event: AuditEvent): boolean {
   if (event.action !== "ITEM_EDIT") return false;
@@ -150,7 +154,10 @@ function isNoiseEvent(event: AuditEvent): boolean {
   const rawChanges = Array.isArray(details.changes)
     ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
     : [];
-  if (rawChanges.length === 0) return true;
+  // Empty-changes edits are unusual but keep them — they may carry context we
+  // haven't anticipated. We only suppress edits where every change is a known
+  // system field.
+  if (rawChanges.length === 0) return false;
   return rawChanges.every((c) => SYSTEM_FIELDS.has(c.field));
 }
 

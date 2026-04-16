@@ -437,21 +437,26 @@ export function useInventoryData({
   };
 
   // ── Row operations ──
-  const onAddRow = (position: "above" | "below", event?: ReactMouseEvent<HTMLElement>) => {
+  const onAddRow = (position: "above" | "below" | "top", event?: ReactMouseEvent<HTMLElement>) => {
     if (!canEditTable) return;
     pushUndoSnapshot();
     if (event) {
       const element = event.target as HTMLElement | null;
       element?.closest("details")?.removeAttribute("open");
     }
-    const anchorFromFiltered =
-      filteredRows.find(({ row }) => row.id === selectedRowId)?.row;
+    // "top" means no anchor — always insert at position 0 and pin to top of sorted list
+    const useAnchor = position !== "top";
+    const anchorFromFiltered = useAnchor
+      ? filteredRows.find(({ row }) => row.id === selectedRowId)?.row
+      : undefined;
     const anchorRowId = anchorFromFiltered?.id ?? null;
     const newRowId = crypto.randomUUID();
     editingRowIdRef.current = newRowId;
     newRowAnchorIdRef.current = anchorRowId;
-    newRowPositionRef.current = position;
+    newRowPositionRef.current = position === "top" ? "above" : position;
     setSelectedRowId(newRowId);
+    // Bump sort epoch so filtered-rows memo re-evaluates with the new ref values
+    setSortEpoch((n) => n + 1);
     setDirtyRowIds((ids) => {
       const next = new Set(ids);
       next.add(newRowId);
@@ -459,11 +464,12 @@ export function useInventoryData({
       return next;
     });
     setRows((prev) => {
-      const selectedIndex =
-        anchorRowId ? prev.findIndex((row) => row.id === anchorRowId) : -1;
+      const selectedIndex = anchorRowId
+        ? prev.findIndex((row) => row.id === anchorRowId)
+        : -1;
       const insertIndex = selectedIndex >= 0
         ? (position === "above" ? selectedIndex : selectedIndex + 1)
-        : prev.length;
+        : 0;
       const created = createBlankInventoryRow(allColumns, insertIndex);
       created.id = newRowId;
       if (locationColumn && effectiveLocationFilter !== "All Locations" && effectiveLocationFilter !== UNASSIGNED_LOCATION) {
@@ -1213,9 +1219,8 @@ export function useInventoryData({
             ...row.values,
             retiredAt: now,
             retiredQty: String(row.values.quantity ?? "0"),
-            retiredExpDate: String(row.values.expirationDate ?? ""),
             quantity: 0,
-            expirationDate: "",
+            // expirationDate is intentionally kept so the Retired tab can display it
           },
         };
       });

@@ -689,7 +689,6 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
           orderedAt: null,
           retiredAt: null,
           retiredQty: null,
-          retiredExpDate: null,
         },
       });
     }

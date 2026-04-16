@@ -1,20 +1,14 @@
-import { useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useState } from "react";
 
 export type InventoryToolbarProps = {
   canEdit: boolean;
   canEditTable: boolean;
   selectedCount: number;
-  saving: boolean;
-  showSaved: boolean;
   isMobile: boolean;
   hasSelectedRows: boolean;
-  hasDirtyRows: boolean;
-  hasDeletedRows: boolean;
   showLocationPills: boolean;
-  onAddRow: (position: "above" | "below", event?: ReactMouseEvent<HTMLElement>) => void;
   onMoveSelectedRows: (location: string) => void;
   onRequestDelete: () => void;
-  onSave: () => void;
   locationOptions: string[];
   effectiveLocationFilter: string;
   rowCount: number;
@@ -23,24 +17,17 @@ export type InventoryToolbarProps = {
 };
 
 /**
- * Header actions toolbar: Add Row, Move to, Delete, Import menu, Save button.
- * Extracted from InventoryPage lines ~1735-1860.
+ * Header actions toolbar: Move to, Delete, Search.
  */
 export function InventoryToolbar({
   canEdit,
   canEditTable,
   selectedCount,
-  saving,
-  showSaved,
   isMobile,
   hasSelectedRows,
-  hasDirtyRows,
-  hasDeletedRows,
   showLocationPills,
-  onAddRow,
   onMoveSelectedRows,
   onRequestDelete,
-  onSave,
   locationOptions,
   effectiveLocationFilter,
   rowCount,
@@ -54,61 +41,36 @@ export function InventoryToolbar({
 
   return (
     <div className="inventory-header-actions">
-      {canEditTable ? (
+      {canEditTable && !isMobile && rowCount > 1 && hasSelectedRows ? (
         <>
-          {isMobile ? null : (
-            <details className="inventory-import-menu">
-              <summary className="inventory-import-trigger">Add Row</summary>
-              <div className="inventory-import-panel inventory-import-panel-left">
-                <button
-                  type="button"
-                  className="inventory-import-option"
-                  onClick={(event) => onAddRow("above", event)}
-                >
-                  Add Above Selected
-                </button>
-                <button
-                  type="button"
-                  className="inventory-import-option"
-                  onClick={(event) => onAddRow("below", event)}
-                >
-                  Add Below Selected
-                </button>
+          {showLocationPills && locationOptions.length > 1 ? (
+            <details className="inventory-move-menu">
+              <summary className="inventory-import-trigger">
+                Move to…
+              </summary>
+              <div className="inventory-move-panel">
+                {locationOptions
+                  .filter((loc) => loc !== effectiveLocationFilter)
+                  .map((loc) => (
+                    <button
+                      key={loc}
+                      type="button"
+                      className="inventory-move-option"
+                      onClick={(e) => {
+                        onMoveSelectedRows(loc);
+                        const details = e.currentTarget.closest("details");
+                        details?.removeAttribute("open");
+                      }}
+                    >
+                      {loc}
+                    </button>
+                  ))}
               </div>
             </details>
-          )}
-          {!isMobile && rowCount > 1 && hasSelectedRows ? (
-            <>
-              {showLocationPills && locationOptions.length > 1 ? (
-                <details className="inventory-move-menu">
-                  <summary className="inventory-import-trigger">
-                    Move to… <span className="inventory-move-count">{selectedCount}</span>
-                  </summary>
-                  <div className="inventory-move-panel">
-                    {locationOptions
-                      .filter((loc) => loc !== effectiveLocationFilter)
-                      .map((loc) => (
-                        <button
-                          key={loc}
-                          type="button"
-                          className="inventory-move-option"
-                          onClick={(e) => {
-                            onMoveSelectedRows(loc);
-                            const details = e.currentTarget.closest("details");
-                            details?.removeAttribute("open");
-                          }}
-                        >
-                          {loc}
-                        </button>
-                      ))}
-                  </div>
-                </details>
-              ) : null}
-              <button className="inventory-import-trigger inventory-delete-trigger" onClick={onRequestDelete}>
-                Delete ({selectedCount})
-              </button>
-            </>
           ) : null}
+          <button className="inventory-import-trigger inventory-delete-trigger" onClick={onRequestDelete}>
+            Delete ({selectedCount})
+          </button>
         </>
       ) : null}
       {isMobile && !showSearchInput ? (
@@ -140,6 +102,7 @@ export function InventoryToolbar({
             placeholder="Search inventory..."
             value={searchTerm}
             onChange={(event) => onSearchChange(event.target.value)}
+            onBlur={() => { if (isMobile && !searchTerm) setSearchOpen(false); }}
             autoFocus={isMobile && searchOpen}
           />
           {searchTerm ? (
@@ -154,15 +117,6 @@ export function InventoryToolbar({
             </button>
           ) : null}
         </div>
-      )}
-      {!isMobile && (
-        <button
-          className="button button-primary"
-          onClick={onSave}
-          disabled={saving || (!hasDirtyRows && !hasDeletedRows && !showSaved)}
-        >
-          Save
-        </button>
       )}
     </div>
   );

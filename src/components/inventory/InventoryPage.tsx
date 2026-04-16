@@ -18,7 +18,6 @@ import { useInventoryData } from "./hooks/useInventoryData";
 import { usePendingSubmissions } from "./hooks/usePendingSubmissions";
 
 // Components
-import { LocationPills } from "../LocationPills";
 import { AddLocationForm } from "./AddLocationForm";
 import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryFilterBar } from "./InventoryFilterBar";
@@ -42,6 +41,11 @@ export function InventoryPage({
   onSaveFnChange,
 }: InventoryPageProps) {
   const { isMobile } = useMobileDetect();
+
+  // ── Save bar fade-out state ───────────────────────────────────────────────
+  const [saveBarVisible, setSaveBarVisible] = useState(false);
+  const [saveBarFading, setSaveBarFading] = useState(false);
+  const saveBarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Ref bridge for circular hook deps ─────────────────────────────────────
   // Filters needs rows/columns from data; data needs filteredRows from filters.
@@ -70,6 +74,22 @@ export function InventoryPage({
     setCurrentPage: filtersRef.current?.setCurrentPage ?? (() => {}),
   });
 
+  // ── Save bar fade-out effect ──────────────────────────────────────────────
+  useEffect(() => {
+    if (data.saving) {
+      if (saveBarTimerRef.current) { clearTimeout(saveBarTimerRef.current); saveBarTimerRef.current = null; }
+      setSaveBarFading(false);
+      setSaveBarVisible(true);
+    } else if (saveBarVisible) {
+      setSaveBarFading(true);
+      saveBarTimerRef.current = setTimeout(() => {
+        setSaveBarVisible(false);
+        setSaveBarFading(false);
+        saveBarTimerRef.current = null;
+      }, 400);
+    }
+  }, [data.saving]);
+
   // ── Filters hook (owns tabs, search, sort, pagination, filteredRows) ──────
   const filters = useInventoryFilters({
     rows: data.rows,
@@ -88,20 +108,24 @@ export function InventoryPage({
   });
   filtersRef.current = filters;
 
-  // ── Auto-paginate to the selected row (e.g. after Add Row) ────────────────
-  // Only navigate when the selectedRowId itself changes (not when sort/filter
-  // reorders filteredRows), so it doesn't fight the page-reset on sort.
+  // ── Auto-paginate + scroll to newly selected row (e.g. after Add Row) ─────
   const prevSelectedRowIdRef = useRef(data.selectedRowId);
   useEffect(() => {
     if (data.selectedRowId === prevSelectedRowIdRef.current) return;
     prevSelectedRowIdRef.current = data.selectedRowId;
     if (!data.selectedRowId) return;
-    const idx = filters.filteredRows.findIndex(({ row }) => row.id === data.selectedRowId);
+    const rowId = data.selectedRowId;
+    const idx = filters.filteredRows.findIndex(({ row }) => row.id === rowId);
     if (idx < 0) return;
     const targetPage = Math.floor(idx / ROWS_PER_PAGE) + 1;
-    if (targetPage !== filters.safePage) {
-      filters.setCurrentPage(targetPage);
-    }
+    filters.setCurrentPage(targetPage);
+    // Scroll into view after React renders the correct page
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        const el = document.querySelector(`[data-row-id="${rowId}"]`);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 80);
+    });
   }, [data.selectedRowId, filters.filteredRows]);
 
   // ── Column resize hook ────────────────────────────────────────────────────
@@ -202,7 +226,7 @@ export function InventoryPage({
   return (
     <section className="app-content">
       <div className="app-card app-card--inventory">
-        {data.saving && <div className="inventory-save-bar" />}
+        {saveBarVisible && <div className={`inventory-save-bar${saveBarFading ? " inventory-save-bar--fade" : ""}`} />}
         <input
           id="csv-import-input"
           ref={data.importInputRef}
@@ -228,54 +252,65 @@ export function InventoryPage({
             </button>
           </div>
         )}
-        <InventoryToolbar
-          canEdit={canEditInventory}
-          canEditTable={data.canEditTable}
-          selectedCount={filters.selectedRowIds.size}
-          saving={data.saving}
-          showSaved={data.showSaved}
-          isMobile={isMobile}
-          hasSelectedRows={filters.selectedRowIds.size > 0}
-          hasDirtyRows={data.dirtyRowIds.size > 0}
-          hasDeletedRows={data.deletedRowIds.size > 0}
-          showLocationPills={filters.showLocationPills}
-          onAddRow={data.onAddRow}
-          onMoveSelectedRows={data.onMoveSelectedRows}
-          onRequestDelete={data.onRequestDeleteSelectedRows}
-          onSave={() => void data.onSave(false)}
-          locationOptions={filters.locationOptions}
-          effectiveLocationFilter={filters.effectiveLocationFilter}
-          rowCount={data.rows.length}
-          searchTerm={filters.searchTerm}
-          onSearchChange={filters.setSearchTerm}
-        />
-
-        {/* Mobile: combined location pills + filter in one row */}
-        {isMobile && filters.showLocationPills ? (
+        {/* ── Mobile layout ─────────────────────────────────────────── */}
+        {isMobile ? (
           <>
-            <div className="inventory-mobile-filter-row">
-              <div className="inventory-mobile-pills-area">
-                <LocationPills
-                  locations={filters.locationOptions.map((loc) => ({ location: loc }))}
-                  selectedLocation={selectedLocation}
-                  onLocationChange={onLocationChange}
-                >
-                  {canEditInventory && !data.addingLocation ? (
-                    <button
-                      type="button"
-                      className="location-pill location-pill--add"
-                      onClick={() => {
-                        data.setAddingLocation(true);
-                        data.setAddLocationError(null);
-                        filters.setSelectedRowIds(new Set());
-                      }}
-                      aria-label="Add location"
-                    >
-                      +
-                    </button>
-                  ) : null}
-                </LocationPills>
-              </div>
+            <InventoryToolbar
+              canEdit={canEditInventory}
+              canEditTable={data.canEditTable}
+              selectedCount={filters.selectedRowIds.size}
+              isMobile={isMobile}
+              hasSelectedRows={filters.selectedRowIds.size > 0}
+              showLocationPills={filters.showLocationPills}
+              onMoveSelectedRows={data.onMoveSelectedRows}
+              onRequestDelete={data.onRequestDeleteSelectedRows}
+              locationOptions={filters.locationOptions}
+              effectiveLocationFilter={filters.effectiveLocationFilter}
+              rowCount={data.rows.length}
+              searchTerm={filters.searchTerm}
+              onSearchChange={filters.setSearchTerm}
+            />
+            <div className="inventory-controls-row inventory-controls-row--mobile">
+              {filters.showLocationPills && (
+                <details className="inventory-dropdown">
+                  <summary className="inventory-dropdown-trigger">
+                    {selectedLocation || "All Locations"}
+                    <svg className="inventory-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                  </summary>
+                  <div className="inventory-dropdown-panel">
+                    {filters.locationOptions.map((loc) => (
+                      <button
+                        key={loc}
+                        type="button"
+                        className={`inventory-dropdown-option${selectedLocation === loc ? " active" : ""}`}
+                        onClick={(e) => {
+                          onLocationChange(loc);
+                          e.currentTarget.closest("details")?.removeAttribute("open");
+                        }}
+                      >
+                        {loc}
+                      </button>
+                    ))}
+                    {canEditInventory && (
+                      <>
+                        <div className="inventory-dropdown-divider" />
+                        <button
+                          type="button"
+                          className="inventory-dropdown-option inventory-dropdown-action"
+                          onClick={(e) => {
+                            data.setAddingLocation(true);
+                            data.setAddLocationError(null);
+                            filters.setSelectedRowIds(new Set());
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                        >
+                          + Add Location
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </details>
+              )}
               <InventoryFilterBar
                 activeTab={filters.activeTab}
                 onTabChange={filters.setActiveTabRaw}
@@ -307,76 +342,138 @@ export function InventoryPage({
           </>
         ) : (
           <>
-            {/* Desktop: separate rows */}
-            {filters.showLocationPills ? (
-              <LocationPills
-                locations={filters.locationOptions.map((loc) => ({ location: loc }))}
-                selectedLocation={selectedLocation}
-                onLocationChange={onLocationChange}
-              >
-                {canEditInventory && !data.addingLocation ? (
+            {/* ── Desktop layout: single controls row ──────────────────── */}
+            <div className="inventory-controls-row">
+              {filters.showLocationPills && (
+                <details className="inventory-dropdown">
+                  <summary className="inventory-dropdown-trigger">
+                    {selectedLocation || "All Locations"}
+                    <svg className="inventory-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                  </summary>
+                  <div className="inventory-dropdown-panel">
+                    {filters.locationOptions.map((loc) => (
+                      <button
+                        key={loc}
+                        type="button"
+                        className={`inventory-dropdown-option${selectedLocation === loc ? " active" : ""}`}
+                        onClick={(e) => {
+                          onLocationChange(loc);
+                          e.currentTarget.closest("details")?.removeAttribute("open");
+                        }}
+                      >
+                        {loc}
+                      </button>
+                    ))}
+                    {canEditInventory && (
+                      <>
+                        <div className="inventory-dropdown-divider" />
+                        <button
+                          type="button"
+                          className="inventory-dropdown-option inventory-dropdown-action"
+                          onClick={(e) => {
+                            data.setAddingLocation(true);
+                            data.setAddLocationError(null);
+                            filters.setSelectedRowIds(new Set());
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                        >
+                          + Add Location
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </details>
+              )}
+
+              <InventoryFilterBar
+                activeTab={filters.activeTab}
+                onTabChange={filters.setActiveTabRaw}
+                tabCounts={filters.tabCounts}
+                hasExpirationColumn={filters.hasExpirationColumn}
+                hasMinQuantityColumn={filters.hasMinQuantityColumn}
+                canReviewSubmissions={canReviewSubmissions}
+                pendingCount={pending.pendingSubmissions.length}
+                isMobile={false}
+              />
+
+              {canEditInventory && data.canEditTable && (
+                <div className="inventory-add-row-bar">
                   <button
                     type="button"
-                    className="location-pill location-pill--add"
-                    onClick={() => {
-                      data.setAddingLocation(true);
-                      data.setAddLocationError(null);
-                      filters.setSelectedRowIds(new Set());
-                    }}
-                    aria-label="Add location"
+                    className="inventory-add-row-btn"
+                    onClick={() => data.onAddRow("top")}
                   >
-                    +
+                    + Add Row
                   </button>
-                ) : null}
-                {data.addingLocation ? (
-                  <AddLocationForm
-                    newLocationName={data.newLocationName}
-                    onNameChange={(v) => {
-                      data.setNewLocationName(v);
-                      data.setAddLocationError(null);
-                    }}
-                    onAdd={handleAddLocation}
-                    onCancel={() => {
-                      data.setNewLocationName("");
-                      data.setAddingLocation(false);
-                      data.setAddLocationError(null);
-                    }}
-                    error={data.addLocationError}
-                    registeredLocations={data.registeredLocations}
-                    compact
-                  />
-                ) : null}
-              </LocationPills>
-            ) : canEditInventory && filters.locationOptions.length === 0 ? (
-              data.addingLocation ? (
-                <AddLocationForm
-                  newLocationName={data.newLocationName}
-                  onNameChange={(v) => {
-                    data.setNewLocationName(v);
-                    data.setAddLocationError(null);
-                  }}
-                  onAdd={handleAddLocation}
-                  onCancel={() => {
-                    data.setNewLocationName("");
-                    data.setAddingLocation(false);
-                    data.setAddLocationError(null);
-                  }}
-                  error={data.addLocationError}
-                  registeredLocations={data.registeredLocations}
-                />
-              ) : null
-            ) : null}
+                  {filters.selectedRowIds.size > 0 && (
+                    <details className="inventory-add-row-menu">
+                      <summary className="inventory-add-row-chevron" aria-label="Add row options">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      </summary>
+                      <div className="inventory-add-row-panel">
+                        <button
+                          type="button"
+                          className="inventory-add-row-option"
+                          onClick={(e) => {
+                            data.onAddRow("above", e);
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                        >
+                          Add Above Selected
+                        </button>
+                        <button
+                          type="button"
+                          className="inventory-add-row-option"
+                          onClick={(e) => {
+                            data.onAddRow("below", e);
+                            e.currentTarget.closest("details")?.removeAttribute("open");
+                          }}
+                        >
+                          Add Below Selected
+                        </button>
+                      </div>
+                    </details>
+                  )}
+                </div>
+              )}
 
-            <InventoryFilterBar
-              activeTab={filters.activeTab}
-              onTabChange={filters.setActiveTabRaw}
-              tabCounts={filters.tabCounts}
-              hasExpirationColumn={filters.hasExpirationColumn}
-              hasMinQuantityColumn={filters.hasMinQuantityColumn}
-              canReviewSubmissions={canReviewSubmissions}
-              pendingCount={pending.pendingSubmissions.length}
-              isMobile={isMobile}
-            />
+              <InventoryToolbar
+                canEdit={canEditInventory}
+                canEditTable={data.canEditTable}
+                selectedCount={filters.selectedRowIds.size}
+                isMobile={false}
+                hasSelectedRows={filters.selectedRowIds.size > 0}
+                showLocationPills={filters.showLocationPills}
+                onMoveSelectedRows={data.onMoveSelectedRows}
+                onRequestDelete={data.onRequestDeleteSelectedRows}
+                locationOptions={filters.locationOptions}
+                effectiveLocationFilter={filters.effectiveLocationFilter}
+                rowCount={data.rows.length}
+                searchTerm={filters.searchTerm}
+                onSearchChange={filters.setSearchTerm}
+              />
+            </div>
+
+            {/* Add location form (expands below controls row when active) */}
+            {data.addingLocation && (
+              <AddLocationForm
+                newLocationName={data.newLocationName}
+                onNameChange={(v) => {
+                  data.setNewLocationName(v);
+                  data.setAddLocationError(null);
+                }}
+                onAdd={handleAddLocation}
+                onCancel={() => {
+                  data.setNewLocationName("");
+                  data.setAddingLocation(false);
+                  data.setAddLocationError(null);
+                }}
+                error={data.addLocationError}
+                registeredLocations={data.registeredLocations}
+              />
+            )}
           </>
         )}
 

@@ -445,6 +445,17 @@
   display: none;
 }
 
+.location-pills-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding-right: 0.1rem;
+}
+
 .location-pill {
   display: inline-flex;
   align-items: center;
@@ -1756,6 +1767,9 @@ details[open] > .settings-section-title::after {
   justify-content: flex-start;
   align-items: center;
   gap: 0.65rem;
+}
+
+.inventory-controls-row + .inventory-filter-bar {
   margin-bottom: 0.75rem;
 }
 
@@ -1775,7 +1789,7 @@ details[open] > .settings-section-title::after {
   max-width: min(320px, 100%);
 }
 
-.inventory-toolbar-search {
+.inventory-controls-row .inventory-header-actions {
   margin-left: auto;
 }
 
@@ -1785,7 +1799,6 @@ details[open] > .settings-section-title::after {
   justify-content: flex-start;
   align-items: center;
   gap: 0.55rem;
-  margin-top: 0.65rem;
 }
 
 .inventory-tab-btn {
@@ -1817,8 +1830,7 @@ details[open] > .settings-section-title::after {
   color: var(--text-heading);
   font-size: 0.82rem;
   font-weight: 600;
-  width: 100%;
-  max-width: 280px;
+  width: auto;
 }
 
 .inventory-tab-badge {
@@ -2023,7 +2035,7 @@ details[open] > .settings-section-title::after {
 /* ── Autosave progress bar ── */
 .app-card--inventory {
   position: relative;
-  overflow: hidden;
+  overflow-x: clip;
 }
 
 .inventory-save-bar {
@@ -2036,6 +2048,12 @@ details[open] > .settings-section-title::after {
   border-radius: 0 1px 1px 0;
   animation: save-bar-slide 1s ease-in-out infinite;
   z-index: 20;
+  opacity: 1;
+  transition: opacity 0.35s ease-out;
+}
+
+.inventory-save-bar--fade {
+  opacity: 0;
 }
 
 .inventory-import-prompt {
@@ -4766,6 +4784,197 @@ textarea.inventory-card-input {
   border: 1px solid var(--border);
 }
 
+/* ── Controls row (dropdowns + add-row + search) ────────────────────────── */
+.inventory-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Custom dropdown (location picker) ───────────────────────────────────── */
+.inventory-dropdown {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.inventory-dropdown-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.46rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  color: var(--text-heading);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  list-style: none;
+  transition: border-color 0.12s;
+}
+
+.inventory-dropdown-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.inventory-dropdown-trigger:hover {
+  border-color: var(--border-strong);
+}
+
+.inventory-dropdown-chevron {
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.inventory-dropdown-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 100%;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  padding: 4px 0;
+}
+
+.inventory-dropdown-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: none;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+
+.inventory-dropdown-option:hover {
+  background: var(--surface-alt);
+}
+
+.inventory-dropdown-option.active {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.inventory-dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.inventory-dropdown-action {
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.inventory-dropdown-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  margin-left: 0.35rem;
+}
+
+.inventory-add-row-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.inventory-add-row-btn {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 5px;
+  transition: color 0.12s, background 0.12s;
+}
+
+.inventory-add-row-btn:hover {
+  color: var(--primary);
+  background: var(--surface-alt);
+}
+
+.inventory-add-row-menu {
+  position: relative;
+}
+
+.inventory-add-row-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: color 0.12s, background 0.12s;
+  list-style: none;
+}
+
+.inventory-add-row-chevron::-webkit-details-marker {
+  display: none;
+}
+
+.inventory-add-row-chevron:hover {
+  color: var(--primary);
+  background: var(--surface-alt);
+}
+
+.inventory-add-row-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 30;
+  min-width: 170px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  margin-top: 2px;
+}
+
+.inventory-add-row-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.inventory-add-row-option:hover {
+  background: var(--surface-alt);
+}
+
 /* ── Retire workflow ──────────────────────────────────────────────────────── */
 .inventory-retire-bar {
   display: flex;
@@ -4882,50 +5091,28 @@ textarea.inventory-card-input {
   }
 }
 
-.inventory-mobile-filter-row {
-  display: none;
-}
-
 @media (max-width: 780px) {
-  .inventory-mobile-filter-row {
+  .inventory-controls-row--mobile {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
     gap: 0.5rem;
-    position: sticky;
-    top: 2.35rem;
-    z-index: 10;
-    background: var(--bg);
-    padding: 0.35rem 0;
-    box-shadow: 0 4px 8px -2px rgba(0, 0, 0, 0.25);
-    border-bottom: 1px solid var(--border);
+    padding: 0.5rem 0;
     margin-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
   }
 
-  .inventory-mobile-pills-area {
+  .inventory-controls-row--mobile .inventory-dropdown {
     flex: 1;
     min-width: 0;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
   }
 
-  .inventory-mobile-pills-area::-webkit-scrollbar {
-    display: none;
+  .inventory-controls-row--mobile .inventory-dropdown-trigger {
+    width: 100%;
+    justify-content: space-between;
   }
 
-  .inventory-mobile-filter-row .inventory-filter-bar {
-    position: static;
-    box-shadow: none;
-    border-bottom: none;
-    padding: 0;
-    margin-bottom: 0;
-    flex-shrink: 0;
-  }
-
-  .inventory-mobile-filter-row .inventory-tab-select {
-    width: auto;
-    max-width: 140px;
-    font-size: 0.76rem;
+  .inventory-controls-row--mobile .inventory-dropdown-chevron {
+    margin-left: auto;
   }
 }
 

@@ -58,7 +58,9 @@ export default function App() {
   const [inventoryInitialAction, setInventoryInitialAction] = useState<import("./components/inventory/inventoryTypes").InventoryInitialAction | undefined>(undefined);
   const [inventoryKey, setInventoryKey] = useState(0);
   const [dashboardKey, setDashboardKey] = useState(0);
-  const setView = (v: AppView) => {
+  // Applies view-change side effects without touching browser history.
+  // Used by both user navigations and popstate (browser back/forward).
+  const applyView = (v: AppView) => {
     if (v !== "inventory") {
       setInventoryInitialFilter(undefined);
       setInventoryInitialSearch(undefined);
@@ -67,6 +69,31 @@ export default function App() {
     }
     if (v === "dashboard") setDashboardKey((k) => k + 1);
     setViewRaw(v);
+  };
+  // User-driven navigation — adds a browser history entry so back/forward work.
+  const setView = (v: AppView) => {
+    applyView(v);
+    try {
+      window.history.pushState(
+        { ...(window.history.state ?? {}), wickopsView: v },
+        "",
+      );
+    } catch {
+      // No-op: history API may be unavailable in some contexts.
+    }
+  };
+  // Non-user-driven navigation (initial restore, permission redirects).
+  // Overwrites the current history entry so back doesn't bounce through it.
+  const replaceView = (v: AppView) => {
+    applyView(v);
+    try {
+      window.history.replaceState(
+        { ...(window.history.state ?? {}), wickopsView: v },
+        "",
+      );
+    } catch {
+      // No-op: history API may be unavailable in some contexts.
+    }
   };
 
   // Holds the async save function registered by InventoryPage on mount.
@@ -229,7 +256,7 @@ export default function App() {
           }
           return;
         }
-        setView("dashboard");
+        replaceView("dashboard");
         setSubState({
           status: "loading",
           displayName: "",
@@ -267,16 +294,28 @@ export default function App() {
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userViewScope) {
-      setView("dashboard");
+      replaceView("dashboard");
       return;
     }
     try {
       const saved = window.localStorage.getItem(scopedViewStorageKey);
-      setView(isAppView(saved) ? saved : "dashboard");
+      replaceView(isAppView(saved) ? saved : "dashboard");
     } catch {
-      setView("dashboard");
+      replaceView("dashboard");
     }
   }, [authStatus, scopedViewStorageKey, userViewScope]);
+
+  // Listen for browser back/forward and apply the stored view without
+  // pushing a new history entry.
+  useEffect(() => {
+    const onPopState = (e: PopStateEvent) => {
+      const maybeView = (e.state as { wickopsView?: unknown } | null)?.wickopsView;
+      if (!isAppView(maybeView)) return;
+      applyView(maybeView);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   useEffect(() => {
     if (authStatus !== "authenticated" || !userViewScope) return;
@@ -355,17 +394,17 @@ export default function App() {
 
   useEffect(() => {
     if (view === "inventory" && !subState.allowedModules.includes("inventory")) {
-      setView("dashboard");
+      replaceView("dashboard");
       return;
     }
     if (view === "usage" && !subState.allowedModules.includes("usage")) {
-      setView("dashboard");
+      replaceView("dashboard");
     }
     if (view === "orders" && !subState.allowedModules.includes("inventory")) {
-      setView("dashboard");
+      replaceView("dashboard");
     }
     if (view === "activity" && !subState.allowedModules.includes("inventory")) {
-      setView("dashboard");
+      replaceView("dashboard");
     }
   }, [view, subState.allowedModules]);
 

@@ -250,9 +250,9 @@ export function InventoryMobileCards({
               </div>
 
               {isExpanded && (
-                <div className="inventory-card-detail" onClick={(e) => e.stopPropagation()}>
+                <div className="inventory-card-detail">
                   {visibleColumns.map((column) => (
-                    <div key={column.id} className="inventory-card-field">
+                    <div key={column.id} className="inventory-card-field" onClick={(e) => e.stopPropagation()}>
                       <label className="inventory-card-field-label">{column.label}</label>
                       <CellEditor
                         column={column}
@@ -270,7 +270,7 @@ export function InventoryMobileCards({
                     </div>
                   ))}
                   {showRetire && (
-                    <div className="inventory-card-retire-row">
+                    <div className="inventory-card-retire-row" onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
                         className="inventory-retire-btn"
@@ -285,7 +285,7 @@ export function InventoryMobileCards({
                     className="inventory-card-collapse-btn"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onExpandCard(row.id);
+                      onExpandCard(null);
                       onSetSelectedRowId(null);
                     }}
                   >

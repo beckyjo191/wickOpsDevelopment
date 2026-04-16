@@ -14,6 +14,8 @@ interface LocationPillsProps {
   onLocationChange: (location: string) => void;
   /** Extra content rendered after the pills (e.g. "+ add" button) */
   children?: React.ReactNode;
+  /** Optional label shown before pills */
+  label?: string;
 }
 
 export function LocationPills({
@@ -21,6 +23,7 @@ export function LocationPills({
   selectedLocation,
   onLocationChange,
   children,
+  label,
 }: LocationPillsProps) {
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
   const [showAll, setShowAll] = useState(false);
@@ -81,6 +84,7 @@ export function LocationPills({
   return (
     <>
       <div className="location-pills">
+        {label ? <span className="location-pills-label">{label}</span> : null}
         {visible.map((loc) => (
           <button
             key={loc.location}

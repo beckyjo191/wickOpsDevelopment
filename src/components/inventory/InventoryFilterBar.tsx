@@ -46,39 +46,36 @@ export function InventoryFilterBar({
   ];
 
   const visibleTabs = tabs.filter((t) => t.visible);
+  const activeTabDef = visibleTabs.find((t) => t.key === activeTab) ?? visibleTabs[0];
+  const activeLabel = isMobile ? activeTabDef.mobileLabel : activeTabDef.label;
 
   return (
-    <div className="inventory-filter-bar">
-      {isMobile ? (
-        <select
-          className="inventory-tab-select"
-          value={activeTab}
-          onChange={(e) => onTabChange(e.target.value as ActiveTab)}
-        >
-          {visibleTabs.map((tab) => (
-            <option key={tab.key} value={tab.key}>
-              {tab.mobileLabel}{tab.count && tab.count > 0 ? ` (${tab.count})` : ""}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <div className="inventory-tabs" role="tablist" aria-label="Inventory filters">
-          {visibleTabs.map((tab) => (
-            <button
-              key={tab.key}
-              className={`inventory-tab-btn${activeTab === tab.key ? " active" : ""}`}
-              onClick={() => onTabChange(tab.key)}
-              role="tab"
-              aria-selected={activeTab === tab.key}
-            >
-              {tab.label}
-              {tab.count && tab.count > 0 && activeTab !== tab.key ? (
-                <span className="inventory-tab-badge">{tab.count}</span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <details className="inventory-dropdown">
+      <summary className="inventory-dropdown-trigger">
+        {activeLabel}
+        {activeTabDef.count && activeTabDef.count > 0 ? (
+          <span className="inventory-dropdown-badge">{activeTabDef.count}</span>
+        ) : null}
+        <svg className="inventory-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+      </summary>
+      <div className="inventory-dropdown-panel">
+        {visibleTabs.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={`inventory-dropdown-option${activeTab === tab.key ? " active" : ""}`}
+            onClick={(e) => {
+              onTabChange(tab.key);
+              e.currentTarget.closest("details")?.removeAttribute("open");
+            }}
+          >
+            {isMobile ? tab.mobileLabel : tab.label}
+            {tab.count && tab.count > 0 ? (
+              <span className="inventory-dropdown-badge">{tab.count}</span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+    </details>
   );
 }

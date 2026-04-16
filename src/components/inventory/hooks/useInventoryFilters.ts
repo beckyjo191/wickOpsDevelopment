@@ -374,7 +374,7 @@ export function useInventoryFilters({
     const editingId = editingRowIdRef.current;
     let newRowEntry: (typeof filtered)[number] | null = null;
     let toSort = filtered;
-    if (editingId && anchorId) {
+    if (editingId) {
       const idx = filtered.findIndex(({ row }) => row.id === editingId);
       if (idx >= 0) {
         newRowEntry = filtered[idx];
@@ -417,16 +417,20 @@ export function useInventoryFilters({
       }
     }
 
-    // Reinsert new row next to its anchor
-    if (newRowEntry && anchorId) {
+    // Reinsert new row next to its anchor, or at the top if no anchor
+    if (newRowEntry) {
       sorted = [...sorted];
-      const anchorIdx = sorted.findIndex(({ row }) => row.id === anchorId);
-      if (anchorIdx >= 0) {
-        const insertAt = newRowPositionRef.current === "above" ? anchorIdx : anchorIdx + 1;
-        sorted.splice(insertAt, 0, newRowEntry);
+      if (anchorId) {
+        const anchorIdx = sorted.findIndex(({ row }) => row.id === anchorId);
+        if (anchorIdx >= 0) {
+          const insertAt = newRowPositionRef.current === "above" ? anchorIdx : anchorIdx + 1;
+          sorted.splice(insertAt, 0, newRowEntry);
+        } else {
+          sorted.push(newRowEntry);
+        }
       } else {
-        // Anchor not in filtered results — append at end
-        sorted.push(newRowEntry);
+        // No anchor — place at top so user sees it immediately
+        sorted.unshift(newRowEntry);
       }
     }
 

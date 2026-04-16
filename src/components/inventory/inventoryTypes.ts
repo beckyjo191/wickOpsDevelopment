@@ -7,16 +7,17 @@ export type {
   PendingSubmission,
 } from "../../lib/inventoryApi";
 
-export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock" | "retired";
-export type ActiveTab = InventoryFilter | "pendingSubmissions";
+export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
+export type ActiveTab = InventoryFilter | "quickAdd" | "logUsage";
 export type SortDirection = "asc" | "desc";
 
 export type InventoryInitialAction = "import-csv" | "paste-import" | "download-template";
 
 export interface InventoryPageProps {
   canEditInventory: boolean;
-  canReviewSubmissions?: boolean;
-  initialFilter?: InventoryFilter;
+  /** Whether the user's accessibleModules include "usage" (unlocks Log Usage button). */
+  canLogUsage?: boolean;
+  initialFilter?: ActiveTab;
   initialSearch?: string;
   initialEditCell?: { rowId: string; columnKey: string };
   initialAction?: InventoryInitialAction;

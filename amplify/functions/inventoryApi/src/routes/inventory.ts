@@ -137,6 +137,33 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, { initialValues: values, snapshot }));
       }
     }
+
+    // Restock metadata (from Fast Restock): emit a separate RESTOCK_ADDED audit
+    // event with the structured metadata so analytics can distinguish restock
+    // deltas from ordinary edits — including source (donation vs supplier), the
+    // qty delta captured at the time, and the unit cost paid per unit.
+    const restockMeta = (body?.restockMetadata as Record<string, unknown> | undefined)?.[rowId];
+    if (restockMeta && typeof restockMeta === "object") {
+      const m = restockMeta as Record<string, unknown>;
+      const qtyDelta = Number(m.qtyDelta);
+      if (Number.isFinite(qtyDelta) && qtyDelta > 0) {
+        const meta: Record<string, unknown> = {
+          source: String(m.source ?? "other"),
+          qtyDelta,
+        };
+        if (m.unitCost !== undefined && m.unitCost !== null && m.unitCost !== "") {
+          const uc = Number(m.unitCost);
+          if (Number.isFinite(uc) && uc >= 0) meta.unitCost = uc;
+        }
+        if (typeof m.reorderLink === "string" && m.reorderLink.trim()) {
+          meta.reorderLink = m.reorderLink.trim();
+        }
+        if (typeof m.location === "string" && m.location.trim()) {
+          meta.location = m.location.trim();
+        }
+        auditEvents.push(buildAuditEvent(access, "RESTOCK_ADDED", rowId, itemName, meta));
+      }
+    }
   }
 
   for (const deletedId of deletedRowIds) {

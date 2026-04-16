@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  approveUsageSubmission,
+  deleteUsageSubmission,
   fetchAuditFeed,
   fetchItemHistory,
   fetchAuditAnalytics,
@@ -10,6 +12,7 @@ import {
   Activity,
   BarChart3,
   ChevronLeft,
+  CheckSquare,
   Clock,
   Filter,
   Loader2,
@@ -17,11 +20,15 @@ import {
   TrendingUp,
   User,
 } from "lucide-react";
+import { usePendingSubmissions } from "./inventory/hooks/usePendingSubmissions";
+import { PendingSubmissionsTab } from "./inventory/PendingSubmissionsTab";
+import type { PendingEntry } from "./inventory/inventoryTypes";
 
-type AuditTab = "feed" | "analytics" | "item-history";
+type AuditTab = "feed" | "analytics" | "item-history" | "pending";
 
 interface AuditLogPageProps {
   canManageColumns: boolean;
+  canReviewSubmissions?: boolean;
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -387,7 +394,7 @@ function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: numbe
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
+export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLogPageProps) {
   const [tab, setTab] = useState<AuditTab>("feed");
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -405,6 +412,11 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
   const [analytics, setAnalytics] = useState<AuditAnalytics | null>(null);
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d" | "90d">("30d");
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  // Pending usage-approval queue (only loaded for reviewers)
+  const pending = usePendingSubmissions(tab === "pending", canReviewSubmissions);
+  const pendingCount = pending.pendingSubmissions.length;
+  const buildPendingEntryLabel = (entry: PendingEntry) => entry.itemName;
 
   const loadFeed = useCallback(async (append = false, cursor?: string | null) => {
     setLoading(true);
@@ -487,6 +499,18 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
         >
           <Activity size={16} /> Activity
         </button>
+        {canReviewSubmissions && (
+          <button
+            type="button"
+            className={`audit-tab${tab === "pending" ? " active" : ""}`}
+            onClick={() => setTab("pending")}
+          >
+            <CheckSquare size={16} /> Pending
+            {pendingCount > 0 ? (
+              <span className="audit-tab-badge">{pendingCount}</span>
+            ) : null}
+          </button>
+        )}
         {canManageColumns && (
           <button
             type="button"
@@ -497,6 +521,51 @@ export function AuditLogPage({ canManageColumns }: AuditLogPageProps) {
           </button>
         )}
       </div>
+
+      {tab === "pending" && canReviewSubmissions && (
+        <PendingSubmissionsTab
+          submissions={pending.pendingSubmissions}
+          loading={pending.pendingLoading}
+          error={pending.pendingError}
+          mergedItems={pending.mergedPendingItems}
+          approvingAll={pending.approvingAll}
+          approveAllError={pending.approveAllError}
+          editedQtys={pending.editedQtys}
+          onEditQty={(submissionId, entryIndex, value) =>
+            pending.setEditedQtys((prev) => ({
+              ...prev,
+              [submissionId]: { ...(prev[submissionId] ?? {}), [entryIndex]: value },
+            }))
+          }
+          onApprove={async (submissionId, effectiveEntries) => {
+            await approveUsageSubmission(submissionId, effectiveEntries);
+            pending.setPendingSubmissions((prev) =>
+              prev.filter((s) => s.id !== submissionId),
+            );
+          }}
+          onApproveAll={async () => {
+            pending.setApprovingAll(true);
+            pending.setApproveAllError("");
+            try {
+              for (const sub of pending.pendingSubmissions) {
+                await approveUsageSubmission(sub.id);
+              }
+              pending.setPendingSubmissions([]);
+            } catch (err: any) {
+              pending.setApproveAllError(err?.message ?? "Failed to approve all");
+            } finally {
+              pending.setApprovingAll(false);
+            }
+          }}
+          onDelete={async (submissionId) => {
+            await deleteUsageSubmission(submissionId);
+            pending.setPendingSubmissions((prev) =>
+              prev.filter((s) => s.id !== submissionId),
+            );
+          }}
+          buildLabel={buildPendingEntryLabel}
+        />
+      )}
 
       {tab === "feed" && (
         <div className="audit-feed">

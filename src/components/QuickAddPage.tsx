@@ -9,6 +9,13 @@ import {
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
+export type RestockSource =
+  | "supplier"
+  | "donation"
+  | "transfer"
+  | "correction"
+  | "other";
+
 type RestockEntry = {
   id: string;
   itemId: string;
@@ -16,8 +23,25 @@ type RestockEntry = {
   quantityToAdd: string;
   expirationDate: string;
   needsExpiration: boolean;
+  // Optional: vendor URL captured at restock time. Written to the inventory
+  // row so future reorders can route to the right vendor.
+  reorderLink: string;
+  // Optional: price paid per unit at this restock. Stored on the row's
+  // values.unitCost (visible if a unitCost column is configured).
+  unitCost: string;
+  // Where this stock came from. Persisted to the audit event metadata so
+  // analytics can distinguish supplier deliveries from donations/corrections.
+  source: RestockSource;
   error: string;
 };
+
+const RESTOCK_SOURCE_OPTIONS: { value: RestockSource; label: string }[] = [
+  { value: "supplier", label: "Supplier purchase" },
+  { value: "donation", label: "Donation" },
+  { value: "transfer", label: "Transfer" },
+  { value: "correction", label: "Correction" },
+  { value: "other", label: "Other" },
+];
 
 type RestockGroup = {
   id: string;
@@ -52,8 +76,22 @@ const createRestockEntry = (): RestockEntry => ({
   quantityToAdd: "",
   expirationDate: "",
   needsExpiration: false,
+  reorderLink: "",
+  unitCost: "",
+  source: "supplier",
   error: "",
 });
+
+// Strip "$", commas, and whitespace so pasted "$4,239.00" parses cleanly.
+const parseCurrencyInput = (input: string): number =>
+  Number(input.replace(/[$,\s]/g, ""));
+
+const normalizeLink = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+};
 
 const createRestockGroup = (location = ""): RestockGroup => ({
   id: crypto.randomUUID(),
@@ -488,7 +526,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
           );
           next.entries = next.entries.map((entry) => {
             if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-            return { ...entry, itemId: "", itemSearch: "", quantityToAdd: "", needsExpiration: false, expirationDate: "", error: "" };
+            return { ...entry, itemId: "", itemSearch: "", quantityToAdd: "", needsExpiration: false, expirationDate: "", reorderLink: "", unitCost: "", source: "supplier", error: "" };
           });
         }
         return next;
@@ -583,6 +621,9 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       quantityToAdd: number;
       expirationDate: string;
       needsExpiration: boolean;
+      reorderLink: string;
+      unitCost: number | null;
+      source: RestockSource;
     };
     const validEntries: ValidEntry[] = [];
 
@@ -599,6 +640,18 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         const quantityToAdd = Number(entry.quantityToAdd);
         const isEmpty = !itemId && entry.quantityToAdd.trim() === "";
         if (isEmpty) return entry;
+
+        // Validate the optional unit cost if provided — ignore otherwise.
+        let parsedCost: number | null = null;
+        const rawCost = entry.unitCost.trim();
+        if (rawCost) {
+          const n = parseCurrencyInput(rawCost);
+          if (!Number.isFinite(n) || n < 0) {
+            hasError = true;
+            return { ...entry, error: "Enter a valid unit cost" };
+          }
+          parsedCost = n;
+        }
 
         let error = "";
         if (!itemId) {
@@ -621,6 +674,9 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
               quantityToAdd,
               expirationDate: entry.expirationDate,
               needsExpiration: entry.needsExpiration,
+              reorderLink: entry.reorderLink.trim() ? normalizeLink(entry.reorderLink) : "",
+              unitCost: parsedCost,
+              source: entry.source,
             });
           }
         }
@@ -638,7 +694,9 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       return;
     }
 
-    // Merge duplicate non-expiration entries for the same item
+    // Merge duplicate non-expiration entries for the same item. Keep the last
+    // non-empty reorderLink / unitCost across merged entries so the user's
+    // most-recent input wins.
     const mergedMap = new Map<string, ValidEntry>();
     const expirationEntries: ValidEntry[] = [];
 
@@ -649,6 +707,8 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         const existing = mergedMap.get(entry.itemId);
         if (existing) {
           existing.quantityToAdd += entry.quantityToAdd;
+          if (entry.reorderLink) existing.reorderLink = entry.reorderLink;
+          if (entry.unitCost !== null) existing.unitCost = entry.unitCost;
         } else {
           mergedMap.set(entry.itemId, { ...entry });
         }
@@ -660,7 +720,20 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
     const maxPosition = rows.length > 0 ? Math.max(...rows.map((r) => r.position)) : 0;
     let newRowOffset = 0;
 
-    // Non-expiration: increment existing row quantity
+    // Restock metadata is sent alongside the save so the backend can emit a
+    // structured RESTOCK_ADDED audit event per restock (source, qtyDelta,
+    // unitCost, link, location) — these deltas are what analytics queries
+    // reconstruct "how much came in, from where, at what price".
+    const restockMetadata: Record<string, {
+      source: RestockSource;
+      qtyDelta: number;
+      unitCost?: number;
+      reorderLink?: string;
+      location?: string;
+    }> = {};
+
+    // Non-expiration: increment existing row quantity, optionally overwrite
+    // reorderLink / unitCost if the user supplied new values.
     for (const entry of mergedMap.values()) {
       const originalRow = rowById.get(entry.itemId);
       if (!originalRow) continue;
@@ -670,8 +743,19 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         values: {
           ...originalRow.values,
           quantity: currentQty + entry.quantityToAdd,
+          ...(entry.reorderLink ? { reorderLink: entry.reorderLink } : {}),
+          ...(entry.unitCost !== null ? { unitCost: entry.unitCost } : {}),
         },
       });
+      restockMetadata[originalRow.id] = {
+        source: entry.source,
+        qtyDelta: entry.quantityToAdd,
+        ...(entry.unitCost !== null ? { unitCost: entry.unitCost } : {}),
+        ...(entry.reorderLink ? { reorderLink: entry.reorderLink } : {}),
+        ...(String(originalRow.values.location ?? "").trim()
+          ? { location: String(originalRow.values.location ?? "").trim() }
+          : {}),
+      };
     }
 
     // Expiration: always create a new row for each incoming batch
@@ -679,18 +763,30 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       const originalRow = rowById.get(entry.itemId);
       if (!originalRow) continue;
       newRowOffset++;
+      const newRowId = crypto.randomUUID();
       rowsToSave.push({
-        id: crypto.randomUUID(),
+        id: newRowId,
         position: maxPosition + newRowOffset,
         values: {
           ...originalRow.values,
           quantity: entry.quantityToAdd,
           ...(expirationDateKey ? { [expirationDateKey]: entry.expirationDate } : {}),
+          ...(entry.reorderLink ? { reorderLink: entry.reorderLink } : {}),
+          ...(entry.unitCost !== null ? { unitCost: entry.unitCost } : {}),
           orderedAt: null,
           retiredAt: null,
           retiredQty: null,
         },
       });
+      restockMetadata[newRowId] = {
+        source: entry.source,
+        qtyDelta: entry.quantityToAdd,
+        ...(entry.unitCost !== null ? { unitCost: entry.unitCost } : {}),
+        ...(entry.reorderLink ? { reorderLink: entry.reorderLink } : {}),
+        ...(String(originalRow.values.location ?? "").trim()
+          ? { location: String(originalRow.values.location ?? "").trim() }
+          : {}),
+      };
     }
 
     const restockedNames = new Set(
@@ -709,7 +805,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
     setSubmitting(true);
     setFeedback(null);
     try {
-      await saveInventoryItems(rowsToSave, []);
+      await saveInventoryItems(rowsToSave, [], { restockMetadata });
       // After saving, fetch fresh data and clear orderedAt on any row whose
       // item name matches something we just restocked (name match only)
       try {
@@ -765,7 +861,23 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
     <section className="app-content">
       <div className="app-card usage-card quickadd-form">
         <header className="usage-header">
-          <h2 className="usage-title">Quick Add / Restock</h2>
+          <h2 className="usage-title">Fast Restock</h2>
+          <p className="usage-instructions">
+            Just got a shipment? Use this to bump inventory quantities up quickly
+            across multiple items.
+            {" "}Pick a <strong>location</strong>, search for an item, enter the
+            quantity to add, and hit <strong>Submit</strong>.
+            {" "}Items that track expiration will prompt you for a new date.
+            {" "}Tap <strong>+ Add Item</strong> to log more items in the same
+            session, or <strong>+ Add Location</strong> to log items for a
+            different location at the same time.
+          </p>
+          <p className="usage-instructions usage-instructions--nudge">
+            <strong>Placed a supplier order?</strong>{" "}
+            Track the vendor, lead time, and received qty on the{" "}
+            <strong>Orders</strong> page instead — Fast Restock is best for
+            donations, transfers, found stock, and quick corrections.
+          </p>
         </header>
 
         {feedback && (
@@ -888,6 +1000,56 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
                             ×
                           </button>
                         )}
+                      </div>
+
+                      <div className="quickadd-entry-extras">
+                        <div className="quickadd-entry-extra">
+                          <label className="usage-field-label">Source</label>
+                          <select
+                            className="field"
+                            value={entry.source}
+                            onChange={(e) =>
+                              updateEntry(group.id, entry.id, {
+                                source: e.target.value as RestockSource,
+                                error: "",
+                              })
+                            }
+                            disabled={submitting}
+                          >
+                            {RESTOCK_SOURCE_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="quickadd-entry-extra">
+                          <label className="usage-field-label">Vendor link (optional)</label>
+                          <input
+                            type="text"
+                            className="field"
+                            placeholder="https://vendor.com/product..."
+                            value={entry.reorderLink}
+                            onChange={(e) =>
+                              updateEntry(group.id, entry.id, { reorderLink: e.target.value, error: "" })
+                            }
+                            disabled={submitting}
+                          />
+                        </div>
+                        <div className="quickadd-entry-extra quickadd-entry-extra--cost">
+                          <label className="usage-field-label">Unit cost (optional)</label>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="field"
+                            placeholder="$0.00"
+                            value={entry.unitCost}
+                            onChange={(e) =>
+                              updateEntry(group.id, entry.id, { unitCost: e.target.value, error: "" })
+                            }
+                            disabled={submitting}
+                          />
+                        </div>
                       </div>
 
                       {entry.error && (

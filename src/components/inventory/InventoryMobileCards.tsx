@@ -75,61 +75,47 @@ export function InventoryMobileCards({
   const showRetire = activeTab === "expired" && !!onRetireRow;
   return (
     <div className="inventory-cards-wrap">
-      {canEditTable && (
+      {selectMode && canEditTable && selectedRowIds.size > 0 && rows.length > 1 && (
         <div className="inventory-cards-toolbar">
+          {showLocationPills && locationOptions.length > 1 ? (
+            <details className="inventory-move-menu">
+              <summary className="button button-secondary button-sm">
+                Move to…
+              </summary>
+              <div className="inventory-move-panel">
+                {locationOptions
+                  .filter((loc) => loc !== effectiveLocationFilter)
+                  .map((loc) => (
+                    <button
+                      key={loc}
+                      type="button"
+                      className="inventory-move-option"
+                      onClick={(e) => {
+                        onMoveSelectedRows(loc);
+                        const details = e.currentTarget.closest("details");
+                        details?.removeAttribute("open");
+                      }}
+                    >
+                      {loc}
+                    </button>
+                  ))}
+              </div>
+            </details>
+          ) : null}
           <button
             type="button"
-            className={`button button-ghost button-sm${selectMode ? " active" : ""}`}
-            onClick={() => {
-              onSetSelectMode(!selectMode);
-              if (!selectMode) {
-                onSetAddingLocation(false);
-                onSetNewLocationName("");
-                onSetAddLocationError(null);
-              }
-              if (selectMode) {
-                // Exiting select mode: clear selections (handled in parent via onSetSelectMode)
-              }
-            }}
+            className="button button-secondary button-sm"
+            onClick={onRequestDelete}
           >
-            {selectMode ? `Cancel (${selectedRowIds.size})` : "Select"}
+            Delete ({selectedRowIds.size})
           </button>
-          {selectMode && selectedRowIds.size > 0 && rows.length > 1 && (
-            <>
-              {showLocationPills && locationOptions.length > 1 ? (
-                <details className="inventory-move-menu">
-                  <summary className="button button-secondary button-sm">
-                    Move to… <span className="inventory-move-count">{selectedRowIds.size}</span>
-                  </summary>
-                  <div className="inventory-move-panel">
-                    {locationOptions
-                      .filter((loc) => loc !== effectiveLocationFilter)
-                      .map((loc) => (
-                        <button
-                          key={loc}
-                          type="button"
-                          className="inventory-move-option"
-                          onClick={(e) => {
-                            onMoveSelectedRows(loc);
-                            const details = e.currentTarget.closest("details");
-                            details?.removeAttribute("open");
-                          }}
-                        >
-                          {loc}
-                        </button>
-                      ))}
-                  </div>
-                </details>
-              ) : null}
-              <button
-                type="button"
-                className="button button-secondary button-sm"
-                onClick={onRequestDelete}
-              >
-                Delete ({selectedRowIds.size})
-              </button>
-            </>
-          )}
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={() => onSetSelectMode(false)}
+          >
+            Cancel
+          </button>
         </div>
       )}
       {filteredRowsLength === 0 ? (
@@ -242,11 +228,9 @@ export function InventoryMobileCards({
                     })}
                   </div>
                 </div>
-                {!isExpanded && (
-                  <span className="inventory-card-chevron" aria-hidden="true">
-                    ▼
-                  </span>
-                )}
+                <span className={`inventory-card-chevron${isExpanded ? " inventory-card-chevron--up" : ""}`} aria-hidden="true">
+                  ▼
+                </span>
               </div>
 
               {isExpanded && (
@@ -269,8 +253,8 @@ export function InventoryMobileCards({
                       />
                     </div>
                   ))}
-                  {showRetire && (
-                    <div className="inventory-card-retire-row" onClick={(e) => e.stopPropagation()}>
+                  <div className="inventory-card-actions" onClick={(e) => e.stopPropagation()}>
+                    {showRetire && (
                       <button
                         type="button"
                         className="inventory-retire-btn"
@@ -278,19 +262,30 @@ export function InventoryMobileCards({
                       >
                         Retire Item
                       </button>
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    className="inventory-card-collapse-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onExpandCard(null);
-                      onSetSelectedRowId(null);
-                    }}
-                  >
-                    ▲ Collapse
-                  </button>
+                    )}
+                    {canEditTable && (
+                      <button
+                        type="button"
+                        className="inventory-card-delete-btn"
+                        onClick={() => {
+                          onToggleRowSelection(row.id);
+                          onRequestDelete();
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="inventory-card-collapse-btn"
+                      onClick={() => {
+                        onExpandCard(null);
+                        onSetSelectedRowId(null);
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

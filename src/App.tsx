@@ -21,7 +21,7 @@ import {
 } from "./lib/themePreference";
 
 import { normalizeModuleKeys, type AppModuleKey } from "./lib/moduleRegistry";
-import type { InventoryFilter } from "./components/InventoryPage";
+import type { ActiveTab } from "./components/InventoryPage";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
@@ -52,7 +52,7 @@ export default function App() {
   };
   const [currentUserEmail, setCurrentUserEmail] = useState("");
   const [view, setViewRaw] = useState<AppView>("dashboard");
-  const [inventoryInitialFilter, setInventoryInitialFilter] = useState<InventoryFilter | undefined>(undefined);
+  const [inventoryInitialFilter, setInventoryInitialFilter] = useState<ActiveTab | undefined>(undefined);
   const [inventoryInitialSearch, setInventoryInitialSearch] = useState<string | undefined>(undefined);
   const [inventoryInitialEditCell, setInventoryInitialEditCell] = useState<{ rowId: string; columnKey: string } | undefined>(undefined);
   const [inventoryInitialAction, setInventoryInitialAction] = useState<import("./components/inventory/inventoryTypes").InventoryInitialAction | undefined>(undefined);
@@ -514,7 +514,7 @@ export default function App() {
       <InventoryPage
         key={inventoryKey}
         canEditInventory={canEditInventory}
-        canReviewSubmissions={canReviewUsageSubmissions}
+        canLogUsage={canAccessUsage}
         initialFilter={inventoryInitialFilter}
         initialSearch={inventoryInitialSearch}
         initialEditCell={inventoryInitialEditCell}
@@ -546,16 +546,7 @@ export default function App() {
     );
   } else if (view === "orders") {
     content = canAccessInventory && canEditInventory ? (
-      <OrdersPage
-        selectedLocation={selectedLocation}
-        onNavigateToInventoryItem={(rowId, itemName) => {
-          setInventoryInitialSearch(itemName);
-          setInventoryInitialEditCell({ rowId, columnKey: "reorderLink" });
-          setInventoryInitialFilter(undefined);
-          setInventoryKey((k) => k + 1);
-          setView("inventory");
-        }}
-      />
+      <OrdersPage selectedLocation={selectedLocation} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
@@ -567,7 +558,10 @@ export default function App() {
     );
   } else if (view === "activity") {
     content = canAccessInventory ? (
-      <AuditLogPage canManageColumns={canManageInventoryColumns} />
+      <AuditLogPage
+        canManageColumns={canManageInventoryColumns}
+        canReviewSubmissions={canReviewUsageSubmissions}
+      />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
@@ -634,22 +628,18 @@ export default function App() {
     );
   }
 
-  const isInventorySection = view === "inventory" || view === "usage" || view === "orders" || view === "activity";
-
   return (
     <section className={`app-shell${isMobile && !keyboardOpen ? " app-shell--mobile" : ""}`}>
       <AppToolbar
         view={view}
         onNavigate={(v) => void navigateTo(v as AppView)}
       />
-      {isInventorySection && (
-        <InventorySubNav
-          activeView={view}
-          accessibleModules={subState.allowedModules}
-          canEditInventory={canEditInventory}
-          onNavigate={(v) => void navigateTo(v as AppView)}
-        />
-      )}
+      <InventorySubNav
+        activeView={view}
+        accessibleModules={subState.allowedModules}
+        canEditInventory={canEditInventory}
+        onNavigate={(v) => void navigateTo(v as AppView)}
+      />
       {content}
       {isMobile && !keyboardOpen && (
         <nav className="app-bottom-bar" aria-label="Main navigation">

@@ -86,7 +86,17 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
       const itemName = String(entry?.itemName ?? "").trim();
       if (!itemName) return json(400, { error: `Entry ${i + 1}: itemName is required for items not in inventory.` });
       const freeformId = `freeform-${randomUUID()}`;
-      orderItems.push({ itemId: freeformId, itemName, qtyOrdered, qtyReceived: 0, ...(unitCost !== undefined ? { unitCost } : {}) });
+      const reorderLink = String(entry?.reorderLink ?? "").trim() || undefined;
+      const location = String(entry?.location ?? "").trim() || undefined;
+      orderItems.push({
+        itemId: freeformId,
+        itemName,
+        qtyOrdered,
+        qtyReceived: 0,
+        ...(unitCost !== undefined ? { unitCost } : {}),
+        ...(reorderLink ? { reorderLink } : {}),
+        ...(location ? { location } : {}),
+      });
     } else {
       const item = byId.get(itemId);
       let itemName = String(entry?.itemName ?? "").trim();
@@ -205,6 +215,11 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
           quantity: line.qtyThisReceive,
         };
         if (line.expirationDate) newValues.expirationDate = line.expirationDate;
+        // Persist the vendor link captured at order time so future reorders
+        // route the item back to the right vendor card automatically.
+        if (orderItem.reorderLink) newValues.reorderLink = orderItem.reorderLink;
+        // Persist location so location-filtered inventory views pick it up.
+        if (orderItem.location) newValues.location = orderItem.location;
         await ddb.send(new PutCommand({
           TableName: storage.itemTable,
           Item: {
@@ -322,7 +337,7 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
 };
 
 export const handleCloseRestockOrder = async (ctx: RouteContext) => {
-  const { access, storage, path } = ctx;
+  const { access, storage, path, body } = ctx;
   if (!access.canEditInventory) {
     return json(403, { error: "Only editors and admins can close restock orders." });
   }
@@ -336,22 +351,39 @@ export const handleCloseRestockOrder = async (ctx: RouteContext) => {
     return json(409, { error: "Order is already closed." });
   }
 
+  // Optional cancellation note appended to existing notes (or set if empty).
+  const rawNote = String(body?.note ?? "").trim();
+  const existingNotes = String(result.Item.notes ?? "").trim();
+  const nextNotes = rawNote
+    ? (existingNotes ? `${existingNotes}\n${rawNote}` : rawNote)
+    : existingNotes;
+
   const now = new Date().toISOString();
+  const updateExpr = rawNote
+    ? "SET #status = :status, closedAt = :closedAt, closedByUserId = :uid, closedByName = :name, notes = :notes"
+    : "SET #status = :status, closedAt = :closedAt, closedByUserId = :uid, closedByName = :name";
+  const updateVals: Record<string, unknown> = {
+    ":status": "closed",
+    ":closedAt": now,
+    ":uid": access.userId,
+    ":name": access.displayName || access.email,
+  };
+  if (rawNote) updateVals[":notes"] = nextNotes;
+
   await ddb.send(new UpdateCommand({
     TableName: storage.restockOrdersTable,
     Key: { id: orderId },
-    UpdateExpression: "SET #status = :status, closedAt = :closedAt, closedByUserId = :uid, closedByName = :name",
+    UpdateExpression: updateExpr,
     ExpressionAttributeNames: { "#status": "status" },
-    ExpressionAttributeValues: {
-      ":status": "closed",
-      ":closedAt": now,
-      ":uid": access.userId,
-      ":name": access.displayName || access.email,
-    },
+    ExpressionAttributeValues: updateVals,
   }));
 
   await writeAuditEvents(storage.auditTable, [
-    buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, { orderId, closedManually: true }),
+    buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, {
+      orderId,
+      closedManually: true,
+      ...(rawNote ? { note: rawNote } : {}),
+    }),
   ]);
 
   return json(200, { ok: true });

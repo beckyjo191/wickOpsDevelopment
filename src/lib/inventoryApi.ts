@@ -199,9 +199,18 @@ export const saveUserColumnVisibility = async (
   }
 };
 
+export type RestockMetadata = {
+  source: "supplier" | "donation" | "transfer" | "correction" | "other";
+  qtyDelta: number;
+  unitCost?: number;
+  reorderLink?: string;
+  location?: string;
+};
+
 export const saveInventoryItems = async (
   rows: InventoryRow[],
   deletedRowIds: string[] = [],
+  options?: { restockMetadata?: Record<string, RestockMetadata> },
 ): Promise<void> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/items/save`, {
@@ -215,6 +224,7 @@ export const saveInventoryItems = async (
         createdAt: row.createdAt,
       })),
       deletedRowIds,
+      ...(options?.restockMetadata ? { restockMetadata: options.restockMetadata } : {}),
     }),
   });
 
@@ -1061,6 +1071,12 @@ export type RestockOrderItem = {
   qtyOrdered: number;
   qtyReceived: number;
   unitCost?: number;
+  // For freeform items: vendor URL captured at order time, persisted onto
+  // the new inventory row when received with addToInventory.
+  reorderLink?: string;
+  // For freeform items: location captured at order time. Persisted to the new
+  // inventory row on receive/cancel-materialization.
+  location?: string;
 };
 
 export type RestockReceiveLine = {
@@ -1104,7 +1120,14 @@ export const listRestockOrders = async (): Promise<RestockOrder[]> => {
 export const createRestockOrder = async (payload: {
   vendor?: string;
   notes?: string;
-  items: Array<{ itemId?: string; itemName: string; qtyOrdered: number; unitCost?: number }>;
+  items: Array<{
+    itemId?: string;
+    itemName: string;
+    qtyOrdered: number;
+    unitCost?: number;
+    reorderLink?: string;
+    location?: string;
+  }>;
 }): Promise<{ orderId: string }> => {
   const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders`, {
     method: "POST",
@@ -1128,9 +1151,15 @@ export const receiveRestockOrder = async (
   return res.json();
 };
 
-export const closeRestockOrder = async (orderId: string): Promise<void> => {
+export const closeRestockOrder = async (orderId: string, note?: string): Promise<void> => {
   const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders/${encodeURIComponent(orderId)}/close`, {
     method: "POST",
+    ...(note && note.trim()
+      ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: note.trim() }),
+        }
+      : {}),
   });
   if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to close restock order."));
 };

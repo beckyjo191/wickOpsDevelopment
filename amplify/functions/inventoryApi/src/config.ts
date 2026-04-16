@@ -24,7 +24,7 @@ export const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
 export const EDIT_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"]);
 export const COLUMN_ADMIN_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 export const OWNER_ROLES = new Set(["OWNER", "ACCOUNT_OWNER"]);
-export const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate", "reorderLink"]);
+export const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate", "reorderLink", "unitCost"]);
 export const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 export const PROVISIONING_RETRY_AFTER_MS = 2000;
 

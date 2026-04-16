@@ -103,7 +103,40 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       }
     }
 
-    if (!hasLocationColumn || !hasReorderLinkColumn) {
+    // Ensure the unitCost core column exists (added after reorderLink).
+    // Hidden by default — orgs that don't track cost won't see an empty column.
+    const hasUnitCostColumn = existing.some(
+      (c) => normalizeLooseKey(c.key) === "unitcost",
+    );
+    if (!hasUnitCostColumn) {
+      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 60);
+      try {
+        await ddb.send(
+          new PutCommand({
+            TableName: storage.columnTable,
+            Item: {
+              id: coreColumnIdForKey("unitCost"),
+              organizationId,
+              module: "inventory",
+              key: "unitCost",
+              label: "Unit Cost",
+              type: "number",
+              isCore: true,
+              isRequired: false,
+              isVisible: false,
+              isEditable: true,
+              sortOrder: maxSort + 10,
+              createdAt: new Date().toISOString(),
+            } satisfies InventoryColumn,
+            ConditionExpression: "attribute_not_exists(id)",
+          }),
+        );
+      } catch (err: any) {
+        if (err?.name !== "ConditionalCheckFailedException") throw err;
+      }
+    }
+
+    if (!hasLocationColumn || !hasReorderLinkColumn || !hasUnitCostColumn) {
       return listColumns(storage);
     }
     return existing;
@@ -186,6 +219,21 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       isVisible: true,
       isEditable: true,
       sortOrder: 60,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      organizationId,
+      module: "inventory",
+      key: "unitCost",
+      label: "Unit Cost",
+      type: "number",
+      isCore: true,
+      isRequired: false,
+      // Hidden by default — orgs that don't track cost won't see an empty column.
+      // Users can show it from the column settings.
+      isVisible: false,
+      isEditable: true,
+      sortOrder: 70,
       createdAt: new Date().toISOString(),
     },
   ];

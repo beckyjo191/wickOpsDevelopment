@@ -2,10 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Package, ClipboardList, Zap, ShoppingCart } from "lucide-react";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
-import { LocationPills } from "./LocationPills";
 import { pickLoadingLine } from "../lib/loadingLines";
 
-type InventoryFilter = "expired" | "exp30" | "lowStock";
+type InventoryFilter = "expired" | "exp30" | "lowStock" | "quickAdd" | "logUsage";
 
 interface DashboardPageProps {
   accessibleModules: AppModuleKey[];
@@ -111,22 +110,30 @@ export function DashboardPage({
           <div className="dash-module-header">
             <span className="dash-module-icon"><Package size={22} strokeWidth={2} /></span>
             <h3 className="dash-module-name">Inventory</h3>
-            <button
-              type="button"
-              className="button button-primary button-sm"
-              onClick={() => onNavigate("inventory")}
-            >
-              Open
-            </button>
+            {showLocationPills && (
+              <details className="inventory-dropdown dash-location-dropdown">
+                <summary className="inventory-dropdown-trigger">
+                  {selectedLocation || "All Locations"}
+                  <svg className="inventory-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                </summary>
+                <div className="inventory-dropdown-panel">
+                  {locationBadges.map((loc) => (
+                    <button
+                      key={loc.location}
+                      type="button"
+                      className={`inventory-dropdown-option${selectedLocation === loc.location ? " active" : ""}`}
+                      onClick={(e) => {
+                        onLocationChange(loc.location);
+                        e.currentTarget.closest("details")?.removeAttribute("open");
+                      }}
+                    >
+                      {loc.location}
+                    </button>
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
-
-          {showLocationPills ? (
-            <LocationPills
-              locations={locationBadges}
-              selectedLocation={selectedLocation}
-              onLocationChange={(loc) => onLocationChange(loc)}
-            />
-          ) : null}
 
           {activeAlerts && !hasAlerts && selectedLocation ? (
             <div className="dash-no-alerts">
@@ -202,24 +209,24 @@ export function DashboardPage({
 
           {(hasUsage || canEditInventory) ? (
             <div className="dash-quick-actions">
-              {hasUsage ? (
+              {hasUsage && onNavigateToInventoryWithFilter ? (
                 <button
                   type="button"
                   className="dash-action-btn"
-                  onClick={() => onNavigate("usage")}
+                  onClick={() => onNavigateToInventoryWithFilter("logUsage", selectedLocation)}
                 >
                   <ClipboardList size={18} strokeWidth={2} />
                   <span>Log Usage</span>
                 </button>
               ) : null}
-              {canEditInventory ? (
+              {canEditInventory && onNavigateToInventoryWithFilter ? (
                 <button
                   type="button"
                   className="dash-action-btn"
-                  onClick={() => onNavigate("orders")}
+                  onClick={() => onNavigateToInventoryWithFilter("quickAdd", selectedLocation)}
                 >
                   <Zap size={18} strokeWidth={2} />
-                  <span>Quick Add</span>
+                  <span>Fast Restock</span>
                 </button>
               ) : null}
             </div>

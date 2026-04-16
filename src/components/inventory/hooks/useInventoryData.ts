@@ -50,7 +50,7 @@ interface UseInventoryDataParams {
   UNASSIGNED_LOCATION: string;
   /** From the filters hook */
   setSelectedRowIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  /** Whether the active tab is pendingSubmissions */
+  /** Current inventory tab. Used to disable table edits when in Fast Restock mode. */
   activeTab: ActiveTab;
   /** From the filters hook — selected row IDs (for allFilteredSelected) */
   selectedRowIds: Set<string>;
@@ -82,7 +82,7 @@ export function useInventoryData({
   toDateInputValue,
   setCurrentPage,
 }: UseInventoryDataParams) {
-  const canEditTable = canEditInventory && activeTab !== "pendingSubmissions";
+  const canEditTable = canEditInventory && activeTab !== "quickAdd" && activeTab !== "logUsage";
 
   // ── Core state ──
   const [loading, setLoading] = useState(true);

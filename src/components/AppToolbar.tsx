@@ -23,13 +23,6 @@ export function AppToolbar({
       <nav className="app-toolbar-nav">
         <button
           type="button"
-          className={`app-toolbar-nav-item${view === "dashboard" ? " active" : ""}`}
-          onClick={() => onNavigate("dashboard")}
-        >
-          Dashboard
-        </button>
-        <button
-          type="button"
           className={`app-toolbar-nav-item${view === "settings" || view === "invite" ? " active" : ""}`}
           onClick={() => onNavigate("settings")}
         >

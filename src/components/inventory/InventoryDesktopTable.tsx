@@ -174,18 +174,6 @@ export function InventoryDesktopTable({
               className={row.id === selectedRowId ? "inventory-row-selected" : undefined}
               onClick={() => onSetSelectedRowId(row.id)}
             >
-              {showRetire ? (
-                <td className="inventory-col-retire" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="inventory-retire-btn"
-                    onClick={() => onRetireRow!(row.id)}
-                    title="Retire this expired item"
-                  >
-                    Retire
-                  </button>
-                </td>
-              ) : null}
               {canEditTable ? (
                 <td className="inventory-select-cell">
                   <input
@@ -197,6 +185,18 @@ export function InventoryDesktopTable({
                     disabled={!canEditTable}
                     aria-label={`Select row ${rowIndex + 1}`}
                   />
+                </td>
+              ) : null}
+              {showRetire ? (
+                <td className="inventory-col-retire" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="inventory-retire-btn"
+                    onClick={() => onRetireRow!(row.id)}
+                    title="Retire this expired item"
+                  >
+                    Retire
+                  </button>
                 </td>
               ) : null}
               {visibleColumns.map((column) => (

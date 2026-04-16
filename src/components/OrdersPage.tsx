@@ -1,13 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle,
   ChevronDown,
   ChevronUp,
+  HelpCircle,
   Loader2,
   PackageCheck,
-  PackagePlus,
-  Plus,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -23,14 +22,11 @@ import {
   type RestockOrderItem,
   type RestockReceiveLine,
 } from "../lib/inventoryApi";
-import { QuickAddPage } from "./QuickAddPage";
 import { ReorderTab, type OrderItem } from "./ReorderTab";
 
-type OrdersTab = "main" | "quickadd";
 
 interface OrdersPageProps {
   selectedLocation?: string | null;
-  onNavigateToInventoryItem?: (rowId: string, itemName: string) => void;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -43,8 +39,25 @@ function formatDate(iso: string): string {
   });
 }
 
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(amount);
+}
+
+// Accepts user input like "$4,239.00", "4239", "4,239.5" and returns the
+// parsed number. Returns NaN for empty / unparseable strings — callers should
+// check `Number.isFinite` before using the result.
+function parseCurrency(input: string): number {
+  return Number(input.replace(/[$,\s]/g, ""));
 }
 
 function orderTotalCost(items: RestockOrderItem[]): number | null {
@@ -53,271 +66,19 @@ function orderTotalCost(items: RestockOrderItem[]): number | null {
   return itemsWithCost.reduce((sum, i) => sum + (i.unitCost ?? 0) * i.qtyOrdered, 0);
 }
 
-function StatusBadge({ status }: { status: RestockOrder["status"] }) {
+function StatusBadge({ status, cancelled }: { status: RestockOrder["status"]; cancelled?: boolean }) {
+  if (cancelled) {
+    return (
+      <span className="order-status-badge order-status-badge--cancelled">Cancelled</span>
+    );
+  }
   const map = {
-    open: { label: "Open", className: "order-status-badge order-status-badge--open" },
-    partial: { label: "Partial", className: "order-status-badge order-status-badge--partial" },
-    closed: { label: "Closed", className: "order-status-badge order-status-badge--closed" },
+    open: { label: "Ordered", className: "order-status-badge order-status-badge--open" },
+    partial: { label: "Partially Received", className: "order-status-badge order-status-badge--partial" },
+    closed: { label: "Completed", className: "order-status-badge order-status-badge--closed" },
   };
   const { label, className } = map[status];
   return <span className={className}>{label}</span>;
-}
-
-// ── Create Order Form ──────────────────────────────────────────────────────
-
-type CreateOrderLine = {
-  id: string;
-  itemId: string;       // "" for freeform items
-  itemSearch: string;
-  isFreeform: boolean;
-  qtyOrdered: string;
-  unitCost: string;
-  error: string;
-};
-
-function CreateOrderForm({
-  rows,
-  onCreated,
-  onCancel,
-}: {
-  rows: InventoryRow[];
-  onCreated: () => void;
-  onCancel: () => void;
-}) {
-  const getItemName = (row: InventoryRow) =>
-    String(row.values.itemName ?? "").trim() || `Item ${row.id.slice(0, 8)}`;
-
-  function newLine(): CreateOrderLine {
-    return { id: crypto.randomUUID(), itemId: "", itemSearch: "", isFreeform: false, qtyOrdered: "", unitCost: "", error: "" };
-  }
-
-  const [vendor, setVendor] = useState("");
-  const [notes, setNotes] = useState("");
-  const [lines, setLines] = useState<CreateOrderLine[]>([newLine()]);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const filteredOptions = (search: string) => {
-    const q = search.toLowerCase();
-    return rows.filter((r) => getItemName(r).toLowerCase().includes(q)).slice(0, 8);
-  };
-
-  const getRowStockStatus = (r: InventoryRow) => {
-    const qty = Number(r.values.quantity ?? 0);
-    const minRaw = r.values.minQuantity;
-    const min = Number(minRaw);
-    const hasMin = minRaw !== null && minRaw !== undefined && String(minRaw).trim() !== "" && Number.isFinite(min) && min > 0;
-    const isLow = hasMin && Number.isFinite(qty) && qty < min;
-    const expRaw = String(r.values.expirationDate ?? "").trim();
-    let isExpired = false;
-    if (expRaw) {
-      const d = new Date(expRaw);
-      if (!Number.isNaN(d.getTime())) {
-        const today = new Date();
-        isExpired = d < new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      }
-    }
-    return { qty, min: hasMin ? min : null, isLow, isExpired };
-  };
-
-  const updateLine = (id: string, patch: Partial<CreateOrderLine>) =>
-    setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
-
-  const selectItem = (lineId: string, row: InventoryRow) =>
-    updateLine(lineId, { itemId: row.id, itemSearch: getItemName(row), isFreeform: false, error: "" });
-
-  const selectFreeform = (lineId: string, name: string) =>
-    updateLine(lineId, { itemId: "", itemSearch: name, isFreeform: true, error: "" });
-
-  const removeLine = (id: string) => setLines((prev) => prev.filter((l) => l.id !== id));
-
-  const handleSubmit = async () => {
-    let hasError = false;
-    const validated = lines.map((l) => {
-      if (!l.itemId && !l.isFreeform) { hasError = true; return { ...l, error: "Select an item" }; }
-      if (l.isFreeform && !l.itemSearch.trim()) { hasError = true; return { ...l, error: "Enter item name" }; }
-      const qty = Number(l.qtyOrdered);
-      if (!Number.isFinite(qty) || qty <= 0) { hasError = true; return { ...l, error: "Enter a valid qty" }; }
-      const cost = l.unitCost.trim() ? Number(l.unitCost) : undefined;
-      if (cost !== undefined && (!Number.isFinite(cost) || cost < 0)) { hasError = true; return { ...l, error: "Invalid cost" }; }
-      return { ...l, error: "" };
-    });
-    setLines(validated);
-    if (hasError) return;
-
-    setSubmitting(true);
-    setError(null);
-    try {
-      await createRestockOrder({
-        vendor: vendor.trim() || undefined,
-        notes: notes.trim() || undefined,
-        items: validated.map((l) => ({
-          ...(l.isFreeform ? {} : { itemId: l.itemId }),
-          itemName: l.isFreeform ? l.itemSearch.trim() : getItemName(rows.find((r) => r.id === l.itemId)!),
-          qtyOrdered: Number(l.qtyOrdered),
-          ...(l.unitCost.trim() ? { unitCost: Number(l.unitCost) } : {}),
-        })),
-      });
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create order.");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="order-form-card">
-      <div className="order-form-header">
-        <h3 className="order-form-title">New Restock Order</h3>
-        <button type="button" className="button button-ghost button-sm" onClick={onCancel}>
-          <X size={16} />
-        </button>
-      </div>
-
-      <div className="order-form-meta">
-        <div className="order-form-field">
-          <label className="order-form-label">Vendor</label>
-          <input
-            className="field"
-            placeholder="e.g. Bound Tree Medical"
-            value={vendor}
-            onChange={(e) => setVendor(e.target.value)}
-          />
-        </div>
-        <div className="order-form-field">
-          <label className="order-form-label">Notes</label>
-          <input
-            className="field"
-            placeholder="Optional notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="order-form-items">
-        <div className="order-form-items-header">
-          <span>Item</span>
-          <span>Qty to Order</span>
-          <span>Unit Cost</span>
-          <span />
-        </div>
-        {lines.map((line) => (
-          <div key={line.id} className="order-form-item-row">
-            <div className="order-form-item-search">
-              {line.isFreeform ? (
-                <div className="order-form-freeform">
-                  <input
-                    className="field"
-                    placeholder="Item name"
-                    value={line.itemSearch}
-                    onChange={(e) => updateLine(line.id, { itemSearch: e.target.value, error: "" })}
-                  />
-                  <span className="order-form-freeform-badge">New item</span>
-                </div>
-              ) : (
-                <>
-                  <input
-                    className={`field${line.error && !line.itemId ? " field--error" : ""}`}
-                    placeholder="Search inventory..."
-                    value={line.itemSearch}
-                    onChange={(e) => updateLine(line.id, { itemSearch: e.target.value, itemId: "", error: "" })}
-                  />
-                  {line.itemSearch && !line.itemId && (
-                    <div className="order-item-dropdown">
-                      {filteredOptions(line.itemSearch).map((r) => {
-                        const { qty, min, isLow, isExpired } = getRowStockStatus(r);
-                        return (
-                          <button
-                            key={r.id}
-                            type="button"
-                            className="order-item-option"
-                            onClick={() => selectItem(line.id, r)}
-                          >
-                            <span className="order-item-option-name">{getItemName(r)}</span>
-                            <span className="order-item-option-meta">
-                              {isExpired && <span className="reorder-item-status reorder-status-expired">Expired</span>}
-                              {isLow && !isExpired && <span className="reorder-item-status reorder-status-lowStock">Low</span>}
-                              <span className="order-item-option-qty">
-                                {min !== null ? `${qty}/${min}` : `Qty: ${qty}`}
-                              </span>
-                            </span>
-                          </button>
-                        );
-                      })}
-                      {line.itemSearch.trim() && (
-                        <button
-                          type="button"
-                          className="order-item-option order-item-option--new"
-                          onClick={() => selectFreeform(line.id, line.itemSearch.trim())}
-                        >
-                          <Plus size={12} /> Add "{line.itemSearch.trim()}" as new item
-                        </button>
-                      )}
-                      {filteredOptions(line.itemSearch).length === 0 && !line.itemSearch.trim() && (
-                        <div className="order-item-option order-item-option--empty">No items found</div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-              {line.error && <span className="order-form-line-error">{line.error}</span>}
-            </div>
-            <input
-              className="field"
-              type="number"
-              min="1"
-              placeholder="Qty"
-              value={line.qtyOrdered}
-              onChange={(e) => updateLine(line.id, { qtyOrdered: e.target.value })}
-            />
-            <input
-              className="field"
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="$0.00"
-              value={line.unitCost}
-              onChange={(e) => updateLine(line.id, { unitCost: e.target.value })}
-            />
-            <button
-              type="button"
-              className="button button-ghost button-sm"
-              onClick={() => removeLine(line.id)}
-              disabled={lines.length === 1}
-            >
-              <X size={14} />
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="button button-ghost button-sm order-add-line-btn"
-          onClick={() => setLines((prev) => [...prev, newLine()])}
-        >
-          <Plus size={14} /> Add item
-        </button>
-      </div>
-
-      {error && <p className="order-form-error">{error}</p>}
-
-      <div className="order-form-actions">
-        <button type="button" className="button button-secondary" onClick={onCancel}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="button button-primary"
-          onClick={handleSubmit}
-          disabled={submitting}
-        >
-          {submitting ? <Loader2 size={14} className="spin" /> : <PackagePlus size={14} />}
-          Place Order
-        </button>
-      </div>
-    </div>
-  );
 }
 
 // ── Receive Form ───────────────────────────────────────────────────────────
@@ -360,20 +121,54 @@ function ReceiveOrderForm({
         qtyRemaining: i.qtyOrdered - i.qtyReceived,
         qtyThisReceive: String(i.qtyOrdered - i.qtyReceived),
         expirationDate: "",
-        unitCost: i.unitCost !== undefined ? String(i.unitCost) : "",
+        unitCost: i.unitCost !== undefined ? formatCurrency(i.unitCost) : "",
         addToInventory: freeform,  // default to save for freeform items
         error: "",
       };
     }),
   );
-  const [closeOrder, setCloseOrder] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // When non-null, validation passed but some items will remain outstanding —
+  // the user must choose to close the order or just receive these items.
+  const [pendingShortLines, setPendingShortLines] = useState<ReceiveLine[] | null>(null);
 
   const updateLine = (itemId: string, patch: Partial<ReceiveLine>) =>
     setLines((prev) => prev.map((l) => (l.itemId === itemId ? { ...l, ...patch } : l)));
 
-  const handleSubmit = async () => {
+  // On blur, reformat a freshly-typed unit cost as currency (e.g. "4239" →
+  // "$4,239.00"). Leaves invalid input alone so the user can fix it.
+  const handleUnitCostBlur = (itemId: string, value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    const parsed = parseCurrency(trimmed);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      updateLine(itemId, { unitCost: formatCurrency(parsed) });
+    }
+  };
+
+  const submitReceive = async (validated: ReceiveLine[], closeOrder: boolean) => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const receiveLines: RestockReceiveLine[] = validated.map((l) => ({
+        itemId: l.itemId,
+        qtyThisReceive: Number(l.qtyThisReceive),
+        ...(l.expirationDate ? { expirationDate: l.expirationDate } : {}),
+        ...(l.unitCost.trim() ? { unitCost: parseCurrency(l.unitCost) } : {}),
+        ...(l.isFreeform ? { addToInventory: l.addToInventory } : {}),
+      }));
+      await receiveRestockOrder(order.id, { lines: receiveLines, closeOrder });
+      onReceived();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to receive order.");
+      setPendingShortLines(null);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleConfirmClick = () => {
     let hasError = false;
     const validated = lines.map((l) => {
       const qty = Number(l.qtyThisReceive);
@@ -389,7 +184,7 @@ function ReceiveOrderForm({
         hasError = true;
         return { ...l, error: "Expiration date required" };
       }
-      const cost = l.unitCost.trim() ? Number(l.unitCost) : undefined;
+      const cost = l.unitCost.trim() ? parseCurrency(l.unitCost) : undefined;
       if (cost !== undefined && (!Number.isFinite(cost) || cost < 0)) {
         hasError = true;
         return { ...l, error: "Invalid cost" };
@@ -399,32 +194,29 @@ function ReceiveOrderForm({
     setLines(validated);
     if (hasError) return;
 
-    setSubmitting(true);
-    setError(null);
-    try {
-      const receiveLines: RestockReceiveLine[] = validated.map((l) => ({
-        itemId: l.itemId,
-        qtyThisReceive: Number(l.qtyThisReceive),
-        ...(l.expirationDate ? { expirationDate: l.expirationDate } : {}),
-        ...(l.unitCost.trim() ? { unitCost: Number(l.unitCost) } : {}),
-        ...(l.isFreeform ? { addToInventory: l.addToInventory } : {}),
-      }));
-      await receiveRestockOrder(order.id, { lines: receiveLines, closeOrder });
-      onReceived();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to receive order.");
-    } finally {
-      setSubmitting(false);
+    // If any line will leave outstanding qty after this receive, prompt the user.
+    const shortLines = validated.filter((l) => Number(l.qtyThisReceive) < l.qtyRemaining);
+    if (shortLines.length > 0) {
+      setPendingShortLines(shortLines);
+      return;
     }
+
+    // Everything fully received — backend will auto-close.
+    submitReceive(validated, false);
   };
 
   return (
     <div className="order-form-card">
       <div className="order-form-header">
-        <h3 className="order-form-title">
-          Receive Items
-          {order.vendor && <span className="order-form-vendor"> — {order.vendor}</span>}
-        </h3>
+        <div>
+          <h3 className="order-form-title">
+            Receive Items
+            {order.vendor && <span className="order-form-vendor"> — {order.vendor}</span>}
+          </h3>
+          <p className="order-form-subtitle">
+            Ordered {formatDateTime(order.createdAt)} by {order.createdByName}
+          </p>
+        </div>
         <button type="button" className="button button-ghost button-sm" onClick={onCancel}>
           <X size={16} />
         </button>
@@ -433,7 +225,7 @@ function ReceiveOrderForm({
       <div className="order-receive-items">
         <div className="order-receive-header">
           <span>Item</span>
-          <span>Ordered / Received</span>
+          <span>Ordered</span>
           <span>Qty Receiving</span>
           {hasExpirationColumn && <span>Expiration</span>}
           <span>Unit Cost</span>
@@ -454,68 +246,112 @@ function ReceiveOrderForm({
               )}
               {line.error && <span className="order-form-line-error">{line.error}</span>}
             </div>
-            <div className="order-receive-progress">
-              <span>{line.qtyOrdered}</span>
-              <span className="order-receive-progress-sep">/</span>
-              <span className="order-receive-received">{line.qtyReceived}</span>
-              <span className="order-receive-remaining"> ({line.qtyRemaining} remaining)</span>
+            <div className="order-receive-cell" data-label="Ordered">
+              <div className="order-receive-progress">
+                <span>{line.qtyOrdered}</span>
+                {line.qtyReceived > 0 && (
+                  <span className="order-receive-remaining"> ({line.qtyRemaining} remaining)</span>
+                )}
+              </div>
             </div>
-            <input
-              className="field"
-              type="number"
-              min="1"
-              max={line.qtyRemaining}
-              value={line.qtyThisReceive}
-              onChange={(e) => updateLine(line.itemId, { qtyThisReceive: e.target.value, error: "" })}
-            />
-            {hasExpirationColumn && (
+            <div className="order-receive-cell" data-label="Qty Receiving">
               <input
-                className={`field${line.error && !line.expirationDate ? " field--error" : ""}`}
-                type="date"
-                value={line.expirationDate}
-                onChange={(e) => updateLine(line.itemId, { expirationDate: e.target.value, error: "" })}
+                className="field"
+                type="number"
+                min="1"
+                max={line.qtyRemaining}
+                value={line.qtyThisReceive}
+                onChange={(e) => updateLine(line.itemId, { qtyThisReceive: e.target.value, error: "" })}
               />
+            </div>
+            {hasExpirationColumn && (
+              <div className="order-receive-cell" data-label="Expiration">
+                <input
+                  className={`field${line.error && !line.expirationDate ? " field--error" : ""}`}
+                  type="date"
+                  value={line.expirationDate}
+                  onChange={(e) => updateLine(line.itemId, { expirationDate: e.target.value, error: "" })}
+                />
+              </div>
             )}
-            <input
-              className="field"
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="$0.00"
-              value={line.unitCost}
-              onChange={(e) => updateLine(line.itemId, { unitCost: e.target.value })}
-            />
+            <div className="order-receive-cell" data-label="Unit Cost">
+              <input
+                className="field"
+                type="text"
+                inputMode="decimal"
+                placeholder="$0.00"
+                value={line.unitCost}
+                onChange={(e) => updateLine(line.itemId, { unitCost: e.target.value, error: "" })}
+                onBlur={(e) => handleUnitCostBlur(line.itemId, e.target.value)}
+              />
+            </div>
           </div>
         ))}
       </div>
 
-      <div className="order-receive-close-option">
-        <label className="order-receive-close-label">
-          <input
-            type="checkbox"
-            checked={closeOrder}
-            onChange={(e) => setCloseOrder(e.target.checked)}
-          />
-          Close order after receiving (even if items are still outstanding)
-        </label>
-      </div>
-
       {error && <p className="order-form-error">{error}</p>}
 
-      <div className="order-form-actions">
-        <button type="button" className="button button-secondary" onClick={onCancel}>
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="button button-primary"
-          onClick={handleSubmit}
-          disabled={submitting}
-        >
-          {submitting ? <Loader2 size={14} className="spin" /> : <PackageCheck size={14} />}
-          Confirm Receipt
-        </button>
-      </div>
+      {pendingShortLines ? (
+        <div className="order-receive-warning">
+          <div className="order-receive-warning-header">
+            <AlertTriangle size={16} />
+            <strong>Some items haven't been fully received.</strong>
+          </div>
+          <ul className="order-receive-warning-list">
+            {pendingShortLines.map((l) => {
+              const short = l.qtyRemaining - Number(l.qtyThisReceive);
+              return (
+                <li key={l.itemId}>
+                  {l.itemName}: receiving {Number(l.qtyThisReceive)} of {l.qtyRemaining} — {short} short
+                </li>
+              );
+            })}
+          </ul>
+          <p className="order-receive-warning-hint">
+            Close the order to finalize as-is, or just receive these and leave the rest open.
+          </p>
+          <div className="order-form-actions">
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => setPendingShortLines(null)}
+              disabled={submitting}
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => submitReceive(lines, false)}
+              disabled={submitting}
+            >
+              {submitting ? <Loader2 size={14} className="spin" /> : <PackageCheck size={14} />}
+              Receive these, keep order open
+            </button>
+            <button
+              type="button"
+              className="button button-ghost"
+              onClick={() => submitReceive(lines, true)}
+              disabled={submitting}
+            >
+              {submitting ? <Loader2 size={14} className="spin" /> : <X size={14} />}
+              Close order with these quantities
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="order-form-actions">
+          <button
+            type="button"
+            className="button button-primary"
+            onClick={handleConfirmClick}
+            disabled={submitting}
+          >
+            {submitting ? <Loader2 size={14} className="spin" /> : <PackageCheck size={14} />}
+            Confirm Receipt
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -529,24 +365,34 @@ function OrderCard({
 }: {
   order: RestockOrder;
   hasExpirationColumn: boolean;
-  onRefresh: () => void;
+  // closedOrder is passed when the order was just received or closed,
+  // so the parent can clear orderedAt for its items and refresh inventory.
+  onRefresh: (closedOrder?: RestockOrder) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showReceive, setShowReceive] = useState(false);
   const [closing, setClosing] = useState(false);
+  // When true, the card swaps its action row for an inline confirm + note
+  // textarea so the user can record why the order was cancelled.
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [cancelNote, setCancelNote] = useState("");
 
   const total = orderTotalCost(order.items);
   const totalReceived = order.items.reduce((s, i) => s + i.qtyReceived, 0);
   const totalOrdered = order.items.reduce((s, i) => s + i.qtyOrdered, 0);
+  // An order was "cancelled" (vs. closed after at least one receive) when it
+  // was closed without anything being received.
+  const isCancelled = order.status === "closed" && order.receives.length === 0;
 
-  const handleClose = async () => {
-    if (!confirm("Close this order without fully receiving all items?")) return;
+  const handleConfirmCancel = async () => {
     setClosing(true);
     try {
-      await closeRestockOrder(order.id);
-      onRefresh();
+      await closeRestockOrder(order.id, cancelNote.trim() || undefined);
+      onRefresh(order);
     } catch { /* ignore */ } finally {
       setClosing(false);
+      setConfirmingCancel(false);
+      setCancelNote("");
     }
   };
 
@@ -555,7 +401,7 @@ function OrderCard({
       <ReceiveOrderForm
         order={order}
         hasExpirationColumn={hasExpirationColumn}
-        onReceived={() => { setShowReceive(false); onRefresh(); }}
+        onReceived={() => { setShowReceive(false); onRefresh(order); }}
         onCancel={() => setShowReceive(false)}
       />
     );
@@ -566,7 +412,7 @@ function OrderCard({
       <div className="order-card-main">
         <div className="order-card-top">
           <div className="order-card-identity">
-            <StatusBadge status={order.status} />
+            <StatusBadge status={order.status} cancelled={isCancelled} />
             <span className="order-card-vendor">{order.vendor || "No vendor"}</span>
             <span className="order-card-date">{formatDate(order.createdAt)}</span>
           </div>
@@ -576,7 +422,7 @@ function OrderCard({
             {total !== null && <span className="order-card-cost">{formatCurrency(total)}</span>}
           </div>
           <div className="order-card-actions">
-            {order.status !== "closed" && (
+            {order.status !== "closed" && !confirmingCancel && (
               <>
                 <button
                   type="button"
@@ -588,27 +434,75 @@ function OrderCard({
                 <button
                   type="button"
                   className="button button-ghost button-sm"
-                  onClick={handleClose}
+                  onClick={() => setConfirmingCancel(true)}
                   disabled={closing}
-                  title="Close order"
+                  title="Cancel order — items return to reorder list"
                 >
-                  {closing ? <Loader2 size={13} className="spin" /> : <X size={13} />}
+                  <X size={13} /> Cancel
                 </button>
               </>
             )}
-            <button
-              type="button"
-              className="button button-ghost button-sm"
-              onClick={() => setExpanded((v) => !v)}
-              title={expanded ? "Collapse" : "Expand"}
-            >
-              {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
+            {/* No expand for fresh-open orders — there's nothing in the detail
+                that isn't already in the header. Keep expand for partial (to
+                show progress) and closed (full history). */}
+            {order.status !== "open" && (
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => setExpanded((v) => !v)}
+                title={expanded ? "Collapse" : "Expand"}
+              >
+                {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+            )}
           </div>
         </div>
 
         {order.notes && <p className="order-card-notes">{order.notes}</p>}
         <p className="order-card-by">Ordered by {order.createdByName}</p>
+
+        {confirmingCancel && (
+          <div className="order-cancel-confirm">
+            <div className="order-cancel-confirm-header">
+              <AlertTriangle size={15} />
+              <strong>Cancel this order?</strong>
+            </div>
+            <p className="order-cancel-confirm-hint">
+              Items will return to the reorder list. Add a note below if you want to record why (optional).
+            </p>
+            <textarea
+              className="field order-cancel-note"
+              placeholder="e.g. Vendor cancelled, or 6-week lead time — reordering elsewhere"
+              value={cancelNote}
+              onChange={(e) => setCancelNote(e.target.value)}
+              rows={2}
+              disabled={closing}
+              autoFocus
+            />
+            <div className="order-cancel-actions">
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={() => {
+                  setConfirmingCancel(false);
+                  setCancelNote("");
+                }}
+                disabled={closing}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={handleConfirmCancel}
+                disabled={closing}
+              >
+                {closing ? <Loader2 size={13} className="spin" /> : <X size={13} />}
+                Cancel order
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {expanded && (
@@ -619,70 +513,277 @@ function OrderCard({
                 <th>Item</th>
                 <th>Ordered</th>
                 <th>Received</th>
+                <th>Expiration</th>
                 <th>Unit Cost</th>
                 <th>Line Total</th>
               </tr>
             </thead>
             <tbody>
-              {order.items.map((item) => (
-                <tr key={item.itemId} className={item.qtyReceived >= item.qtyOrdered ? "order-detail-row--done" : ""}>
-                  <td>
-                    {item.itemName}
-                    {item.itemId.startsWith("freeform-") && (
-                      <span className="order-freeform-badge">new</span>
-                    )}
-                  </td>
-                  <td>{item.qtyOrdered}</td>
-                  <td>{item.qtyReceived}</td>
-                  <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost) : "—"}</td>
-                  <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost * item.qtyOrdered) : "—"}</td>
-                </tr>
-              ))}
+              {order.items.map((item) => {
+                // Aggregate unique expiration dates from all receive events for this item
+                const expirations = Array.from(
+                  new Set(
+                    order.receives.flatMap((ev) =>
+                      ev.lines
+                        .filter((l) => l.itemId === item.itemId && l.expirationDate)
+                        .map((l) => l.expirationDate as string),
+                    ),
+                  ),
+                ).sort();
+                return (
+                  <tr key={item.itemId} className={item.qtyReceived >= item.qtyOrdered ? "order-detail-row--done" : ""}>
+                    <td>
+                      {item.itemName}
+                      {item.itemId.startsWith("freeform-") && (
+                        <span className="order-freeform-badge">new</span>
+                      )}
+                    </td>
+                    <td>{item.qtyOrdered}</td>
+                    <td>{item.qtyReceived}</td>
+                    <td>
+                      {expirations.length === 0
+                        ? "—"
+                        : expirations
+                            .map((d) =>
+                              new Date(d).toLocaleDateString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                                year: "numeric",
+                              }),
+                            )
+                            .join(", ")}
+                    </td>
+                    <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost) : "—"}</td>
+                    <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost * item.qtyOrdered) : "—"}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
 
-          {order.receives.length > 0 && (
-            <div className="order-receive-history">
-              <h4 className="order-receive-history-title">Receive History</h4>
+          <div className="order-history">
+            <h4 className="order-history-title">Order History</h4>
+            <ul className="order-history-list">
+              <li className="order-history-row">
+                <span className="order-history-time">{formatDateTime(order.createdAt)}</span>
+                <span className="order-history-text">Ordered by {order.createdByName}</span>
+              </li>
               {order.receives.map((ev, i) => (
-                <div key={i} className="order-receive-history-event">
-                  <span className="order-receive-history-meta">
-                    {formatDate(ev.receivedAt)} by {ev.receivedByName}
-                    {ev.closedOrder && <span className="order-receive-history-closed"> · closed order</span>}
+                <li key={i} className="order-history-row">
+                  <span className="order-history-time">{formatDateTime(ev.receivedAt)}</span>
+                  <span className="order-history-text">
+                    Received by {ev.receivedByName}
+                    {ev.closedOrder && <span className="order-history-closed"> · closed order</span>}
                   </span>
-                  <div className="order-receive-history-lines">
-                    {ev.lines.map((l, j) => {
-                      const item = order.items.find((oi) => oi.itemId === l.itemId);
-                      return (
-                        <span key={j} className="audit-change-chip">
-                          {item?.itemName ?? l.itemId}: +{l.qtyThisReceive}
-                          {l.expirationDate && ` · Exp: ${new Date(l.expirationDate).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`}
-                          {l.unitCost !== undefined && ` · ${formatCurrency(l.unitCost)}/ea`}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
+                </li>
               ))}
-            </div>
-          )}
+              {/* Show an explicit close/cancel event only when the close
+                  happened via the Cancel flow (not during a receive) — i.e.
+                  no receive event already carries the closedOrder flag. */}
+              {order.status === "closed"
+                && order.closedAt
+                && !order.receives.some((r) => r.closedOrder) && (
+                <li className="order-history-row">
+                  <span className="order-history-time">{formatDateTime(order.closedAt)}</span>
+                  <span className="order-history-text">
+                    {isCancelled ? "Cancelled" : "Closed"} by {order.closedByName ?? "—"}
+                  </span>
+                </li>
+              )}
+            </ul>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
+// ── Orders Help ────────────────────────────────────────────────────────────
+
+function OrdersHelp() {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  return (
+    <>
+      <button
+        type="button"
+        className="orders-help-btn"
+        onClick={() => setOpen(true)}
+        aria-label="How Orders work"
+        title="How Orders work"
+      >
+        <HelpCircle size={16} />
+      </button>
+      {open && (
+        <div
+          className="orders-help-overlay"
+          onClick={() => setOpen(false)}
+          role="presentation"
+        >
+          <div
+            className="orders-help-modal app-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="orders-help-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="orders-help-modal-header">
+              <h3 id="orders-help-title">How Orders work</h3>
+              <button
+                type="button"
+                className="button button-ghost button-sm"
+                onClick={() => setOpen(false)}
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="orders-help-modal-body">
+              <p className="orders-help-lead">
+                The Orders page helps you keep stock topped up — from spotting
+                low items, to placing orders, to logging what arrived.
+              </p>
+
+              <p className="orders-help-flow">
+                <strong>Reorder</strong>
+                <span aria-hidden="true"> → </span>
+                <strong>Pending Receipt</strong>
+                <span aria-hidden="true"> → </span>
+                <strong>Closed Orders</strong>
+              </p>
+
+              <h4>Reorder</h4>
+              <p>
+                Shows items that are running low (below the minimum you set for
+                that item). Items are grouped by vendor.
+              </p>
+              <ul>
+                <li>
+                  <strong>Check the items</strong> you want to order. Adjust the
+                  suggested quantity or fill in a price if you know it.
+                </li>
+                <li>
+                  <strong>Add Item Not Listed</strong> — type in something that
+                  isn't in your inventory yet (a new product, or trying a new
+                  vendor).
+                </li>
+                <li>
+                  <strong>Mark as Ordered</strong> — creates an order in Pending
+                  Receipt. Those items leave the reorder list until you receive
+                  or cancel.
+                </li>
+              </ul>
+
+              <h4>Pending Receipt</h4>
+              <p>Orders you've placed but haven't received yet.</p>
+              <ul>
+                <li>
+                  <strong>Receive</strong> — log what actually arrived. You can
+                  enter a smaller quantity if the shipment was short, add the
+                  expiration date, and update the price. Your inventory
+                  quantities go up automatically. When you've received
+                  everything, the order closes itself.
+                </li>
+                <li>
+                  <strong>Partial shipments</strong> — if only some of the items
+                  arrived, enter the smaller amounts you actually received and
+                  confirm. You'll be asked whether to close the order with
+                  those amounts, or leave it open so you can receive the rest
+                  later. If you leave it open, the order stays in Pending
+                  Receipt with a <strong>Partially Received</strong> badge, and
+                  you can click Receive again when the rest shows up. The
+                  inventory numbers update each time you receive.
+                </li>
+                <li>
+                  <strong>Cancel</strong> — close the order without receiving
+                  anything. The items go back to the reorder list so you can
+                  try again (maybe with a different vendor). Jot a quick note
+                  explaining why if you want (for example, "vendor cancelled"
+                  or "6-week lead time"). Brand-new items you added get saved
+                  to your inventory so nothing is lost.
+                </li>
+              </ul>
+
+              <h4>Closed Orders</h4>
+              <p>
+                Finished orders. You can search by vendor, item, or note, and
+                filter by date range.
+              </p>
+              <ul>
+                <li>
+                  <strong>COMPLETED</strong> — the order wrapped up normally
+                  (everything arrived, or you closed it after a partial
+                  shipment).
+                </li>
+                <li>
+                  <strong>CANCELLED</strong> — the order was closed before
+                  anything arrived.
+                </li>
+                <li>
+                  Click any order to see its items and a timeline of when
+                  things happened (ordered, received, closed).
+                </li>
+              </ul>
+
+              <h4>Tips</h4>
+              <ul>
+                <li>
+                  The "low stock" number is set on each item in the Inventory
+                  tab — change it there to tune when an item shows up here.
+                </li>
+                <li>
+                  Expired stock doesn't count toward what you have on hand, so
+                  an item can show up for reorder even if there are expired
+                  units sitting on the shelf.
+                </li>
+                <li>
+                  Adding a vendor link to an item lets WickOps group it under
+                  the right vendor card next time you reorder.
+                </li>
+                <li>
+                  You can paste a price like $4,239.00 in the unit cost field —
+                  it'll clean itself up once you click somewhere else.
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Main Orders Page ───────────────────────────────────────────────────────
 
-export function OrdersPage({ selectedLocation, onNavigateToInventoryItem }: OrdersPageProps) {
-  const [tab, setTab] = useState<OrdersTab>("main");
+export function OrdersPage({ selectedLocation }: OrdersPageProps) {
   const [orders, setOrders] = useState<RestockOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [hasExpirationColumn, setHasExpirationColumn] = useState(false);
+  const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
   const inventoryRowsRef = useRef<InventoryRow[]>([]);
+
+  // Known locations = registered ones (even if unused) + any location that shows up
+  // on existing rows. Used by the "Add Item Not Listed" form so users can assign
+  // a location to new items.
+  const locationValues = useMemo(() => {
+    const fromRows = inventoryRows
+      .map((row) => String(row.values.location ?? "").trim())
+      .filter((v) => v.length > 0);
+    return Array.from(new Set([...registeredLocations, ...fromRows])).sort((a, b) =>
+      a.localeCompare(b),
+    );
+  }, [inventoryRows, registeredLocations]);
 
   const loadOrders = useCallback(async () => {
     setLoading(true);
@@ -698,76 +799,18 @@ export function OrdersPage({ selectedLocation, onNavigateToInventoryItem }: Orde
   }, []);
 
   const loadBootstrap = useCallback(() => {
-    loadInventoryBootstrap().then(({ columns, items }) => {
+    loadInventoryBootstrap().then(({ columns, items, registeredLocations: locs }) => {
       setInventoryRows(items);
       inventoryRowsRef.current = items;
       setHasExpirationColumn(columns.some((c) => c.key === "expirationDate" && c.isVisible));
+      setRegisteredLocations(Array.isArray(locs) ? locs : []);
     }).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (tab === "main") {
-      loadBootstrap();
-      loadOrders();
-    }
+    loadBootstrap();
+    loadOrders();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
-
-  // BroadcastChannel: listen for "mark-ordered" from the vendor checklist popup
-  useEffect(() => {
-    const channel = new BroadcastChannel("wickops-reorder");
-    channel.onmessage = async (event) => {
-      if (event.data?.type === "mark-ordered" && Array.isArray(event.data.rowIds)) {
-        const orderedIds = new Set<string>(event.data.rowIds);
-        const now = new Date().toISOString();
-        const current = inventoryRowsRef.current;
-        const toSave = current
-          .filter((r) => orderedIds.has(r.id))
-          .map((r) => ({
-            ...r,
-            position: current.indexOf(r),
-            values: { ...r.values, orderedAt: now },
-          }));
-        const updated = current.map((r) =>
-          orderedIds.has(r.id) ? { ...r, values: { ...r.values, orderedAt: now } } : r,
-        );
-        setInventoryRows(updated);
-        inventoryRowsRef.current = updated;
-        if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
-
-        const orderItems: OrderItem[] = Array.isArray(event.data.orderItems) ? event.data.orderItems : [];
-        const domain: string = event.data.domain ?? "";
-        if (orderItems.length > 0) {
-          await createRestockOrder({
-            vendor: domain || undefined,
-            items: orderItems.map((item) => ({
-              ...(item.rowId ? { itemId: item.rowId } : {}),
-              itemName: item.name,
-              qtyOrdered: item.qty,
-              ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
-            })),
-          }).catch(() => {});
-          loadOrders();
-        }
-      }
-    };
-    return () => channel.close();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Reorder callbacks (for ReorderTab orderedAt tracking)
-  const handleClearOrderedAt = useCallback(async (rowIds: string[]) => {
-    const idSet = new Set(rowIds);
-    const current = inventoryRowsRef.current;
-    const toSave = current
-      .filter((r) => idSet.has(r.id))
-      .map((r) => ({ ...r, position: current.indexOf(r), values: { ...r.values, orderedAt: null } }));
-    const updated = current.map((r) =>
-      idSet.has(r.id) ? { ...r, values: { ...r.values, orderedAt: null } } : r,
-    );
-    setInventoryRows(updated);
-    inventoryRowsRef.current = updated;
-    if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
   }, []);
 
   const handleMarkOrdered = useCallback(async (rowIds: string[], vendor: string, orderItems: OrderItem[]) => {
@@ -792,6 +835,8 @@ export function OrdersPage({ selectedLocation, onNavigateToInventoryItem }: Orde
           itemName: item.name,
           qtyOrdered: item.qty,
           ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
+          ...(item.reorderLink ? { reorderLink: item.reorderLink } : {}),
+          ...(item.location ? { location: item.location } : {}),
         })),
       }).catch(() => {});
       loadOrders();
@@ -799,51 +844,137 @@ export function OrdersPage({ selectedLocation, onNavigateToInventoryItem }: Orde
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleSaveReorderLink = useCallback(async (rowIds: string[], link: string) => {
+    const idSet = new Set(rowIds);
+    const current = inventoryRowsRef.current;
+    const toSave = current
+      .filter((r) => idSet.has(r.id))
+      .map((r) => ({ ...r, position: current.indexOf(r), values: { ...r.values, reorderLink: link } }));
+    const updated = current.map((r) =>
+      idSet.has(r.id) ? { ...r, values: { ...r.values, reorderLink: link } } : r,
+    );
+    setInventoryRows(updated);
+    inventoryRowsRef.current = updated;
+    if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
+  }, []);
+
+  // Called after an OrderCard receives or closes an order. Clears orderedAt for the
+  // order's items so they reappear in Needs Reorder if still low, then reloads
+  // orders + inventory so the page reflects new quantities.
+  const handleOrderChanged = useCallback(async (closedOrder?: RestockOrder) => {
+    if (closedOrder) {
+      // Cancel-before-receive: freeform items (itemId starts with "freeform-")
+      // have no inventory row yet — they'd vanish when the order is cancelled.
+      // Materialize them as rows with quantity=0 and minQuantity=qtyOrdered so
+      // they surface in Needs Reorder and the user can retry with another vendor.
+      // We only do this when nothing has been received yet — partial receives
+      // with addToInventory already converted those items to real inventory rows.
+      const noReceives = closedOrder.items.every((oi) => oi.qtyReceived === 0);
+      if (noReceives) {
+        const orphanedFreeform = closedOrder.items.filter((oi) =>
+          oi.itemId.startsWith("freeform-"),
+        );
+        if (orphanedFreeform.length > 0) {
+          const current = inventoryRowsRef.current;
+          const now = new Date().toISOString();
+          const newRows: InventoryRow[] = orphanedFreeform.map((oi, idx) => ({
+            id: crypto.randomUUID(),
+            position: current.length + idx,
+            values: {
+              itemName: oi.itemName,
+              quantity: 0,
+              minQuantity: oi.qtyOrdered,
+              // Seed location from the order item (captured at Add-Item time).
+              // Fall back to the current location context, then "" (Unassigned).
+              location: oi.location ?? selectedLocation ?? "",
+              ...(oi.reorderLink ? { reorderLink: oi.reorderLink } : {}),
+            },
+            createdAt: now,
+          }));
+          const updated = [...current, ...newRows];
+          setInventoryRows(updated);
+          inventoryRowsRef.current = updated;
+          try {
+            await saveInventoryItems(newRows, []);
+          } catch (err) {
+            // Surface the error — silently swallowing was hiding save failures
+            // which caused materialized rows to vanish on the next bootstrap.
+            console.error("Failed to materialize freeform items from cancelled order", err);
+            setError(
+              err instanceof Error
+                ? `Could not save items back to inventory: ${err.message}`
+                : "Could not save items back to inventory.",
+            );
+          }
+        }
+      }
+
+      // Clear orderedAt for existing inventory items so they rejoin Needs Reorder
+      // if still low.
+      const itemIds = new Set(closedOrder.items.map((oi) => oi.itemId));
+      const current = inventoryRowsRef.current;
+      const toSave = current
+        .filter((r) => itemIds.has(r.id) && r.values.orderedAt)
+        .map((r) => ({
+          ...r,
+          position: current.indexOf(r),
+          values: { ...r.values, orderedAt: null },
+        }));
+      if (toSave.length > 0) {
+        const updated = current.map((r) =>
+          itemIds.has(r.id) ? { ...r, values: { ...r.values, orderedAt: null } } : r,
+        );
+        setInventoryRows(updated);
+        inventoryRowsRef.current = updated;
+        await saveInventoryItems(toSave, []).catch(() => {});
+      }
+    }
+    await loadOrders();
+    loadBootstrap();
+  }, [loadOrders, loadBootstrap]);
 
   const openOrders = orders.filter((o) => o.status !== "closed");
   const closedOrders = orders.filter((o) => o.status === "closed");
 
+  // Closed-orders filter state: free-text search (vendor / notes / item names)
+  // plus optional date range on createdAt.
+  const [closedSearch, setClosedSearch] = useState("");
+  const [closedFromDate, setClosedFromDate] = useState("");
+  const [closedToDate, setClosedToDate] = useState("");
+
+  const filteredClosedOrders = useMemo(() => {
+    const q = closedSearch.trim().toLowerCase();
+    const fromMs = closedFromDate ? new Date(closedFromDate).getTime() : null;
+    // Inclusive "to" — bump to end of day so 2026-04-16 includes that whole day.
+    const toMs = closedToDate
+      ? new Date(closedToDate).getTime() + 24 * 60 * 60 * 1000 - 1
+      : null;
+    return closedOrders.filter((o) => {
+      const created = new Date(o.createdAt).getTime();
+      if (fromMs !== null && created < fromMs) return false;
+      if (toMs !== null && created > toMs) return false;
+      if (!q) return true;
+      if ((o.vendor ?? "").toLowerCase().includes(q)) return true;
+      if ((o.notes ?? "").toLowerCase().includes(q)) return true;
+      return o.items.some((i) => i.itemName.toLowerCase().includes(q));
+    });
+  }, [closedOrders, closedSearch, closedFromDate, closedToDate]);
+
+  const closedFilterActive = Boolean(
+    closedSearch.trim() || closedFromDate || closedToDate,
+  );
+
   return (
     <section className="app-page orders-page">
-      <div className="orders-tabs">
-        <button
-          type="button"
-          className={`orders-tab${tab === "main" ? " active" : ""}`}
-          onClick={() => setTab("main")}
-        >
-          <RotateCcw size={15} /> Orders
-        </button>
-        <button
-          type="button"
-          className={`orders-tab${tab === "quickadd" ? " active" : ""}`}
-          onClick={() => setTab("quickadd")}
-        >
-          <Plus size={15} /> Quick Add
-        </button>
+      <div className="orders-page-header">
+        <h2 className="orders-page-title">
+          <RotateCcw size={16} /> Orders
+        </h2>
+        <OrdersHelp />
       </div>
 
-      {tab === "main" && (
-        <div className="orders-content">
-          <div className="orders-toolbar">
-            <button
-              type="button"
-              className="button button-primary button-sm"
-              onClick={() => setShowCreate(true)}
-              disabled={showCreate}
-            >
-              <PackagePlus size={14} /> New Order
-            </button>
-          </div>
-
-          {showCreate && (
-            <CreateOrderForm
-              rows={inventoryRows}
-              onCreated={() => { setShowCreate(false); loadOrders(); }}
-              onCancel={() => setShowCreate(false)}
-            />
-          )}
-
-          {error && <p className="orders-error">{error}</p>}
+      <div className="orders-content">
+        {error && <p className="orders-error">{error}</p>}
 
           {loading && (
             <div className="orders-loading">
@@ -853,56 +984,95 @@ export function OrdersPage({ selectedLocation, onNavigateToInventoryItem }: Orde
 
           {!loading && openOrders.length > 0 && (
             <div className="orders-section">
+              <div className="orders-section-header">
+                <PackageCheck size={14} />
+                <span>Pending Receipt</span>
+              </div>
               {openOrders.map((order) => (
                 <OrderCard
                   key={order.id}
                   order={order}
                   hasExpirationColumn={hasExpirationColumn}
-                  onRefresh={loadOrders}
+                  onRefresh={handleOrderChanged}
                 />
               ))}
             </div>
           )}
 
-          <div className="orders-needs-reorder">
-            <div className="orders-needs-reorder-header">
-              <AlertTriangle size={15} />
-              <span>Needs Reorder</span>
-            </div>
-            <ReorderTab
-              rows={inventoryRows}
-              onClearOrderedAt={handleClearOrderedAt}
-              onMarkOrdered={handleMarkOrdered}
-              onEditReorderLink={onNavigateToInventoryItem ? (rowId) => {
-                const row = inventoryRowsRef.current.find((r) => r.id === rowId);
-                const name = String(row?.values.itemName ?? "").trim();
-                onNavigateToInventoryItem(rowId, name);
-              } : undefined}
-            />
-          </div>
+          <ReorderTab
+            rows={inventoryRows}
+            availableLocations={locationValues}
+            selectedLocation={selectedLocation ?? null}
+            onMarkOrdered={handleMarkOrdered}
+            onSaveReorderLink={handleSaveReorderLink}
+          />
 
           {closedOrders.length > 0 && (
             <div className="orders-section">
               <div className="orders-section-header">
                 <CheckCircle size={14} />
                 <span>Closed Orders</span>
+                <span className="orders-section-count">
+                  {closedFilterActive
+                    ? `${filteredClosedOrders.length} of ${closedOrders.length}`
+                    : closedOrders.length}
+                </span>
               </div>
-              {closedOrders.map((order) => (
-                <OrderCard
-                  key={order.id}
-                  order={order}
-                  hasExpirationColumn={hasExpirationColumn}
-                  onRefresh={loadOrders}
+              <div className="closed-orders-filter">
+                <input
+                  className="field"
+                  type="search"
+                  placeholder="Search vendor, item, or note…"
+                  value={closedSearch}
+                  onChange={(e) => setClosedSearch(e.target.value)}
                 />
-              ))}
+                <label className="closed-orders-filter-date">
+                  <span>From</span>
+                  <input
+                    className="field"
+                    type="date"
+                    value={closedFromDate}
+                    onChange={(e) => setClosedFromDate(e.target.value)}
+                  />
+                </label>
+                <label className="closed-orders-filter-date">
+                  <span>To</span>
+                  <input
+                    className="field"
+                    type="date"
+                    value={closedToDate}
+                    onChange={(e) => setClosedToDate(e.target.value)}
+                  />
+                </label>
+                {closedFilterActive && (
+                  <button
+                    type="button"
+                    className="button button-ghost button-sm"
+                    onClick={() => {
+                      setClosedSearch("");
+                      setClosedFromDate("");
+                      setClosedToDate("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {filteredClosedOrders.length === 0 ? (
+                <p className="closed-orders-empty">No closed orders match your filter.</p>
+              ) : (
+                filteredClosedOrders.map((order) => (
+                  <OrderCard
+                    key={order.id}
+                    order={order}
+                    hasExpirationColumn={hasExpirationColumn}
+                    onRefresh={handleOrderChanged}
+                  />
+                ))
+              )}
             </div>
           )}
-        </div>
-      )}
-
-      {tab === "quickadd" && (
-        <QuickAddPage selectedLocation={selectedLocation} />
-      )}
+      </div>
     </section>
   );
 }

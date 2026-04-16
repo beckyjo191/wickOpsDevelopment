@@ -14,7 +14,7 @@ interface UseInventoryFiltersParams {
   columns: InventoryColumn[];
   registeredLocations: string[];
   selectedLocation: string | null;
-  initialFilter?: InventoryFilter;
+  initialFilter?: ActiveTab;
   initialSearch?: string;
   userColumnOverrides: ColumnVisibilityOverrides;
   /** Whether inventory is still loading (used to guard tab resets) */
@@ -122,11 +122,16 @@ export function useInventoryFilters({
   sortEpoch,
 }: UseInventoryFiltersParams) {
   // ── Tab state ──
+  // "retired" and "pendingSubmissions" were previously stored here.
+  // Retired items are now only visible via the Activity page.
+  // Pending submissions moved to the Activity page too.
+  const VALID_TABS: ActiveTab[] = ["all", "expired", "exp30", "exp60", "lowStock", "quickAdd", "logUsage"];
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => {
     if (initialFilter) return initialFilter;
     try {
       const saved = localStorage.getItem("wickops.inventory.activeTab");
-      if (saved && ["all", "expired", "exp30", "exp60", "lowStock", "retired", "pendingSubmissions"].includes(saved)) {
+      if (saved === "retired" || saved === "pendingSubmissions") return "all";
+      if (saved && (VALID_TABS as string[]).includes(saved)) {
         return saved as ActiveTab;
       }
     } catch {}
@@ -143,7 +148,8 @@ export function useInventoryFilters({
     });
   };
 
-  const activeFilter: InventoryFilter = activeTab === "pendingSubmissions" ? "all" : activeTab;
+  const activeFilter: InventoryFilter =
+    activeTab === "quickAdd" || activeTab === "logUsage" ? "all" : activeTab;
   const setActiveFilter = (f: InventoryFilter) => setActiveTabRaw(f);
 
   // When navigating from dashboard with a filter, sync the tab
@@ -330,10 +336,8 @@ export function useInventoryFilters({
         const rowLocation = String(row.values.location ?? "").trim();
         const rowCategory = String(row.values.category ?? "").trim();
 
-        const isRetired = Boolean(row.values.retiredAt);
-        if (activeFilter === "retired") return isRetired;
-        // Exclude retired rows from all other tabs
-        if (isRetired) return false;
+        // Retired rows are never shown in the Inventory list — they're tracked in Activity.
+        if (row.values.retiredAt) return false;
 
         let passesTab = true;
         if (activeFilter === "lowStock") {
@@ -469,7 +473,7 @@ export function useInventoryFilters({
   useEffect(() => {
     // Don't reset tabs while inventory is still loading -- columns aren't available yet
     if (loading) return;
-    if (!hasExpirationColumn && (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60" || activeFilter === "retired")) {
+    if (!hasExpirationColumn && (activeFilter === "expired" || activeFilter === "exp30" || activeFilter === "exp60")) {
       setActiveFilter("all");
       return;
     }

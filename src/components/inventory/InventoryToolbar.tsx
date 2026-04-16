@@ -17,7 +17,8 @@ export type InventoryToolbarProps = {
 };
 
 /**
- * Header actions toolbar: Move to, Delete, Search.
+ * Search + bulk-action (Move/Delete) toolbar.
+ * Log Usage / Fast Restock / + Add Row live on their own action strip in InventoryPage.
  */
 export function InventoryToolbar({
   canEdit,

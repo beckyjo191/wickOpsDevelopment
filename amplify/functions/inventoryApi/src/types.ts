@@ -78,7 +78,9 @@ export type AuditAction =
   | "TEMPLATE_APPLY"
   | "RESTOCK_ORDER_CREATE"
   | "RESTOCK_RECEIVED"
-  | "RESTOCK_ORDER_CLOSED";
+  | "RESTOCK_ORDER_CLOSED"
+  /** Fast Restock: quantity added directly to an inventory row (not via an order). */
+  | "RESTOCK_ADDED";
 
 export type PendingEntry = {
   itemId: string;
@@ -122,6 +124,14 @@ export type RestockOrderItem = {
   qtyOrdered: number;
   qtyReceived: number;
   unitCost?: number;
+  // For freeform items: vendor URL captured at order time so that when the
+  // item is later added to inventory on receive, the link is persisted on the
+  // new inventory row.
+  reorderLink?: string;
+  // For freeform items: location the item was ordered for. Persisted to the
+  // new inventory row on receive (addToInventory) or on cancel materialization
+  // so location-filtered views can find it.
+  location?: string;
 };
 
 export type RestockReceiveLine = {

@@ -6,8 +6,6 @@ import { normalizeHeaderKey } from "./inventoryUtils";
 import {
   addInventoryLocation,
   generateAndDownloadInventoryTemplate,
-  approveUsageSubmission,
-  deleteUsageSubmission,
 } from "../../lib/inventoryApi";
 
 // Hooks
@@ -15,13 +13,13 @@ import { useMobileDetect } from "./hooks/useMobileDetect";
 import { useColumnResize } from "./hooks/useColumnResize";
 import { useInventoryFilters } from "./hooks/useInventoryFilters";
 import { useInventoryData } from "./hooks/useInventoryData";
-import { usePendingSubmissions } from "./hooks/usePendingSubmissions";
 
 // Components
 import { AddLocationForm } from "./AddLocationForm";
 import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryFilterBar } from "./InventoryFilterBar";
-import { PendingSubmissionsTab } from "./PendingSubmissionsTab";
+import { QuickAddPage } from "../QuickAddPage";
+import { InventoryUsagePage } from "../InventoryUsagePage";
 import { InventoryMobileCards } from "./InventoryMobileCards";
 import { InventoryDesktopTable } from "./InventoryDesktopTable";
 import { ImportDialogs } from "./ImportDialogs";
@@ -31,7 +29,7 @@ import { ROWS_PER_PAGE } from "./inventoryTypes";
 
 export function InventoryPage({
   canEditInventory,
-  canReviewSubmissions,
+  canLogUsage,
   initialFilter,
   initialSearch,
   initialEditCell,
@@ -131,8 +129,9 @@ export function InventoryPage({
   // ── Column resize hook ────────────────────────────────────────────────────
   const resize = useColumnResize(data.organizationId);
 
-  // ── Pending submissions hook ──────────────────────────────────────────────
-  const pending = usePendingSubmissions(filters.activeTab, canReviewSubmissions);
+  // ── Template-download dialog state (local — simple modal state) ──────────
+  const [showTemplateDialog, setShowTemplateDialog] = useState(false);
+  const [templateSelectedIds, setTemplateSelectedIds] = useState<Set<string> | null>(null);
 
   // ── Location add handler ──────────────────────────────────────────────────
   const handleAddLocation = () => {
@@ -164,22 +163,20 @@ export function InventoryPage({
 
   // ── Template download handler ─────────────────────────────────────────────
   const handleDownloadTemplate = () => {
-    pending.setShowTemplateDialog(true);
-    pending.setTemplateSelectedIds(
-      new Set(data.columns.map((c) => c.id)),
-    );
+    setShowTemplateDialog(true);
+    setTemplateSelectedIds(new Set(data.columns.map((c) => c.id)));
   };
 
   const handleConfirmTemplate = () => {
-    if (!pending.templateSelectedIds) return;
-    const selected = data.columns.filter((c) => pending.templateSelectedIds!.has(c.id));
+    if (!templateSelectedIds) return;
+    const selected = data.columns.filter((c) => templateSelectedIds.has(c.id));
     void generateAndDownloadInventoryTemplate(selected);
-    pending.setShowTemplateDialog(false);
-    pending.setTemplateSelectedIds(null);
+    setShowTemplateDialog(false);
+    setTemplateSelectedIds(null);
   };
 
   const handleToggleTemplateColumn = (colId: string) => {
-    pending.setTemplateSelectedIds((prev) => {
+    setTemplateSelectedIds((prev) => {
       if (!prev) return prev;
       const next = new Set(prev);
       if (next.has(colId)) next.delete(colId);
@@ -222,6 +219,10 @@ export function InventoryPage({
     );
   }
 
+  // Inline modes (QuickAdd / LogUsage) hide the table-scoped controls
+  // like search that don't apply to the form view.
+  const isInlineMode = filters.activeTab === "quickAdd" || filters.activeTab === "logUsage";
+
   // ── Main render ───────────────────────────────────────────────────────────
   return (
     <section className="app-content">
@@ -255,21 +256,6 @@ export function InventoryPage({
         {/* ── Mobile layout ─────────────────────────────────────────── */}
         {isMobile ? (
           <>
-            <InventoryToolbar
-              canEdit={canEditInventory}
-              canEditTable={data.canEditTable}
-              selectedCount={filters.selectedRowIds.size}
-              isMobile={isMobile}
-              hasSelectedRows={filters.selectedRowIds.size > 0}
-              showLocationPills={filters.showLocationPills}
-              onMoveSelectedRows={data.onMoveSelectedRows}
-              onRequestDelete={data.onRequestDeleteSelectedRows}
-              locationOptions={filters.locationOptions}
-              effectiveLocationFilter={filters.effectiveLocationFilter}
-              rowCount={data.rows.length}
-              searchTerm={filters.searchTerm}
-              onSearchChange={filters.setSearchTerm}
-            />
             <div className="inventory-controls-row inventory-controls-row--mobile">
               {filters.showLocationPills && (
                 <details className="inventory-dropdown">
@@ -311,16 +297,53 @@ export function InventoryPage({
                   </div>
                 </details>
               )}
+              {!isInlineMode && (
+                <InventoryToolbar
+                  canEdit={canEditInventory}
+                  canEditTable={data.canEditTable}
+                  selectedCount={filters.selectedRowIds.size}
+                  isMobile={isMobile}
+                  hasSelectedRows={filters.selectedRowIds.size > 0}
+                  showLocationPills={filters.showLocationPills}
+                  onMoveSelectedRows={data.onMoveSelectedRows}
+                  onRequestDelete={data.onRequestDeleteSelectedRows}
+                  locationOptions={filters.locationOptions}
+                  effectiveLocationFilter={filters.effectiveLocationFilter}
+                  rowCount={data.rows.length}
+                  searchTerm={filters.searchTerm}
+                  onSearchChange={filters.setSearchTerm}
+                />
+              )}
+            </div>
+            <div className="inventory-controls-row inventory-controls-row--mobile inventory-controls-row--mobile-actions">
               <InventoryFilterBar
                 activeTab={filters.activeTab}
                 onTabChange={filters.setActiveTabRaw}
                 tabCounts={filters.tabCounts}
                 hasExpirationColumn={filters.hasExpirationColumn}
                 hasMinQuantityColumn={filters.hasMinQuantityColumn}
-                canReviewSubmissions={canReviewSubmissions}
-                pendingCount={pending.pendingSubmissions.length}
                 isMobile={isMobile}
               />
+              <div className="inventory-actions-group">
+                {canLogUsage ? (
+                  <button
+                    type="button"
+                    className={`inventory-toolbar-action${filters.activeTab === "logUsage" ? " active" : ""}`}
+                    onClick={() => filters.setActiveTabRaw("logUsage")}
+                  >
+                    Log Usage
+                  </button>
+                ) : null}
+                {canEditInventory ? (
+                  <button
+                    type="button"
+                    className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
+                    onClick={() => filters.setActiveTabRaw("quickAdd")}
+                  >
+                    Fast Restock
+                  </button>
+                ) : null}
+              </div>
             </div>
             {data.addingLocation && (
               <AddLocationForm
@@ -342,8 +365,9 @@ export function InventoryPage({
           </>
         ) : (
           <>
-            {/* ── Desktop layout: single controls row ──────────────────── */}
-            <div className="inventory-controls-row">
+            {/* ── Desktop layout: two-row controls ─────────────────────── */}
+            {/* Row 1: location (scope) on left, search on right */}
+            <div className="inventory-controls-row inventory-controls-row--top">
               {filters.showLocationPills && (
                 <details className="inventory-dropdown">
                   <summary className="inventory-dropdown-trigger">
@@ -385,75 +409,98 @@ export function InventoryPage({
                 </details>
               )}
 
+              {!isInlineMode && (
+                <InventoryToolbar
+                  canEdit={canEditInventory}
+                  canEditTable={data.canEditTable}
+                  selectedCount={filters.selectedRowIds.size}
+                  isMobile={false}
+                  hasSelectedRows={filters.selectedRowIds.size > 0}
+                  showLocationPills={filters.showLocationPills}
+                  onMoveSelectedRows={data.onMoveSelectedRows}
+                  onRequestDelete={data.onRequestDeleteSelectedRows}
+                  locationOptions={filters.locationOptions}
+                  effectiveLocationFilter={filters.effectiveLocationFilter}
+                  rowCount={data.rows.length}
+                  searchTerm={filters.searchTerm}
+                  onSearchChange={filters.setSearchTerm}
+                />
+              )}
+            </div>
+
+            {/* Row 2: filter chips on left, action buttons on right */}
+            <div className="inventory-controls-row inventory-controls-row--bottom">
               <InventoryFilterBar
                 activeTab={filters.activeTab}
                 onTabChange={filters.setActiveTabRaw}
                 tabCounts={filters.tabCounts}
                 hasExpirationColumn={filters.hasExpirationColumn}
                 hasMinQuantityColumn={filters.hasMinQuantityColumn}
-                canReviewSubmissions={canReviewSubmissions}
-                pendingCount={pending.pendingSubmissions.length}
                 isMobile={false}
               />
 
-              {canEditInventory && data.canEditTable && (
-                <div className="inventory-add-row-bar">
+              <div className="inventory-actions-group">
+                {canLogUsage ? (
                   <button
                     type="button"
-                    className="inventory-add-row-btn"
-                    onClick={() => data.onAddRow("top")}
+                    className={`inventory-toolbar-action${filters.activeTab === "logUsage" ? " active" : ""}`}
+                    onClick={() => filters.setActiveTabRaw("logUsage")}
                   >
-                    + Add Row
+                    Log Usage
                   </button>
-                  {filters.selectedRowIds.size > 0 && (
-                    <details className="inventory-add-row-menu">
-                      <summary className="inventory-add-row-chevron" aria-label="Add row options">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                      </summary>
-                      <div className="inventory-add-row-panel">
-                        <button
-                          type="button"
-                          className="inventory-add-row-option"
-                          onClick={(e) => {
-                            data.onAddRow("above", e);
-                            e.currentTarget.closest("details")?.removeAttribute("open");
-                          }}
-                        >
-                          Add Above Selected
-                        </button>
-                        <button
-                          type="button"
-                          className="inventory-add-row-option"
-                          onClick={(e) => {
-                            data.onAddRow("below", e);
-                            e.currentTarget.closest("details")?.removeAttribute("open");
-                          }}
-                        >
-                          Add Below Selected
-                        </button>
-                      </div>
-                    </details>
-                  )}
-                </div>
-              )}
-
-              <InventoryToolbar
-                canEdit={canEditInventory}
-                canEditTable={data.canEditTable}
-                selectedCount={filters.selectedRowIds.size}
-                isMobile={false}
-                hasSelectedRows={filters.selectedRowIds.size > 0}
-                showLocationPills={filters.showLocationPills}
-                onMoveSelectedRows={data.onMoveSelectedRows}
-                onRequestDelete={data.onRequestDeleteSelectedRows}
-                locationOptions={filters.locationOptions}
-                effectiveLocationFilter={filters.effectiveLocationFilter}
-                rowCount={data.rows.length}
-                searchTerm={filters.searchTerm}
-                onSearchChange={filters.setSearchTerm}
-              />
+                ) : null}
+                {canEditInventory ? (
+                  <button
+                    type="button"
+                    className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
+                    onClick={() => filters.setActiveTabRaw("quickAdd")}
+                  >
+                    Fast Restock
+                  </button>
+                ) : null}
+                {canEditInventory && data.canEditTable && (
+                  <div className="inventory-add-row-bar">
+                    <button
+                      type="button"
+                      className="inventory-add-row-btn"
+                      onClick={() => data.onAddRow("top")}
+                    >
+                      + Add Row
+                    </button>
+                    {filters.selectedRowIds.size > 0 && (
+                      <details className="inventory-add-row-menu">
+                        <summary className="inventory-add-row-chevron" aria-label="Add row options">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="6 9 12 15 18 9" />
+                          </svg>
+                        </summary>
+                        <div className="inventory-add-row-panel">
+                          <button
+                            type="button"
+                            className="inventory-add-row-option"
+                            onClick={(e) => {
+                              data.onAddRow("above", e);
+                              e.currentTarget.closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            Add Above Selected
+                          </button>
+                          <button
+                            type="button"
+                            className="inventory-add-row-option"
+                            onClick={(e) => {
+                              data.onAddRow("below", e);
+                              e.currentTarget.closest("details")?.removeAttribute("open");
+                            }}
+                          >
+                            Add Below Selected
+                          </button>
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Add location form (expands below controls row when active) */}
@@ -477,49 +524,10 @@ export function InventoryPage({
           </>
         )}
 
-        {filters.activeTab === "pendingSubmissions" ? (
-          <PendingSubmissionsTab
-            submissions={pending.pendingSubmissions}
-            loading={pending.pendingLoading}
-            error={pending.pendingError}
-            mergedItems={pending.mergedPendingItems}
-            approvingAll={pending.approvingAll}
-            approveAllError={pending.approveAllError}
-            editedQtys={pending.editedQtys}
-            onEditQty={(submissionId, entryIndex, value) =>
-              pending.setEditedQtys((prev) => ({
-                ...prev,
-                [submissionId]: { ...(prev[submissionId] ?? {}), [entryIndex]: value },
-              }))
-            }
-            onApprove={async (submissionId, effectiveEntries) => {
-              await approveUsageSubmission(submissionId, effectiveEntries);
-              pending.setPendingSubmissions((prev) =>
-                prev.filter((s) => s.id !== submissionId),
-              );
-            }}
-            onApproveAll={async () => {
-              pending.setApprovingAll(true);
-              pending.setApproveAllError("");
-              try {
-                for (const sub of pending.pendingSubmissions) {
-                  await approveUsageSubmission(sub.id);
-                }
-                pending.setPendingSubmissions([]);
-              } catch (err: any) {
-                pending.setApproveAllError(err?.message ?? "Failed to approve all");
-              } finally {
-                pending.setApprovingAll(false);
-              }
-            }}
-            onDelete={async (submissionId) => {
-              await deleteUsageSubmission(submissionId);
-              pending.setPendingSubmissions((prev) =>
-                prev.filter((s) => s.id !== submissionId),
-              );
-            }}
-            buildLabel={data.buildPendingEntryLabel}
-          />
+        {filters.activeTab === "quickAdd" ? (
+          <QuickAddPage selectedLocation={selectedLocation} />
+        ) : filters.activeTab === "logUsage" ? (
+          <InventoryUsagePage selectedLocation={selectedLocation} />
         ) : (
           <>
             {filters.activeTab === "expired" && canEditInventory && filters.filteredRows.length > 0 && (
@@ -632,9 +640,9 @@ export function InventoryPage({
         <ImportDialogs
           csvImportDialog={data.csvImportDialog}
           pasteImportDialog={data.pasteImportDialog}
-          showTemplateDialog={pending.showTemplateDialog}
+          showTemplateDialog={showTemplateDialog}
           columns={data.columns}
-          templateSelectedIds={pending.templateSelectedIds}
+          templateSelectedIds={templateSelectedIds}
           importingCsv={data.importingCsv}
           onToggleImportHeader={data.onToggleImportHeader}
           onCancelCsvImport={data.onCancelCsvImport}
@@ -646,8 +654,8 @@ export function InventoryPage({
           onConfirmPasteImport={data.onConfirmPasteImport}
           onToggleTemplateColumn={handleToggleTemplateColumn}
           onCancelTemplate={() => {
-            pending.setShowTemplateDialog(false);
-            pending.setTemplateSelectedIds(null);
+            setShowTemplateDialog(false);
+            setTemplateSelectedIds(null);
           }}
           onConfirmTemplate={handleConfirmTemplate}
           normalizeHeaderKey={normalizeHeaderKey}

@@ -645,7 +645,22 @@ export function useInventoryData({
         return [created];
       }
       if (selectedRowId && idsToDelete.has(selectedRowId)) {
-        setSelectedRowId(nextRows[0]?.id ?? null);
+        // Pick a replacement from the sorted/filtered view (not the raw rows
+        // array) so the auto-paginate effect keeps the user on their current
+        // page instead of jumping to wherever nextRows[0] lands after sort.
+        const oldFilteredIdx = filteredRows.findIndex(
+          ({ row }) => row.id === selectedRowId,
+        );
+        if (oldFilteredIdx >= 0) {
+          const survivors = filteredRows
+            .map(({ row }) => row.id)
+            .filter((id) => !idsToDelete.has(id));
+          const replacement =
+            survivors[Math.min(oldFilteredIdx, survivors.length - 1)] ?? null;
+          setSelectedRowId(replacement);
+        } else {
+          setSelectedRowId(nextRows[0]?.id ?? null);
+        }
       }
       rowsRef.current = nextRows;
       return nextRows;

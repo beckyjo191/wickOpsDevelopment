@@ -2,36 +2,19 @@ import { useState } from "react";
 
 export type InventoryToolbarProps = {
   canEdit: boolean;
-  canEditTable: boolean;
-  selectedCount: number;
   isMobile: boolean;
-  hasSelectedRows: boolean;
-  showLocationPills: boolean;
-  onMoveSelectedRows: (location: string) => void;
-  onRequestDelete: () => void;
-  locationOptions: string[];
-  effectiveLocationFilter: string;
-  rowCount: number;
   searchTerm: string;
   onSearchChange: (term: string) => void;
 };
 
 /**
- * Search + bulk-action (Move/Delete) toolbar.
- * Log Usage / Fast Restock / + Add Row live on their own action strip in InventoryPage.
+ * Search input for the inventory list.
+ * Selection actions (Move to / Delete) and workflow buttons (Log Usage / Fast
+ * Restock / + Add Row) live on their own action row in InventoryPage.
  */
 export function InventoryToolbar({
   canEdit,
-  canEditTable,
-  selectedCount,
   isMobile,
-  hasSelectedRows,
-  showLocationPills,
-  onMoveSelectedRows,
-  onRequestDelete,
-  locationOptions,
-  effectiveLocationFilter,
-  rowCount,
   searchTerm,
   onSearchChange,
 }: InventoryToolbarProps) {
@@ -42,38 +25,6 @@ export function InventoryToolbar({
 
   return (
     <div className="inventory-header-actions">
-      {canEditTable && !isMobile && rowCount > 1 && hasSelectedRows ? (
-        <>
-          {showLocationPills && locationOptions.length > 1 ? (
-            <details className="inventory-move-menu">
-              <summary className="inventory-import-trigger">
-                Move to…
-              </summary>
-              <div className="inventory-move-panel">
-                {locationOptions
-                  .filter((loc) => loc !== effectiveLocationFilter)
-                  .map((loc) => (
-                    <button
-                      key={loc}
-                      type="button"
-                      className="inventory-move-option"
-                      onClick={(e) => {
-                        onMoveSelectedRows(loc);
-                        const details = e.currentTarget.closest("details");
-                        details?.removeAttribute("open");
-                      }}
-                    >
-                      {loc}
-                    </button>
-                  ))}
-              </div>
-            </details>
-          ) : null}
-          <button className="inventory-import-trigger inventory-delete-trigger" onClick={onRequestDelete}>
-            Delete ({selectedCount})
-          </button>
-        </>
-      ) : null}
       {isMobile && !showSearchInput ? (
         <button
           type="button"

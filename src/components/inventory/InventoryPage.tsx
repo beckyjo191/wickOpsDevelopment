@@ -297,19 +297,28 @@ export function InventoryPage({
                   </div>
                 </details>
               )}
+              {canLogUsage ? (
+                <button
+                  type="button"
+                  className={`inventory-toolbar-action${filters.activeTab === "logUsage" ? " active" : ""}`}
+                  onClick={() => filters.setActiveTabRaw("logUsage")}
+                >
+                  Log Usage
+                </button>
+              ) : null}
+              {canEditInventory ? (
+                <button
+                  type="button"
+                  className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
+                  onClick={() => filters.setActiveTabRaw("quickAdd")}
+                >
+                  Fast Restock
+                </button>
+              ) : null}
               {!isInlineMode && (
                 <InventoryToolbar
                   canEdit={canEditInventory}
-                  canEditTable={data.canEditTable}
-                  selectedCount={filters.selectedRowIds.size}
                   isMobile={isMobile}
-                  hasSelectedRows={filters.selectedRowIds.size > 0}
-                  showLocationPills={filters.showLocationPills}
-                  onMoveSelectedRows={data.onMoveSelectedRows}
-                  onRequestDelete={data.onRequestDeleteSelectedRows}
-                  locationOptions={filters.locationOptions}
-                  effectiveLocationFilter={filters.effectiveLocationFilter}
-                  rowCount={data.rows.length}
                   searchTerm={filters.searchTerm}
                   onSearchChange={filters.setSearchTerm}
                 />
@@ -324,26 +333,6 @@ export function InventoryPage({
                 hasMinQuantityColumn={filters.hasMinQuantityColumn}
                 isMobile={isMobile}
               />
-              <div className="inventory-actions-group">
-                {canLogUsage ? (
-                  <button
-                    type="button"
-                    className={`inventory-toolbar-action${filters.activeTab === "logUsage" ? " active" : ""}`}
-                    onClick={() => filters.setActiveTabRaw("logUsage")}
-                  >
-                    Log Usage
-                  </button>
-                ) : null}
-                {canEditInventory ? (
-                  <button
-                    type="button"
-                    className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
-                    onClick={() => filters.setActiveTabRaw("quickAdd")}
-                  >
-                    Fast Restock
-                  </button>
-                ) : null}
-              </div>
             </div>
             {data.addingLocation && (
               <AddLocationForm
@@ -366,7 +355,7 @@ export function InventoryPage({
         ) : (
           <>
             {/* ── Desktop layout: two-row controls ─────────────────────── */}
-            {/* Row 1: location (scope) on left, search on right */}
+            {/* Row 1: location (scope) + mode switches on left, search on right */}
             <div className="inventory-controls-row inventory-controls-row--top">
               {filters.showLocationPills && (
                 <details className="inventory-dropdown">
@@ -409,19 +398,29 @@ export function InventoryPage({
                 </details>
               )}
 
+              {canLogUsage ? (
+                <button
+                  type="button"
+                  className={`inventory-toolbar-action${filters.activeTab === "logUsage" ? " active" : ""}`}
+                  onClick={() => filters.setActiveTabRaw("logUsage")}
+                >
+                  Log Usage
+                </button>
+              ) : null}
+              {canEditInventory ? (
+                <button
+                  type="button"
+                  className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
+                  onClick={() => filters.setActiveTabRaw("quickAdd")}
+                >
+                  Fast Restock
+                </button>
+              ) : null}
+
               {!isInlineMode && (
                 <InventoryToolbar
                   canEdit={canEditInventory}
-                  canEditTable={data.canEditTable}
-                  selectedCount={filters.selectedRowIds.size}
                   isMobile={false}
-                  hasSelectedRows={filters.selectedRowIds.size > 0}
-                  showLocationPills={filters.showLocationPills}
-                  onMoveSelectedRows={data.onMoveSelectedRows}
-                  onRequestDelete={data.onRequestDeleteSelectedRows}
-                  locationOptions={filters.locationOptions}
-                  effectiveLocationFilter={filters.effectiveLocationFilter}
-                  rowCount={data.rows.length}
                   searchTerm={filters.searchTerm}
                   onSearchChange={filters.setSearchTerm}
                 />
@@ -440,23 +439,41 @@ export function InventoryPage({
               />
 
               <div className="inventory-actions-group">
-                {canLogUsage ? (
-                  <button
-                    type="button"
-                    className={`inventory-toolbar-action${filters.activeTab === "logUsage" ? " active" : ""}`}
-                    onClick={() => filters.setActiveTabRaw("logUsage")}
-                  >
-                    Log Usage
-                  </button>
-                ) : null}
-                {canEditInventory ? (
-                  <button
-                    type="button"
-                    className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
-                    onClick={() => filters.setActiveTabRaw("quickAdd")}
-                  >
-                    Fast Restock
-                  </button>
+                {data.canEditTable && !isMobile && data.rows.length > 1 && filters.selectedRowIds.size > 0 ? (
+                  <>
+                    {filters.showLocationPills && filters.locationOptions.length > 1 ? (
+                      <details className="inventory-move-menu">
+                        <summary className="inventory-toolbar-action">
+                          Move to…
+                        </summary>
+                        <div className="inventory-move-panel">
+                          {filters.locationOptions
+                            .filter((loc) => loc !== filters.effectiveLocationFilter)
+                            .map((loc) => (
+                              <button
+                                key={loc}
+                                type="button"
+                                className="inventory-move-option"
+                                onClick={(e) => {
+                                  data.onMoveSelectedRows(loc);
+                                  const details = e.currentTarget.closest("details");
+                                  details?.removeAttribute("open");
+                                }}
+                              >
+                                {loc}
+                              </button>
+                            ))}
+                        </div>
+                      </details>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="inventory-toolbar-action inventory-toolbar-action--danger"
+                      onClick={data.onRequestDeleteSelectedRows}
+                    >
+                      Delete ({filters.selectedRowIds.size})
+                    </button>
+                  </>
                 ) : null}
                 {canEditInventory && data.canEditTable && (
                   <div className="inventory-add-row-bar">
@@ -569,9 +586,6 @@ export function InventoryPage({
                 onMoveSelectedRows={data.onMoveSelectedRows}
                 onRequestDelete={data.onRequestDeleteSelectedRows}
                 onCellChange={data.onCellChange}
-                onSetAddingLocation={data.setAddingLocation}
-                onSetNewLocationName={data.setNewLocationName}
-                onSetAddLocationError={data.setAddLocationError}
                 getReadOnlyCellText={data.getReadOnlyCellText}
                 toDateInputValue={filters.toDateInputValue}
                 normalizeLinkValue={data.normalizeLinkValue}

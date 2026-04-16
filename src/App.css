@@ -6832,6 +6832,16 @@ textarea.inventory-card-input {
   color: #fff;
 }
 
+.inventory-toolbar-action--danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.inventory-toolbar-action--danger:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
 .inventory-toolbar-action.active {
   background: var(--primary);
   color: #fff;

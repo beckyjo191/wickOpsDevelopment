@@ -24,9 +24,6 @@ export type InventoryMobileCardsProps = {
   onMoveSelectedRows: (location: string) => void;
   onRequestDelete: () => void;
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
-  onSetAddingLocation: (adding: boolean) => void;
-  onSetNewLocationName: (name: string) => void;
-  onSetAddLocationError: (error: string | null) => void;
   getReadOnlyCellText: (column: InventoryColumn, value: unknown) => string;
   toDateInputValue: (raw: unknown) => string;
   normalizeLinkValue: (value: string) => string;
@@ -60,9 +57,6 @@ export function InventoryMobileCards({
   onMoveSelectedRows,
   onRequestDelete,
   onCellChange,
-  onSetAddingLocation,
-  onSetNewLocationName,
-  onSetAddLocationError,
   getReadOnlyCellText,
   toDateInputValue,
   normalizeLinkValue,

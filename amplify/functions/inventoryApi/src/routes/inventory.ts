@@ -1,11 +1,12 @@
 // ── Route handlers: inventory ───────────────────────────────────────────────
 import { BatchGetCommand, UpdateCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
-import type { RouteContext } from "../types";
+import type { RetireReason, RouteContext } from "../types";
+import { RETIRE_REASONS } from "../types";
 import { ddb } from "../clients";
 import { json, parseNextToken } from "../http";
-import { listItemsPage, validateNonNegativeField } from "../items";
-import { buildAuditEvent, writeAuditEvents, computeValuesDiff } from "../audit";
+import { getParentItemId, listItemsPage, validateNonNegativeField } from "../items";
+import { buildAuditEvent, writeAuditEvents, computeValuesDiff, hasProtectedHistory } from "../audit";
 
 export const handleListItems = async (ctx: RouteContext) => {
   const { storage, access, query } = ctx;
@@ -68,6 +69,10 @@ export const handleSaveItems = async (ctx: RouteContext) => {
     const row = rows[idx];
     const rowId = String(row?.id ?? "").trim() || randomUUID();
     const values = (row?.values ?? {}) as Record<string, unknown>;
+    // Stamp the logical-item id. Preserves an existing link if the client sent one
+    // (e.g. when adding a new lot under an existing parent); otherwise defaults to
+    // the row's own id so every row is at minimum its own logical item.
+    values.parentItemId = getParentItemId(rowId, values);
     const quantityValidation = validateNonNegativeField(values, "quantity");
     if (!quantityValidation.ok) {
       const reason = "error" in quantityValidation ? quantityValidation.error : "invalid quantity";
@@ -121,7 +126,32 @@ export const handleSaveItems = async (ctx: RouteContext) => {
     const isAllDefaults = (vals: Record<string, unknown>): boolean =>
       Object.values(vals).every((v) => v === null || v === undefined || v === "" || v === 0);
 
-    if (oldValues) {
+    // Retire metadata: when present, the qty-to-zero change on this row is a
+    // retirement, not a generic edit. Emit ITEM_RETIRE with reason + parent link
+    // and suppress the generic ITEM_EDIT so analytics don't double-count.
+    const retireMeta = (body?.retireMetadata as Record<string, unknown> | undefined)?.[rowId];
+    const retire = retireMeta && typeof retireMeta === "object" ? (retireMeta as Record<string, unknown>) : null;
+    const retireReason: RetireReason | null = retire && typeof retire.reason === "string" && (RETIRE_REASONS as string[]).includes(retire.reason)
+      ? (retire.reason as RetireReason)
+      : null;
+
+    if (retireReason && oldValues) {
+      const qtyBefore = Number(oldValues.quantity ?? 0);
+      const qtyAfter = Number(values.quantity ?? 0);
+      const qtyDelta = Number.isFinite(qtyBefore) && Number.isFinite(qtyAfter)
+        ? Math.max(0, qtyBefore - qtyAfter)
+        : Number(retire?.qty ?? 0);
+      const notes = typeof retire?.notes === "string" && retire.notes.trim() ? String(retire.notes).trim() : undefined;
+      auditEvents.push(buildAuditEvent(access, "ITEM_RETIRE", rowId, itemName, {
+        reason: retireReason,
+        qty: qtyDelta,
+        qtyBefore,
+        qtyAfter,
+        parentItemId: String(values.parentItemId ?? rowId),
+        ...(notes ? { notes } : {}),
+        snapshot,
+      }));
+    } else if (oldValues) {
       const changes = computeValuesDiff(oldValues, values as Record<string, unknown>);
       if (changes.length > 0) {
         // If old values were all defaults, this is the first meaningful edit —
@@ -150,10 +180,16 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         const meta: Record<string, unknown> = {
           source: String(m.source ?? "other"),
           qtyDelta,
+          // parentItemId lets phase 2 analytics aggregate cost/usage across lots
+          // of the same logical item without relying on itemName string matching.
+          parentItemId: String(values.parentItemId ?? rowId),
         };
         if (m.unitCost !== undefined && m.unitCost !== null && m.unitCost !== "") {
           const uc = Number(m.unitCost);
           if (Number.isFinite(uc) && uc >= 0) meta.unitCost = uc;
+        }
+        if (typeof m.vendor === "string" && m.vendor.trim()) {
+          meta.vendor = m.vendor.trim();
         }
         if (typeof m.reorderLink === "string" && m.reorderLink.trim()) {
           meta.reorderLink = m.reorderLink.trim();
@@ -163,6 +199,31 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         }
         auditEvents.push(buildAuditEvent(access, "RESTOCK_ADDED", rowId, itemName, meta));
       }
+    }
+  }
+
+  // Delete guard: block deletion of items that have operational history (edits,
+  // usage, restocks, retirements). Those must go through the retire flow so
+  // their history stays attached to a surviving row.
+  if (deletedRowIds.length > 0) {
+    const protectionChecks = await Promise.all(
+      deletedRowIds.map(async (id: string) => ({
+        id,
+        protected: await hasProtectedHistory(storage.auditTable, id),
+      })),
+    );
+    const protectedRows = protectionChecks
+      .filter((r) => r.protected)
+      .map(({ id }) => ({
+        id,
+        itemName: String(oldValuesMap.get(id)?.itemName ?? "").trim() || `Item ${id.slice(0, 8)}`,
+      }));
+    if (protectedRows.length > 0) {
+      return json(409, {
+        error: "Some items have operational history and must be retired instead of deleted.",
+        code: "DELETE_BLOCKED_HAS_HISTORY",
+        protectedRows,
+      });
     }
   }
 

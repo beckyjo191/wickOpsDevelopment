@@ -1,4 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   confirmUserAttribute,
   fetchAuthSession,
@@ -28,8 +45,9 @@ import {
   type InventoryRow,
   exportInventoryData,
 } from "../lib/inventoryApi";
+import { MODULE_BY_KEY } from "../lib/moduleRegistry";
 import type { ThemePreference } from "../lib/themePreference";
-import { ChevronUp, ChevronDown, Pencil, Trash2 } from "lucide-react";
+import { GripVertical, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
 type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns" | "importData" | "exportData" | "help";
@@ -110,7 +128,7 @@ export function SettingsPage({
   const [savingEmail, setSavingEmail] = useState(false);
   const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [moduleAccessUsers, setModuleAccessUsers] = useState<ModuleAccessUser[]>([]);
-  const [moduleAccessKeys, setModuleAccessKeys] = useState<AppModuleKey[]>(["inventory", "usage"]);
+  const [moduleAccessKeys, setModuleAccessKeys] = useState<AppModuleKey[]>(["inventory"]);
   const [loadingModuleAccess, setLoadingModuleAccess] = useState(false);
   const [savingModuleAccessUserId, setSavingModuleAccessUserId] = useState<string | null>(null);
   const [revokingUserId, setRevokingUserId] = useState<string | null>(null);
@@ -183,7 +201,7 @@ export function SettingsPage({
         const data = await listModuleAccessUsers();
         if (!cancelled) {
           setModuleAccessUsers(data.users);
-          setModuleAccessKeys(data.modules.length > 0 ? data.modules : ["inventory", "usage"]);
+          setModuleAccessKeys(data.modules.length > 0 ? data.modules : ["inventory"]);
         }
       } catch (err) {
         console.error(err);
@@ -452,16 +470,18 @@ export function SettingsPage({
     }
   };
 
-  const onMoveColumn = async (columnId: string, direction: "up" | "down") => {
+  const onColumnDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
     if (!canManageInventoryColumns || reorderingColumns) return;
-    const currentIndex = columns.findIndex((c) => c.id === columnId);
-    if (currentIndex < 0) return;
-    const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= columns.length) return;
+    if (!over || active.id === over.id) return;
+    const fromIndex = columns.findIndex((c) => c.id === active.id);
+    const toIndex = columns.findIndex((c) => c.id === over.id);
+    if (fromIndex < 0 || toIndex < 0) return;
 
-    const newColumns = columns.map((col) => ({ ...col }));
-    [newColumns[currentIndex], newColumns[targetIndex]] = [newColumns[targetIndex], newColumns[currentIndex]];
-    newColumns.forEach((col, i) => { col.sortOrder = (i + 1) * 10; });
+    const newColumns = arrayMove(columns, fromIndex, toIndex).map((col, i) => ({
+      ...col,
+      sortOrder: (i + 1) * 10,
+    }));
     setColumns(newColumns);
 
     setReorderingColumns(true);
@@ -475,6 +495,11 @@ export function SettingsPage({
       setReorderingColumns(false);
     }
   };
+
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   const onToggleUserModule = async (
     targetUserId: string,
@@ -946,7 +971,7 @@ export function SettingsPage({
                     {user.userId === currentUserId ? <span className="settings-core-pill">You</span> : null}
                   </div>
                   <div className="settings-column-actions">
-                    {moduleAccessKeys.map((moduleKey) => {
+                    {moduleAccessKeys.length > 1 && moduleAccessKeys.map((moduleKey) => {
                       const normalizedCurrentEmail = normalizeEmail(currentUserEmail);
                       const normalizedUserEmail = normalizeEmail(user.email);
                       const normalizedUserIdAsEmail = normalizeEmail(user.userId);
@@ -956,6 +981,7 @@ export function SettingsPage({
                           (normalizedUserEmail === normalizedCurrentEmail ||
                             normalizedUserIdAsEmail === normalizedCurrentEmail));
                       const isChecked = user.allowedModules.includes(moduleKey);
+                      const moduleLabel = MODULE_BY_KEY[moduleKey]?.name ?? moduleKey;
                       return (
                       <label
                         className={`settings-column-select${isSelf ? " settings-column-select-disabled" : ""}`}
@@ -969,7 +995,7 @@ export function SettingsPage({
                             void onToggleUserModule(user.userId, moduleKey, event.target.checked)
                           }
                         />
-                        <span>{moduleKey === "usage" ? "Usage" : "Inventory"}</span>
+                        <span>{moduleLabel}</span>
                       </label>
                       );
                     })}
@@ -1144,7 +1170,7 @@ export function SettingsPage({
           {canManageInventoryColumns ? (
             <>
               <p className="settings-section-copy">
-                Use the arrows to move columns up or down. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date, Reorder Link) are required and cannot be deleted.
+                Drag the handle to reorder columns. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date, Reorder Link) are required and cannot be deleted.
               </p>
               <div className="settings-columns-toolbar">
                 <div className="inventory-search-wrap settings-columns-toolbar-search">
@@ -1187,129 +1213,40 @@ export function SettingsPage({
                 {!loadingColumns && columns.length > 0 && filteredInventoryColumns.length === 0 ? (
                   <div>No matching columns.</div>
                 ) : null}
-                {filteredInventoryColumns.map((column) => (
-                  (() => {
-                    const isLocked = isLockedColumn(column);
-                    const colIndex = columns.indexOf(column);
-                    const isFirst = colIndex === 0;
-                    const isLast = colIndex === columns.length - 1;
-                    const isSearching = normalizedInventoryColumnSearch.length > 0;
-                    const reorderDisabled = savingColumn || reorderingColumns || isSearching;
-                    return (
-                  <div key={column.id} className="settings-column-row">
-                    <div className="settings-column-top">
-                      <div className="settings-column-reorder">
-                        <button
-                          className="settings-action-icon"
-                          onClick={() => void onMoveColumn(column.id, "up")}
-                          disabled={reorderDisabled || isFirst}
-                          aria-label="Move column up"
-                          type="button"
-                        >
-                          <ChevronUp aria-hidden="true" />
-                        </button>
-                        <button
-                          className="settings-action-icon"
-                          onClick={() => void onMoveColumn(column.id, "down")}
-                          disabled={reorderDisabled || isLast}
-                          aria-label="Move column down"
-                          type="button"
-                        >
-                          <ChevronDown aria-hidden="true" />
-                        </button>
-                      </div>
-                      <div className="settings-column-visibility">
-                        <input
-                          type="checkbox"
-                          checked={userColumnOverrides[column.id] !== undefined ? userColumnOverrides[column.id] : column.isVisible}
-                          onChange={() => onToggleColumnVisibility(column)}
-                          disabled={savingColumn}
+                <DndContext
+                  sensors={dragSensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={(event) => { void onColumnDragEnd(event); }}
+                >
+                  <SortableContext
+                    items={filteredInventoryColumns.map((c) => c.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {filteredInventoryColumns.map((column) => {
+                      const isSearching = normalizedInventoryColumnSearch.length > 0;
+                      const dragDisabled = savingColumn || reorderingColumns || isSearching;
+                      return (
+                        <SortableColumnRow
+                          key={column.id}
+                          column={column}
+                          isLocked={isLockedColumn(column)}
+                          dragDisabled={dragDisabled}
+                          savingColumn={savingColumn}
+                          userColumnOverrides={userColumnOverrides}
+                          editingColumnId={editingColumnId}
+                          editingLabel={editingLabel}
+                          setEditingLabel={setEditingLabel}
+                          onToggleColumnVisibility={onToggleColumnVisibility}
+                          onSaveEditColumn={onSaveEditColumn}
+                          onCancelEditColumn={onCancelEditColumn}
+                          onStartEditColumn={onStartEditColumn}
+                          onChangeColumnType={onChangeColumnType}
+                          setPendingDeleteColumnId={setPendingDeleteColumnId}
                         />
-                        {editingColumnId === column.id ? (
-                          <span className="settings-column-edit">
-                            <input
-                              className="field settings-column-edit-input"
-                              value={editingLabel}
-                              onChange={(event) => setEditingLabel(event.target.value)}
-                              disabled={savingColumn}
-                            />
-                            <button
-                              className="button button-secondary settings-inline-action"
-                              onClick={() => void onSaveEditColumn(column)}
-                              disabled={savingColumn || !editingLabel.trim()}
-                              type="button"
-                            >
-                              Save
-                            </button>
-                            <button
-                              className="button button-ghost settings-inline-action"
-                              onClick={onCancelEditColumn}
-                              type="button"
-                            >
-                              Cancel
-                            </button>
-                          </span>
-                        ) : (
-                          <span>{column.label}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="settings-column-bottom">
-                      {isLocked ? (
-                        <span className="settings-core-pill">*Required</span>
-                      ) : (
-                        <>
-                          <select
-                            className="settings-column-type-select"
-                            value={column.type}
-                            onChange={(e) => {
-                              void onChangeColumnType(column, e.target.value as InventoryColumn["type"]);
-                            }}
-                            disabled={savingColumn}
-                          >
-                            <option value="text">Text</option>
-                            <option value="number">Number</option>
-                            <option value="date">Date</option>
-                            <option value="link">Link</option>
-                            <option value="boolean">Yes/No</option>
-                          </select>
-                          <div className="settings-column-actions">
-                            <div className="settings-action-wrap">
-                              <button
-                                className="settings-action-icon"
-                                onClick={() => onStartEditColumn(column)}
-                                disabled={savingColumn}
-                                aria-label="Edit column"
-                                type="button"
-                              >
-                                <Pencil aria-hidden="true" />
-                              </button>
-                              <span className="settings-action-tip" role="tooltip">Edit</span>
-                            </div>
-                            <div className="settings-action-wrap">
-                              <button
-                                className="settings-action-icon settings-action-icon--danger"
-                                onClick={() =>
-                                  setPendingDeleteColumnId((prev) =>
-                                    prev === column.id ? null : column.id,
-                                  )
-                                }
-                                disabled={savingColumn}
-                                aria-label="Delete column"
-                                type="button"
-                              >
-                                <Trash2 aria-hidden="true" />
-                              </button>
-                              <span className="settings-action-tip" role="tooltip">Delete</span>
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                    );
-                  })()
-                ))}
+                      );
+                    })}
+                  </SortableContext>
+                </DndContext>
               </div>
               {pendingDeleteColumnId ? (() => {
                 const colId = pendingDeleteColumnId;
@@ -1374,5 +1311,159 @@ export function SettingsPage({
         </details>
       </div>
     </section>
+  );
+}
+
+interface SortableColumnRowProps {
+  column: InventoryColumn;
+  isLocked: boolean;
+  dragDisabled: boolean;
+  savingColumn: boolean;
+  userColumnOverrides: ColumnVisibilityOverrides;
+  editingColumnId: string | null;
+  editingLabel: string;
+  setEditingLabel: (value: string) => void;
+  onToggleColumnVisibility: (column: InventoryColumn) => void;
+  onSaveEditColumn: (column: InventoryColumn) => Promise<void> | void;
+  onCancelEditColumn: () => void;
+  onStartEditColumn: (column: InventoryColumn) => void;
+  onChangeColumnType: (column: InventoryColumn, type: InventoryColumn["type"]) => Promise<void> | void;
+  setPendingDeleteColumnId: Dispatch<SetStateAction<string | null>>;
+}
+
+function SortableColumnRow({
+  column,
+  isLocked,
+  dragDisabled,
+  savingColumn,
+  userColumnOverrides,
+  editingColumnId,
+  editingLabel,
+  setEditingLabel,
+  onToggleColumnVisibility,
+  onSaveEditColumn,
+  onCancelEditColumn,
+  onStartEditColumn,
+  onChangeColumnType,
+  setPendingDeleteColumnId,
+}: SortableColumnRowProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: column.id,
+    disabled: dragDisabled,
+  });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.55 : 1,
+    zIndex: isDragging ? 2 : undefined,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`settings-column-row${isDragging ? " settings-column-row--dragging" : ""}`}
+    >
+      <div className="settings-column-top">
+        <button
+          type="button"
+          className="settings-column-drag-handle"
+          aria-label="Drag to reorder"
+          disabled={dragDisabled}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical aria-hidden="true" />
+        </button>
+        <div className="settings-column-visibility">
+          <input
+            type="checkbox"
+            checked={userColumnOverrides[column.id] !== undefined ? userColumnOverrides[column.id] : column.isVisible}
+            onChange={() => onToggleColumnVisibility(column)}
+            disabled={savingColumn}
+          />
+          {editingColumnId === column.id ? (
+            <span className="settings-column-edit">
+              <input
+                className="field settings-column-edit-input"
+                value={editingLabel}
+                onChange={(event) => setEditingLabel(event.target.value)}
+                disabled={savingColumn}
+              />
+              <button
+                className="button button-secondary settings-inline-action"
+                onClick={() => void onSaveEditColumn(column)}
+                disabled={savingColumn || !editingLabel.trim()}
+                type="button"
+              >
+                Save
+              </button>
+              <button
+                className="button button-ghost settings-inline-action"
+                onClick={onCancelEditColumn}
+                type="button"
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <span>{column.label}</span>
+          )}
+        </div>
+      </div>
+      <div className="settings-column-bottom">
+        {isLocked ? (
+          <span className="settings-core-pill">*Required</span>
+        ) : (
+          <>
+            <select
+              className="settings-column-type-select"
+              value={column.type}
+              onChange={(e) => {
+                void onChangeColumnType(column, e.target.value as InventoryColumn["type"]);
+              }}
+              disabled={savingColumn}
+            >
+              <option value="text">Text</option>
+              <option value="number">Number</option>
+              <option value="date">Date</option>
+              <option value="link">Link</option>
+              <option value="boolean">Yes/No</option>
+            </select>
+            <div className="settings-column-actions">
+              <div className="settings-action-wrap">
+                <button
+                  className="settings-action-icon"
+                  onClick={() => onStartEditColumn(column)}
+                  disabled={savingColumn}
+                  aria-label="Edit column"
+                  type="button"
+                >
+                  <Pencil aria-hidden="true" />
+                </button>
+                <span className="settings-action-tip" role="tooltip">Edit</span>
+              </div>
+              <div className="settings-action-wrap">
+                <button
+                  className="settings-action-icon settings-action-icon--danger"
+                  onClick={() =>
+                    setPendingDeleteColumnId((prev) =>
+                      prev === column.id ? null : column.id,
+                    )
+                  }
+                  disabled={savingColumn}
+                  aria-label="Delete column"
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" />
+                </button>
+                <span className="settings-action-tip" role="tooltip">Delete</span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }

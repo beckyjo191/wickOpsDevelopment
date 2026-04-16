@@ -28,7 +28,6 @@ export function DashboardPage({
   const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
 
   const hasInventory = accessibleModules.includes("inventory");
-  const hasUsage = accessibleModules.includes("usage");
   const canSeeAlerts = !!onNavigateToInventoryWithFilter && hasInventory;
 
   useEffect(() => {
@@ -103,8 +102,6 @@ export function DashboardPage({
 
   return (
     <section className="app-content">
-      <h2 className="dash-title">Dashboard</h2>
-
       {hasInventory ? (
         <div className="dash-module-card">
           <div className="dash-module-header">
@@ -207,9 +204,9 @@ export function DashboardPage({
             </div>
           ) : null}
 
-          {(hasUsage || canEditInventory) ? (
+          {(hasInventory || canEditInventory) ? (
             <div className="dash-quick-actions">
-              {hasUsage && onNavigateToInventoryWithFilter ? (
+              {hasInventory && onNavigateToInventoryWithFilter ? (
                 <button
                   type="button"
                   className="dash-action-btn"

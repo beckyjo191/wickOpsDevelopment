@@ -36,14 +36,20 @@ export const PROVISIONING_RETRY_AFTER_MS = 2000;
 //   3. Provision any new DynamoDB tables in ensureOrgInventoryTables() if needed
 //   4. Follow remaining steps documented in src/lib/moduleRegistry.ts
 // ────────────────────────────────────────────────────────────────────────────
-export const ALL_MODULE_KEYS = ["inventory", "usage"] as const;
+export const ALL_MODULE_KEYS = ["inventory"] as const;
+
+// Legacy keys folded into a current module. Stored records may still contain
+// these; normalize.ts remaps them on read so permissions survive the change.
+export const LEGACY_MODULE_ALIASES: Record<string, ModuleKey> = {
+  usage: "inventory",
+};
 
 // Plan → module mapping. Unrecognized plan = no modules (no fallback to all).
 export const PLAN_MODULE_MAP: Record<string, ModuleKey[]> = {
-  Personal:     ["inventory", "usage"],
-  Department:   ["inventory", "usage"],
-  Organization: ["inventory", "usage"],
-  Sponsored:    ["inventory", "usage"],
+  Personal:     ["inventory"],
+  Department:   ["inventory"],
+  Organization: ["inventory"],
+  Sponsored:    ["inventory"],
 };
 
 export const getAvailableModulesForPlan = (plan: string): ModuleKey[] =>

@@ -2,7 +2,7 @@
 // Audit event building and writing helpers.
 
 import { randomUUID } from "node:crypto";
-import { BatchWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { BatchWriteCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "./clients";
 import { AUDIT_TTL_DAYS } from "./config";
 import type { AccessContext, AuditAction } from "./types";
@@ -97,4 +97,36 @@ export const buildQuantitySnapshot = (values: Record<string, unknown>): Record<s
     }
   }
   return snapshot;
+};
+
+/**
+ * Returns true if the item has any audit event beyond ITEM_CREATE — meaning real
+ * operational history (edits, usage, restocks, retirements). Such items must be
+ * retired instead of deleted so their history stays attached.
+ */
+export const hasProtectedHistory = async (
+  auditTable: string,
+  itemId: string,
+): Promise<boolean> => {
+  try {
+    const result = await ddb.send(
+      new QueryCommand({
+        TableName: auditTable,
+        KeyConditionExpression: "pk = :pk",
+        FilterExpression: "#action <> :create",
+        ExpressionAttributeNames: { "#action": "action" },
+        ExpressionAttributeValues: {
+          ":pk": `ITEM#${itemId}`,
+          ":create": "ITEM_CREATE",
+        },
+        Limit: 1,
+      }),
+    );
+    return (result.Items?.length ?? 0) > 0;
+  } catch (err) {
+    // Fail closed: if the audit table can't be queried, allow delete rather than
+    // blocking the user indefinitely — the audit log still captures ITEM_DELETE.
+    console.error("hasProtectedHistory query failed", err);
+    return false;
+  }
 };

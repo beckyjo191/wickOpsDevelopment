@@ -84,3 +84,18 @@ export const parseValuesJson = (raw: string | undefined | null): Record<string, 
     return {};
   }
 };
+
+/**
+ * Logical-item identity across lots. Rows with the same `parentItemId` represent the
+ * same physical SKU (different expiration lots, locations, etc.). For rows missing
+ * the field (pre-migration), fall back to the row's own id — i.e. each row is its
+ * own logical item until explicitly linked.
+ */
+export const getParentItemId = (
+  rowId: string,
+  values: Record<string, unknown>,
+): string => {
+  const raw = values.parentItemId;
+  if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
+  return rowId;
+};

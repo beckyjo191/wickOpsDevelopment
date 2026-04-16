@@ -200,7 +200,7 @@ export const handler: Handler = async (event) => {
           displayName: String(invite.displayName ?? "").trim() || displayName,
           organizationId: inviteOrganizationId,
           role: invitedRole,
-          allowedModules: ["inventory", "usage"],
+          allowedModules: ["inventory"],
           accessSuspended: !isPaidStatus(orgResult.Item.paymentStatus),
           createdAt: new Date().toISOString(),
         },
@@ -254,7 +254,7 @@ export const handler: Handler = async (event) => {
         seatsUsed: 1,
         plan: "",       // placeholder — overwritten by stripeWebhook on checkout completion
         paymentStatus: "Pending",
-        enabledModules: ["inventory", "usage"],
+        enabledModules: ["inventory"],
         onboardingCompleted: false,
         createdAt: new Date().toISOString(),
       },
@@ -275,7 +275,7 @@ export const handler: Handler = async (event) => {
         displayName,
         organizationId,
         role: "OWNER",
-        allowedModules: ["inventory", "usage"],
+        allowedModules: ["inventory"],
         accessSuspended: true, // until payment confirmed
         createdAt: new Date().toISOString(),
       },

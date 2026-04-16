@@ -131,11 +131,25 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
 
   await ddb.send(new PutCommand({ TableName: storage.restockOrdersTable, Item: order }));
 
-  // Audit: one event per item ordered
+  // Audit: one event per item ordered. parentItemId lets phase 2 analytics
+  // roll up cost/order history across lots sharing a logical item.
+  const parentByItemId = new Map<string, string>();
+  for (const item of items) {
+    try {
+      const vals = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, unknown>;
+      const parent = typeof vals.parentItemId === "string" && vals.parentItemId.trim()
+        ? String(vals.parentItemId).trim()
+        : String(item.id);
+      parentByItemId.set(String(item.id), parent);
+    } catch {
+      parentByItemId.set(String(item.id), String(item.id));
+    }
+  }
   const auditEvents = orderItems.map((oi) =>
     buildAuditEvent(access, "RESTOCK_ORDER_CREATE", oi.itemId, oi.itemName, {
       orderId,
       qtyOrdered: oi.qtyOrdered,
+      parentItemId: parentByItemId.get(oi.itemId) ?? oi.itemId,
       ...(oi.unitCost !== undefined ? { unitCost: oi.unitCost } : {}),
       ...(vendor ? { vendor } : {}),
     }),
@@ -198,6 +212,11 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
   const byId = new Map(allItems.map((item) => [String(item.id), item]));
   const auditEvents: Record<string, unknown>[] = [];
   const now = new Date().toISOString();
+  // Vendor captured at order time — propagates onto every RESTOCK_RECEIVED event
+  // so phase 2 "spend by vendor" analytics can query audit alone.
+  const orderVendor = typeof order.vendor === "string" && order.vendor.trim()
+    ? String(order.vendor).trim()
+    : undefined;
 
   for (const line of receiveLines) {
     const isFreeform = line.itemId.startsWith("freeform-");
@@ -213,6 +232,7 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
         const newValues: Record<string, unknown> = {
           itemName: orderItem.itemName,
           quantity: line.qtyThisReceive,
+          parentItemId: newItemId,
         };
         if (line.expirationDate) newValues.expirationDate = line.expirationDate;
         // Persist the vendor link captured at order time so future reorders
@@ -243,8 +263,10 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
           orderId,
           qtyReceived: line.qtyThisReceive,
           addedToInventory: true,
+          parentItemId: newItemId,
           ...(line.expirationDate ? { expirationDate: line.expirationDate } : {}),
           ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
+          ...(orderVendor ? { vendor: orderVendor } : {}),
         }));
       }
       continue;
@@ -279,13 +301,18 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     const snapshot: Record<string, unknown> = { quantity: newQty };
     if (values.minQuantity !== undefined) snapshot.minQuantity = values.minQuantity;
     if (line.expirationDate) snapshot.expirationDate = line.expirationDate;
+    const parentItemId = typeof values.parentItemId === "string" && values.parentItemId.trim()
+      ? String(values.parentItemId).trim()
+      : line.itemId;
     auditEvents.push(buildAuditEvent(access, "RESTOCK_RECEIVED", line.itemId, orderItem.itemName, {
       orderId,
       qtyReceived: line.qtyThisReceive,
       qtyBefore: oldQty,
       qtyAfter: newQty,
+      parentItemId,
       ...(line.expirationDate ? { expirationDate: line.expirationDate } : {}),
       ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
+      ...(orderVendor ? { vendor: orderVendor } : {}),
       snapshot,
     }));
   }

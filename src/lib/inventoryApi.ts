@@ -83,6 +83,24 @@ export const isInventoryProvisioningError = (
   value: unknown,
 ): value is InventoryProvisioningError => value instanceof InventoryProvisioningError;
 
+/**
+ * Thrown when the server rejects a delete because the item has operational
+ * history (edits, usage, restocks, retirements). Callers should offer the user
+ * the option to retire the protected rows instead.
+ */
+export class DeleteBlockedError extends Error {
+  readonly protectedRows: Array<{ id: string; itemName: string }>;
+
+  constructor(message: string, protectedRows: Array<{ id: string; itemName: string }>) {
+    super(message);
+    this.name = "DeleteBlockedError";
+    this.protectedRows = protectedRows;
+  }
+}
+
+export const isDeleteBlockedError = (value: unknown): value is DeleteBlockedError =>
+  value instanceof DeleteBlockedError;
+
 const requireBaseUrl = () => {
   if (!INVENTORY_API_BASE_URL) {
     throw new Error("Missing VITE_INVENTORY_API_BASE_URL");
@@ -203,14 +221,27 @@ export type RestockMetadata = {
   source: "supplier" | "donation" | "transfer" | "correction" | "other";
   qtyDelta: number;
   unitCost?: number;
+  /** Vendor/supplier name — drives phase 2 "spend by vendor" analytics. */
+  vendor?: string;
   reorderLink?: string;
   location?: string;
+};
+
+export type RetireReason = "expired" | "damaged" | "lost" | "recalled";
+
+export type RetireMetadata = {
+  reason: RetireReason;
+  qty: number;
+  notes?: string;
 };
 
 export const saveInventoryItems = async (
   rows: InventoryRow[],
   deletedRowIds: string[] = [],
-  options?: { restockMetadata?: Record<string, RestockMetadata> },
+  options?: {
+    restockMetadata?: Record<string, RestockMetadata>;
+    retireMetadata?: Record<string, RetireMetadata>;
+  },
 ): Promise<void> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/items/save`, {
@@ -225,10 +256,31 @@ export const saveInventoryItems = async (
       })),
       deletedRowIds,
       ...(options?.restockMetadata ? { restockMetadata: options.restockMetadata } : {}),
+      ...(options?.retireMetadata ? { retireMetadata: options.retireMetadata } : {}),
     }),
   });
 
   if (!res.ok) {
+    if (res.status === 409) {
+      const text = await res.text();
+      try {
+        const parsed = JSON.parse(text) as {
+          code?: string;
+          error?: string;
+          protectedRows?: Array<{ id: string; itemName: string }>;
+        };
+        if (parsed.code === "DELETE_BLOCKED_HAS_HISTORY" && Array.isArray(parsed.protectedRows)) {
+          throw new DeleteBlockedError(
+            parsed.error ?? "Some items have history and cannot be deleted.",
+            parsed.protectedRows,
+          );
+        }
+        throw new Error(parsed.error ?? text ?? "Failed to save inventory");
+      } catch (err) {
+        if (err instanceof DeleteBlockedError) throw err;
+        throw new Error(text || "Failed to save inventory");
+      }
+    }
     throw new Error((await res.text()) || "Failed to save inventory");
   }
 };

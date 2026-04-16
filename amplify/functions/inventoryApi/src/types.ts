@@ -62,12 +62,14 @@ export type InventoryStorage = {
   restockOrdersTable: string;
 };
 
-export type ModuleKey = "inventory" | "usage";
+export type ModuleKey = "inventory";
 
 export type AuditAction =
   | "ITEM_CREATE"
   | "ITEM_EDIT"
   | "ITEM_DELETE"
+  /** Quantity decrement with a loss reason (expired/damaged/lost/recalled). */
+  | "ITEM_RETIRE"
   | "USAGE_SUBMIT"
   | "USAGE_APPROVE"
   | "USAGE_REJECT"
@@ -81,6 +83,11 @@ export type AuditAction =
   | "RESTOCK_ORDER_CLOSED"
   /** Fast Restock: quantity added directly to an inventory row (not via an order). */
   | "RESTOCK_ADDED";
+
+/** Reason codes attached to ITEM_RETIRE events. Drives loss analytics. */
+export type RetireReason = "expired" | "damaged" | "lost" | "recalled";
+
+export const RETIRE_REASONS: RetireReason[] = ["expired", "damaged", "lost", "recalled"];
 
 export type PendingEntry = {
   itemId: string;

@@ -38,6 +38,7 @@ const ACTION_LABELS: Record<string, string> = {
   ITEM_MOVE: "Moved",
   ITEM_RESTOCK: "Restocked",
   ITEM_QTY_ADJUST: "Adjusted qty",
+  ITEM_RETIRE: "Retired",
   USAGE_SUBMIT: "Usage logged",
   USAGE_APPROVE: "Usage approved",
   USAGE_REJECT: "Usage rejected",
@@ -46,6 +47,10 @@ const ACTION_LABELS: Record<string, string> = {
   COLUMN_UPDATE: "Column updated",
   CSV_IMPORT: "CSV import",
   TEMPLATE_APPLY: "Template applied",
+  RESTOCK_ORDER_CREATE: "Order placed",
+  RESTOCK_RECEIVED: "Order received",
+  RESTOCK_ORDER_CLOSED: "Order closed",
+  RESTOCK_ADDED: "Fast restock",
 };
 
 // Labels for filter menu (more descriptive)
@@ -53,6 +58,7 @@ const FILTER_LABELS: Record<string, string> = {
   ITEM_CREATE: "Added item",
   ITEM_EDIT: "Updated item",
   ITEM_DELETE: "Deleted item",
+  ITEM_RETIRE: "Retired item",
   USAGE_SUBMIT: "Submitted usage",
   USAGE_APPROVE: "Approved usage",
   USAGE_REJECT: "Rejected usage",
@@ -61,6 +67,10 @@ const FILTER_LABELS: Record<string, string> = {
   COLUMN_UPDATE: "Updated column",
   CSV_IMPORT: "Imported CSV",
   TEMPLATE_APPLY: "Applied template",
+  RESTOCK_ORDER_CREATE: "Placed restock order",
+  RESTOCK_RECEIVED: "Received restock order",
+  RESTOCK_ORDER_CLOSED: "Closed restock order",
+  RESTOCK_ADDED: "Fast restock",
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -123,6 +133,7 @@ const ACTION_COLORS: Record<string, string> = {
   ITEM_RESTOCK: "var(--success)",
   ITEM_QTY_ADJUST: "var(--warning)",
   ITEM_DELETE: "var(--danger)",
+  ITEM_RETIRE: "var(--danger)",
   USAGE_SUBMIT: "var(--warning)",
   USAGE_APPROVE: "var(--success)",
   USAGE_REJECT: "var(--danger)",
@@ -131,11 +142,16 @@ const ACTION_COLORS: Record<string, string> = {
   COLUMN_UPDATE: "var(--primary)",
   CSV_IMPORT: "var(--primary)",
   TEMPLATE_APPLY: "var(--primary)",
+  RESTOCK_ORDER_CREATE: "var(--primary)",
+  RESTOCK_RECEIVED: "var(--success)",
+  RESTOCK_ORDER_CLOSED: "var(--text-muted)",
+  RESTOCK_ADDED: "var(--success)",
 };
 
 const ALL_ACTIONS = [
-  "ITEM_CREATE", "ITEM_EDIT", "ITEM_DELETE",
+  "ITEM_CREATE", "ITEM_EDIT", "ITEM_DELETE", "ITEM_RETIRE",
   "USAGE_SUBMIT", "USAGE_APPROVE", "USAGE_REJECT",
+  "RESTOCK_ORDER_CREATE", "RESTOCK_RECEIVED", "RESTOCK_ORDER_CLOSED", "RESTOCK_ADDED",
   "COLUMN_CREATE", "COLUMN_DELETE", "COLUMN_UPDATE",
   "CSV_IMPORT", "TEMPLATE_APPLY",
 ];
@@ -200,6 +216,22 @@ function buildEventDetail(event: AuditEvent): string {
     parts.push(`"${String(details.reason)}"`);
   } else if (event.action === "CSV_IMPORT") {
     parts.push(`${String(details.rowsCreated ?? 0)} created, ${String(details.rowsUpdated ?? 0)} updated`);
+  } else if (event.action === "ITEM_RETIRE") {
+    const reason = typeof details.reason === "string" ? String(details.reason) : "";
+    if (reason) parts.push(`Reason: ${reason}`);
+    if (details.qty !== undefined) parts.push(`Qty: ${String(details.qty)}`);
+  } else if (event.action === "RESTOCK_ORDER_CREATE") {
+    if (details.qtyOrdered !== undefined) parts.push(`Ordered: ${String(details.qtyOrdered)}`);
+    if (details.vendor) parts.push(`Vendor: ${String(details.vendor)}`);
+  } else if (event.action === "RESTOCK_RECEIVED") {
+    if (details.qtyReceived !== undefined) parts.push(`Received: ${String(details.qtyReceived)}`);
+    if (details.vendor) parts.push(`Vendor: ${String(details.vendor)}`);
+  } else if (event.action === "RESTOCK_ADDED") {
+    if (details.qtyDelta !== undefined) parts.push(`+${String(details.qtyDelta)}`);
+    if (details.vendor) parts.push(`Vendor: ${String(details.vendor)}`);
+    if (details.source && details.source !== "supplier") parts.push(String(details.source));
+  } else if (event.action === "RESTOCK_ORDER_CLOSED") {
+    if (details.closedManually) parts.push("Closed manually");
   }
 
   return parts.join(" · ");
@@ -250,11 +282,165 @@ function AuditEventRow({
   );
 }
 
+// ── Restock order grouping ────────────────────────────────────────────────────
+// Restock orders emit one audit event per line item. In the activity feed we
+// collapse contiguous same-order events into a single expandable row so a
+// 10-item order reads as "Bekah placed restock order (10 items)" instead of
+// spamming ten rows. Per-item events are still preserved under the fold and
+// available to analytics queries.
+
+const GROUPABLE_ACTIONS = new Set([
+  "RESTOCK_ORDER_CREATE",
+  "RESTOCK_RECEIVED",
+]);
+
+type OrderGroup = {
+  kind: "order-group";
+  groupId: string;
+  action: string;
+  orderId: string;
+  events: AuditEvent[];
+  representative: AuditEvent;
+};
+
+type DisplayRow =
+  | { kind: "event"; event: AuditEvent }
+  | OrderGroup;
+
+function groupRestockEvents(events: AuditEvent[]): DisplayRow[] {
+  // Bucket groupable events by {action, orderId}. Non-groupable events and
+  // events without an orderId pass through as singletons, preserving order
+  // via an insertion-index fallback.
+  type Bucket = { rows: AuditEvent[]; firstIndex: number };
+  const buckets = new Map<string, Bucket>();
+  const flat: Array<{ index: number; row: DisplayRow }> = [];
+
+  events.forEach((event, idx) => {
+    const orderId = typeof event.details?.orderId === "string"
+      ? String(event.details.orderId)
+      : "";
+    if (GROUPABLE_ACTIONS.has(event.action) && orderId) {
+      const key = `${event.action}:${orderId}`;
+      const bucket = buckets.get(key);
+      if (bucket) {
+        bucket.rows.push(event);
+      } else {
+        buckets.set(key, { rows: [event], firstIndex: idx });
+        flat.push({
+          index: idx,
+          row: {
+            kind: "order-group",
+            groupId: key,
+            action: event.action,
+            orderId,
+            events: [],
+            representative: event,
+          },
+        });
+      }
+      return;
+    }
+    flat.push({ index: idx, row: { kind: "event", event } });
+  });
+
+  // Fill the groups with their accumulated events.
+  for (const entry of flat) {
+    if (entry.row.kind !== "order-group") continue;
+    const bucket = buckets.get(entry.row.groupId);
+    if (bucket) entry.row.events = bucket.rows;
+  }
+  return flat.map((e) => e.row);
+}
+
+function OrderGroupRow({
+  group,
+  onViewItemHistory,
+  showDate = false,
+}: {
+  group: OrderGroup;
+  onViewItemHistory?: (itemId: string, name: string) => void;
+  showDate?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const count = group.events.length;
+  const representative = group.representative;
+  const actionLabel = ACTION_LABELS[group.action] ?? group.action;
+  const color = ACTION_COLORS[group.action] ?? "var(--text-muted)";
+  const d = new Date(representative.timestamp);
+  const timeStr = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+  const details = representative.details ?? {};
+  const vendor = typeof details.vendor === "string" ? details.vendor : "";
+
+  // Aggregate qty + cost across the grouped events.
+  let totalQty = 0;
+  let totalCost = 0;
+  let hasCost = false;
+  for (const ev of group.events) {
+    const dd = ev.details ?? {};
+    const qty = Number(
+      group.action === "RESTOCK_RECEIVED" ? dd.qtyReceived : dd.qtyOrdered,
+    );
+    const unitCost = Number(dd.unitCost);
+    if (Number.isFinite(qty)) totalQty += qty;
+    if (Number.isFinite(qty) && Number.isFinite(unitCost)) {
+      totalCost += qty * unitCost;
+      hasCost = true;
+    }
+  }
+
+  const summaryParts: string[] = [];
+  summaryParts.push(`${count} item${count !== 1 ? "s" : ""}`);
+  if (totalQty > 0) summaryParts.push(`qty ${totalQty}`);
+  if (hasCost) summaryParts.push(`$${totalCost.toFixed(2)}`);
+  if (vendor) summaryParts.push(`vendor: ${vendor}`);
+
+  return (
+    <div className="audit-event-row audit-event-row--group">
+      <span className="audit-event-row-time">
+        {showDate ? formatDate(representative.timestamp) : timeStr}
+      </span>
+      <span className="audit-event-row-action" style={{ color }}>{actionLabel}</span>
+      <div className="audit-event-row-center">
+        <button
+          type="button"
+          className="audit-event-item-link audit-event-group-toggle"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          title={expanded ? "Collapse line items" : "Expand line items"}
+        >
+          {expanded ? "▾" : "▸"} Order #{group.orderId.slice(0, 8)}
+        </button>
+        <span className="audit-event-row-detail">{summaryParts.join(" · ")}</span>
+      </div>
+      <span className="audit-event-row-user">
+        <User size={11} />
+        {representative.userName || representative.userEmail}
+      </span>
+      {expanded ? (
+        <div className="audit-event-group-children">
+          {group.events.map((child) => (
+            <AuditEventRow
+              key={child.eventId}
+              event={child}
+              onViewItemHistory={onViewItemHistory}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Day report card ───────────────────────────────────────────────────────────
 
 const SUMMARY_ORDER: Array<[string, string]> = [
+  ["RESTOCK_ORDER_CREATE", "orders placed"],
+  ["RESTOCK_RECEIVED", "orders received"],
+  ["RESTOCK_ADDED", "fast restocks"],
   ["ITEM_RESTOCK", "restocked"],
   ["ITEM_CREATE", "added"],
+  ["ITEM_RETIRE", "retired"],
   ["ITEM_QTY_ADJUST", "adjusted"],
   ["ITEM_EDIT", "updated"],
   ["ITEM_DELETE", "deleted"],
@@ -266,8 +452,19 @@ const SUMMARY_ORDER: Array<[string, string]> = [
 
 function buildDaySummary(events: AuditEvent[]): string {
   const counts: Record<string, number> = {};
+  // Track unique orderIds for groupable restock actions so a 10-item order
+  // counts as "1 order placed", not 10.
+  const seenOrderIds: Record<string, Set<string>> = {};
   for (const e of events) {
     const a = deriveAction(e);
+    if (GROUPABLE_ACTIONS.has(a)) {
+      const orderId = typeof e.details?.orderId === "string" ? String(e.details.orderId) : "";
+      if (orderId) {
+        const bucket = seenOrderIds[a] ?? (seenOrderIds[a] = new Set());
+        if (bucket.has(orderId)) continue;
+        bucket.add(orderId);
+      }
+    }
     counts[a] = (counts[a] ?? 0) + 1;
   }
   const parts: string[] = [];
@@ -291,6 +488,7 @@ function DayReport({
 }) {
   const uniqueUsers = new Set(events.map((e) => e.userName || e.userEmail)).size;
   const summary = buildDaySummary(events);
+  const displayRows = groupRestockEvents(events);
 
   return (
     <div className="audit-day-report app-card">
@@ -303,13 +501,21 @@ function DayReport({
         </span>
       </div>
       <div className="audit-day-report-rows">
-        {events.map((event) => (
-          <AuditEventRow
-            key={event.eventId}
-            event={event}
-            onViewItemHistory={onViewItemHistory}
-          />
-        ))}
+        {displayRows.map((row) =>
+          row.kind === "order-group" ? (
+            <OrderGroupRow
+              key={row.groupId}
+              group={row}
+              onViewItemHistory={onViewItemHistory}
+            />
+          ) : (
+            <AuditEventRow
+              key={row.event.eventId}
+              event={row.event}
+              onViewItemHistory={onViewItemHistory}
+            />
+          ),
+        )}
       </div>
     </div>
   );

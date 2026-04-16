@@ -287,16 +287,15 @@ export function useInventoryFilters({
           : rowLocation === effectiveLocationFilter;
         if (!matchesLocation) continue;
       }
-      // Retired rows are counted separately and excluded from other tabs
-      if (row.values.retiredAt) {
-        retired++;
-        continue;
-      }
+      const isRetired = Boolean(row.values.retiredAt);
+      if (isRetired) retired++;
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
-      const isExpired = daysUntil !== null && daysUntil < 0;
+      // Retired rows don't count as expired — they've already been handled, even
+      // though their expirationDate is still in the past for history.
+      const isExpired = !isRetired && daysUntil !== null && daysUntil < 0;
       if (isExpired) expired++;
-      if (daysUntil !== null && daysUntil >= 0 && daysUntil <= 30) exp30++;
-      if (daysUntil !== null && daysUntil >= 0 && daysUntil <= 60) exp60++;
+      if (!isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 30) exp30++;
+      if (!isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 60) exp60++;
       const quantityRaw = row.values.quantity;
       const minQuantityRaw = row.values.minQuantity;
       const quantity = Number(quantityRaw);
@@ -307,6 +306,8 @@ export function useInventoryFilters({
         String(minQuantityRaw).trim() !== "" &&
         Number.isFinite(minQuantity) &&
         minQuantity > 0;
+      // Retired rows are skeleton rows — they participate in reorder logic so the
+      // system treats "retired" the same as "depleted". Both need restocking.
       const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
       if (isLowStock) lowStock++;
     }
@@ -336,16 +337,18 @@ export function useInventoryFilters({
         const rowLocation = String(row.values.location ?? "").trim();
         const rowCategory = String(row.values.category ?? "").trim();
 
-        // Retired rows are never shown in the Inventory list — they're tracked in Activity.
-        if (row.values.retiredAt) return false;
+        // Retired rows stay as zero-qty skeleton rows so reorder logic still
+        // sees them (qty < min → flagged for reorder). They're only suppressed
+        // from expiration-based tabs where they'd be noise.
+        const isRetired = Boolean(row.values.retiredAt);
 
         let passesTab = true;
         if (activeFilter === "lowStock") {
           passesTab = hasMinQuantity && Number.isFinite(quantity) && quantity < minQuantity;
         }
-        if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil < 0;
-        if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
-        if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
+        if (activeFilter === "expired") passesTab = !isRetired && daysUntil !== null && daysUntil < 0;
+        if (activeFilter === "exp30") passesTab = !isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
+        if (activeFilter === "exp60") passesTab = !isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
         if (!passesTab) return false;
 
         if (locationColumn && effectiveLocationFilter !== "All Locations") {

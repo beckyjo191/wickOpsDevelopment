@@ -56,50 +56,59 @@ const INVITE_ALLOWED_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 // ── MODULE SYNC NOTE ────────────────────────────────────────────────────────
 // This list must be kept in sync with AppModuleKey in src/lib/moduleRegistry.ts.
 // When a new module goes stable:
-//   1. Add its key to ALL_MODULE_KEYS here (and in inventoryApi/handler.ts)
+//   1. Add its key to ALL_MODULE_KEYS here (and in inventoryApi/config.ts)
 //   2. Add it to PLAN_MODULE_MAP for each plan that should unlock it (both handlers)
 //   3. Follow remaining steps documented in src/lib/moduleRegistry.ts
 // ────────────────────────────────────────────────────────────────────────────
-const ALL_MODULE_KEYS = ["inventory", "usage"] as const;
+const ALL_MODULE_KEYS = ["inventory"] as const;
 type ModuleKey = (typeof ALL_MODULE_KEYS)[number];
+
+// Legacy keys folded into a current module. Stored records may still contain
+// these; remap on read so permissions survive the consolidation.
+const LEGACY_MODULE_ALIASES: Record<string, ModuleKey> = {
+  usage: "inventory",
+};
 
 // Plan → module mapping. Unrecognized plan = no modules (no fallback to all).
 const PLAN_MODULE_MAP: Record<string, ModuleKey[]> = {
-  Personal:     ["inventory", "usage"],
-  Department:   ["inventory", "usage"],
-  Organization: ["inventory", "usage"],
-  Sponsored:    ["inventory", "usage"],
+  Personal:     ["inventory"],
+  Department:   ["inventory"],
+  Organization: ["inventory"],
+  Sponsored:    ["inventory"],
 };
 const getAvailableModulesForPlan = (plan: string): ModuleKey[] =>
   PLAN_MODULE_MAP[plan] ?? [];
+
+const coerceModuleKey = (raw: unknown, valid: Set<ModuleKey>): ModuleKey | null => {
+  const normalized = String(raw ?? "").trim().toLowerCase();
+  if (valid.has(normalized as ModuleKey)) return normalized as ModuleKey;
+  const aliased = LEGACY_MODULE_ALIASES[normalized];
+  return aliased && valid.has(aliased) ? aliased : null;
+};
 
 // Normalize a raw DDB value into a valid subset of allValid.
 // null/absent → allValid (backward-compat: existing orgs without enabledModules get full access).
 const normalizeModuleSubset = (value: unknown, allValid: ModuleKey[]): ModuleKey[] => {
   if (!Array.isArray(value)) return [...allValid];
   const s = new Set(allValid);
-  const out = [
-    ...new Set(
-      value
-        .map((i) => String(i ?? "").trim().toLowerCase())
-        .filter((i): i is ModuleKey => s.has(i as ModuleKey)),
-    ),
-  ];
-  return out.length > 0 ? out : [...allValid];
+  const out = new Set<ModuleKey>();
+  for (const raw of value) {
+    const key = coerceModuleKey(raw, s);
+    if (key) out.add(key);
+  }
+  return out.size > 0 ? [...out] : [...allValid];
 };
 
 // Intersect user's stored allowedModules against the org-enabled superset.
 const getUserAllowedModules = (value: unknown, superset: ModuleKey[]): ModuleKey[] => {
   if (!Array.isArray(value)) return [...superset];
   const s = new Set(superset);
-  const out = [
-    ...new Set(
-      value
-        .map((i) => String(i ?? "").trim().toLowerCase())
-        .filter((i): i is ModuleKey => s.has(i as ModuleKey)),
-    ),
-  ];
-  return out.length > 0 ? out : [...superset];
+  const out = new Set<ModuleKey>();
+  for (const raw of value) {
+    const key = coerceModuleKey(raw, s);
+    if (key) out.add(key);
+  }
+  return out.size > 0 ? [...out] : [...superset];
 };
 const normalizeEmail = (value: unknown): string =>
   String(value ?? "").trim().toLowerCase();
@@ -159,13 +168,6 @@ const countPendingInvites = async (organizationId: string): Promise<number> => {
 
 const normalizeRole = (value: unknown): string => String(value ?? "").trim().toUpperCase();
 const normalizeOrgId = (value: unknown): string => String(value ?? "").trim().toLowerCase();
-const normalizeModuleKey = (value: unknown): ModuleKey | null => {
-  const normalized = String(value ?? "").trim().toLowerCase();
-  return (ALL_MODULE_KEYS as readonly string[]).includes(normalized)
-    ? (normalized as ModuleKey)
-    : null;
-};
-
 const incrementOrgSeatsUsed = async (organizationId: string): Promise<void> => {
   await ddb.send(
     new UpdateCommand({
@@ -529,7 +531,7 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
           displayName: String(normalizedInvite?.displayName ?? "").trim() || email.split("@")[0],
           organizationId: inviteOrganizationId,
           role,
-          allowedModules: ["inventory", "usage"],
+          allowedModules: ["inventory"],
           accessSuspended: !isPaidStatus(orgResForInvite.Item.paymentStatus),
           createdAt: new Date().toISOString(),
         };

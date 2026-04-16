@@ -3,6 +3,7 @@ import {
   convertImportFileToCsv,
   extractCsvHeaders,
   importInventoryCsv,
+  isDeleteBlockedError,
   isInventoryProvisioningError,
   loadInventoryBootstrap,
   loadInventoryItems,
@@ -102,6 +103,10 @@ export function useInventoryData({
   const [saving, setSaving] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
   const [importingCsv, setImportingCsv] = useState(false);
+  // When the server rejects a delete for rows with operational history, we
+  // surface them here so the UI can offer "Retire instead" instead of silently
+  // losing the delete action.
+  const [deleteBlockedRows, setDeleteBlockedRows] = useState<Array<{ id: string; itemName: string }>>([]);
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
@@ -823,7 +828,25 @@ export function useInventoryData({
       setShowSaved(true);
       window.setTimeout(() => setShowSaved(false), 2000);
     } catch (err: any) {
-      if (!silent) {
+      if (isDeleteBlockedError(err)) {
+        // Server blocked delete because these rows have operational history.
+        // Un-mark them from the pending-delete set, reload to restore row data
+        // in the UI, and surface a dialog so the user can retire instead.
+        const blockedIds = new Set(err.protectedRows.map((r) => r.id));
+        setDeletedRowIds((prev) => {
+          const next = new Set(prev);
+          for (const id of blockedIds) next.delete(id);
+          deletedRowIdsRef.current = next;
+          return next;
+        });
+        try {
+          const bootstrap = await loadInventoryBootstrap();
+          applyBootstrap(bootstrap);
+        } catch {
+          // Non-critical: the user will see blocked rows re-appear on next load.
+        }
+        setDeleteBlockedRows(err.protectedRows);
+      } else if (!silent) {
         alert(err?.message ?? "Failed to save inventory");
       }
     } finally {
@@ -834,6 +857,15 @@ export function useInventoryData({
 
   // Keep a stable ref to onSave so the interval always calls the latest version.
   onSaveRef.current = onSave;
+
+  const onDismissDeleteBlocked = () => setDeleteBlockedRows([]);
+  const onRetireDeleteBlocked = async (
+    reason: "expired" | "damaged" | "lost" | "recalled" = "expired",
+  ) => {
+    const ids = deleteBlockedRows.map((r) => r.id);
+    setDeleteBlockedRows([]);
+    if (ids.length > 0) await onRetireRows(ids, reason);
+  };
 
   // ── Import handlers ──
   const onChooseCsvImport = () => {
@@ -1220,30 +1252,80 @@ export function useInventoryData({
   // (passed through from filters hook locationOptions)
 
   // ── Retire rows ──
-  const onRetireRows = async (rowIds: string[]) => {
+  // Retirement is a qty-to-zero event with a reason code (expired/damaged/lost/recalled).
+  // The row is NOT hidden from inventory — it stays as a skeleton so reorder logic
+  // still flags qty < min. The reason is captured in an ITEM_RETIRE audit event
+  // that drives loss analytics.
+  const onRetireRows = async (
+    rowIds: string[],
+    reason: "expired" | "damaged" | "lost" | "recalled" = "expired",
+    notes?: string,
+  ) => {
     if (!canEditInventory || rowIds.length === 0) return;
     const now = new Date().toISOString();
     const idSet = new Set(rowIds);
+
+    // Snapshot qtyBefore from current rows, before we mutate them.
+    const retireMetadata: Record<string, import("../../../lib/inventoryApi").RetireMetadata> = {};
+    const retiredRowsToSave: InventoryRow[] = [];
+    for (const row of rowsRef.current) {
+      if (!idSet.has(row.id)) continue;
+      const qtyBefore = Number(row.values.quantity ?? 0);
+      const qtyDelta = Number.isFinite(qtyBefore) && qtyBefore > 0 ? qtyBefore : 0;
+      retireMetadata[row.id] = {
+        reason,
+        qty: qtyDelta,
+        ...(notes ? { notes } : {}),
+      };
+      retiredRowsToSave.push({
+        ...row,
+        values: {
+          ...row.values,
+          retiredAt: now,
+          retiredQty: String(qtyBefore || 0),
+          retirementReason: reason,
+          quantity: 0,
+          // expirationDate is intentionally kept so retirement history has context
+        },
+      });
+    }
+
+    if (retiredRowsToSave.length === 0) return;
+
     pushUndoSnapshot();
     setRows((prev) => {
-      const next = prev.map((row) => {
-        if (!idSet.has(row.id)) return row;
-        return {
-          ...row,
-          values: {
-            ...row.values,
-            retiredAt: now,
-            retiredQty: String(row.values.quantity ?? "0"),
-            quantity: 0,
-            // expirationDate is intentionally kept so the Retired tab can display it
-          },
-        };
-      });
+      const byId = new Map(retiredRowsToSave.map((r) => [r.id, r]));
+      const next = prev.map((row) => byId.get(row.id) ?? row);
       rowsRef.current = next;
       return next;
     });
-    markRowsDirty(rowIds);
-    await onSaveRef.current(false);
+
+    // Direct save with retireMetadata — bypasses the batched autosave so the
+    // metadata lands on the save request alongside the qty-zero edit.
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await saveInventoryItems(retiredRowsToSave, [], { retireMetadata });
+      const snap = lastSavedSnapshotRef.current;
+      const nextSnap = new Map(snap);
+      for (const row of retiredRowsToSave) {
+        nextSnap.set(row.id, serializeRowForSnapshot(row, row.position));
+      }
+      lastSavedSnapshotRef.current = nextSnap;
+      setDirtyRowIds((prev) => {
+        const next = new Set(prev);
+        for (const r of retiredRowsToSave) next.delete(r.id);
+        dirtyRowIdsRef.current = next;
+        return next;
+      });
+      setShowSaved(true);
+      window.setTimeout(() => setShowSaved(false), 2000);
+    } catch (err: any) {
+      alert(err?.message ?? "Failed to retire items");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
 
   // ── Computed derived values ──
@@ -1307,6 +1389,9 @@ export function useInventoryData({
     // Delete
     pendingDeleteRows,
     setPendingDeleteRows,
+    deleteBlockedRows,
+    onDismissDeleteBlocked,
+    onRetireDeleteBlocked,
     // Refs
     importInputRef,
     selectAllCheckboxRef,

@@ -180,13 +180,6 @@ function AddItemCard({
       <div className="reorder-add-item-actions">
         <button
           type="button"
-          className="button button-secondary button-sm"
-          onClick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
           className="button button-primary button-sm"
           onClick={handleSubmit}
         >

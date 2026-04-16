@@ -23,6 +23,7 @@ import { InventoryUsagePage } from "../InventoryUsagePage";
 import { InventoryMobileCards } from "./InventoryMobileCards";
 import { InventoryDesktopTable } from "./InventoryDesktopTable";
 import { ImportDialogs } from "./ImportDialogs";
+import { DeleteBlockedDialog } from "./DeleteBlockedDialog";
 import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { PaginationControls } from "./PaginationControls";
 import { ROWS_PER_PAGE } from "./inventoryTypes";
@@ -44,6 +45,10 @@ export function InventoryPage({
   const [saveBarVisible, setSaveBarVisible] = useState(false);
   const [saveBarFading, setSaveBarFading] = useState(false);
   const saveBarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Mobile card expansion is local — unlike `selectedRowId`, closing it must
+  // not trigger the auto-select-first-row effect in useInventoryData.
+  const [mobileExpandedCardId, setMobileExpandedCardId] = useState<string | null>(null);
 
   // ── Ref bridge for circular hook deps ─────────────────────────────────────
   // Filters needs rows/columns from data; data needs filteredRows from filters.
@@ -315,15 +320,17 @@ export function InventoryPage({
                   Fast Restock
                 </button>
               ) : null}
-              {!isInlineMode && (
+            </div>
+            {!isInlineMode && (
+              <div className="inventory-controls-row inventory-controls-row--mobile inventory-controls-row--mobile-search">
                 <InventoryToolbar
                   canEdit={canEditInventory}
-                  isMobile={isMobile}
+                  isMobile={false}
                   searchTerm={filters.searchTerm}
                   onSearchChange={filters.setSearchTerm}
                 />
-              )}
-            </div>
+              </div>
+            )}
             <div className="inventory-controls-row inventory-controls-row--mobile inventory-controls-row--mobile-actions">
               <InventoryFilterBar
                 activeTab={filters.activeTab}
@@ -569,7 +576,7 @@ export function InventoryPage({
                 allColumns={filters.allColumns}
                 selectedRowIds={filters.selectedRowIds}
                 selectedRowId={data.selectedRowId}
-                expandedCardId={data.selectedRowId}
+                expandedCardId={mobileExpandedCardId}
                 selectMode={false}
                 canEdit={canEditInventory}
                 canEditTable={data.canEditTable}
@@ -580,9 +587,9 @@ export function InventoryPage({
                 filteredRowsLength={filters.filteredRows.length}
                 onToggleRowSelection={data.onToggleRowSelection}
                 onToggleSelectAllFiltered={data.onToggleSelectAllFiltered}
-                onExpandCard={(id) => data.setSelectedRowId(id === data.selectedRowId ? null : id)}
+                onExpandCard={setMobileExpandedCardId}
                 onSetSelectMode={() => {}}
-                onSetSelectedRowId={data.setSelectedRowId}
+                onSetSelectedRowId={() => {}}
                 onMoveSelectedRows={data.onMoveSelectedRows}
                 onRequestDelete={data.onRequestDeleteSelectedRows}
                 onCellChange={data.onCellChange}
@@ -680,6 +687,14 @@ export function InventoryPage({
             count={filters.selectedRowIds.size}
             onConfirm={data.onConfirmDeleteSelectedRows}
             onCancel={() => data.setPendingDeleteRows(false)}
+          />
+        ) : null}
+
+        {data.deleteBlockedRows.length > 0 ? (
+          <DeleteBlockedDialog
+            blockedRows={data.deleteBlockedRows}
+            onRetire={(reason) => void data.onRetireDeleteBlocked(reason)}
+            onCancel={data.onDismissDeleteBlocked}
           />
         ) : null}
       </div>

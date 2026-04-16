@@ -296,6 +296,12 @@ export const handleImportCsv = async (ctx: RouteContext) => {
       continue;
     }
 
+    // Preserve an existing parent link on updates; seed it to the row's own id
+    // for brand-new imports so every row is at minimum its own logical item.
+    if (!mergedValues.parentItemId || typeof mergedValues.parentItemId !== "string") {
+      mergedValues.parentItemId = itemId;
+    }
+
     const itemPayload: InventoryItem = {
       id: itemId,
       organizationId: access.organizationId,

@@ -26,6 +26,10 @@ type RestockEntry = {
   // Optional: vendor URL captured at restock time. Written to the inventory
   // row so future reorders can route to the right vendor.
   reorderLink: string;
+  // Optional: vendor/supplier name. Captured in the RESTOCK_ADDED audit event
+  // so phase 2 analytics can answer "spend by vendor" and "cheapest vendor per
+  // item". Separate from reorderLink because the URL isn't always readable.
+  vendor: string;
   // Optional: price paid per unit at this restock. Stored on the row's
   // values.unitCost (visible if a unitCost column is configured).
   unitCost: string;
@@ -77,6 +81,7 @@ const createRestockEntry = (): RestockEntry => ({
   expirationDate: "",
   needsExpiration: false,
   reorderLink: "",
+  vendor: "",
   unitCost: "",
   source: "supplier",
   error: "",
@@ -526,7 +531,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
           );
           next.entries = next.entries.map((entry) => {
             if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-            return { ...entry, itemId: "", itemSearch: "", quantityToAdd: "", needsExpiration: false, expirationDate: "", reorderLink: "", unitCost: "", source: "supplier", error: "" };
+            return { ...entry, itemId: "", itemSearch: "", quantityToAdd: "", needsExpiration: false, expirationDate: "", reorderLink: "", vendor: "", unitCost: "", source: "supplier", error: "" };
           });
         }
         return next;
@@ -622,6 +627,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       expirationDate: string;
       needsExpiration: boolean;
       reorderLink: string;
+      vendor: string;
       unitCost: number | null;
       source: RestockSource;
     };
@@ -675,6 +681,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
               expirationDate: entry.expirationDate,
               needsExpiration: entry.needsExpiration,
               reorderLink: entry.reorderLink.trim() ? normalizeLink(entry.reorderLink) : "",
+              vendor: entry.vendor.trim(),
               unitCost: parsedCost,
               source: entry.source,
             });
@@ -708,6 +715,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         if (existing) {
           existing.quantityToAdd += entry.quantityToAdd;
           if (entry.reorderLink) existing.reorderLink = entry.reorderLink;
+          if (entry.vendor) existing.vendor = entry.vendor;
           if (entry.unitCost !== null) existing.unitCost = entry.unitCost;
         } else {
           mergedMap.set(entry.itemId, { ...entry });
@@ -728,6 +736,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       source: RestockSource;
       qtyDelta: number;
       unitCost?: number;
+      vendor?: string;
       reorderLink?: string;
       location?: string;
     }> = {};
@@ -751,6 +760,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         source: entry.source,
         qtyDelta: entry.quantityToAdd,
         ...(entry.unitCost !== null ? { unitCost: entry.unitCost } : {}),
+        ...(entry.vendor ? { vendor: entry.vendor } : {}),
         ...(entry.reorderLink ? { reorderLink: entry.reorderLink } : {}),
         ...(String(originalRow.values.location ?? "").trim()
           ? { location: String(originalRow.values.location ?? "").trim() }
@@ -782,6 +792,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
         source: entry.source,
         qtyDelta: entry.quantityToAdd,
         ...(entry.unitCost !== null ? { unitCost: entry.unitCost } : {}),
+        ...(entry.vendor ? { vendor: entry.vendor } : {}),
         ...(entry.reorderLink ? { reorderLink: entry.reorderLink } : {}),
         ...(String(originalRow.values.location ?? "").trim()
           ? { location: String(originalRow.values.location ?? "").trim() }
@@ -1022,6 +1033,19 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
                               </option>
                             ))}
                           </select>
+                        </div>
+                        <div className="quickadd-entry-extra">
+                          <label className="usage-field-label">Vendor (optional)</label>
+                          <input
+                            type="text"
+                            className="field"
+                            placeholder="Acme Supply Co."
+                            value={entry.vendor}
+                            onChange={(e) =>
+                              updateEntry(group.id, entry.id, { vendor: e.target.value, error: "" })
+                            }
+                            disabled={submitting}
+                          />
                         </div>
                         <div className="quickadd-entry-extra">
                           <label className="usage-field-label">Vendor link (optional)</label>

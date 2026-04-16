@@ -15,7 +15,7 @@ export type InventoryInitialAction = "import-csv" | "paste-import" | "download-t
 
 export interface InventoryPageProps {
   canEditInventory: boolean;
-  /** Whether the user's accessibleModules include "usage" (unlocks Log Usage button). */
+  /** Whether Log Usage is available to the user (currently mirrors inventory module access). */
   canLogUsage?: boolean;
   initialFilter?: ActiveTab;
   initialSearch?: string;

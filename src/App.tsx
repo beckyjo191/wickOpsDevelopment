@@ -1,6 +1,5 @@
 import { useAuthenticator } from "@aws-amplify/ui-react";
 import { useEffect, useRef, useState } from "react";
-import { LayoutDashboard, Settings as SettingsIcon } from "lucide-react";
 import SubscriptionPage from "./components/SubscriptionPage";
 import { InviteUsersPage } from "./components/InviteUsersPage";
 import { InventoryPage } from "./components/InventoryPage";
@@ -118,32 +117,12 @@ export default function App() {
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
 
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
-
   useEffect(() => {
     const mql = window.matchMedia("(max-width: 780px)");
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
     mql.addEventListener("change", handler);
     return () => mql.removeEventListener("change", handler);
   }, []);
-
-  // Hide the mobile bottom bar when the virtual keyboard is open (iOS/Android)
-  useEffect(() => {
-    if (!isMobile) return;
-    const onFocus = (e: FocusEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
-        setKeyboardOpen(true);
-      }
-    };
-    const onBlur = () => setKeyboardOpen(false);
-    document.addEventListener("focusin", onFocus);
-    document.addEventListener("focusout", onBlur);
-    return () => {
-      document.removeEventListener("focusin", onFocus);
-      document.removeEventListener("focusout", onBlur);
-    };
-  }, [isMobile]);
 
   const userViewScope =
     String(user?.attributes?.sub ?? "") ||
@@ -176,7 +155,7 @@ export default function App() {
     accessSuspended: false,
     canInviteUsers: false,
     role: "",
-    allowedModules: ["inventory", "usage"],
+    allowedModules: ["inventory"],
     orgAvailableModules: [],
     orgEnabledModules: [],
     onboardingCompleted: true,
@@ -267,7 +246,7 @@ export default function App() {
           accessSuspended: false,
           canInviteUsers: false,
           role: "",
-          allowedModules: ["inventory", "usage"],
+          allowedModules: ["inventory"],
           orgAvailableModules: [],
           orgEnabledModules: [],
           onboardingCompleted: true,
@@ -393,17 +372,8 @@ export default function App() {
   }, [authStatus, subState.status, subState.loadError]);
 
   useEffect(() => {
-    if (view === "inventory" && !subState.allowedModules.includes("inventory")) {
-      replaceView("dashboard");
-      return;
-    }
-    if (view === "usage" && !subState.allowedModules.includes("usage")) {
-      replaceView("dashboard");
-    }
-    if (view === "orders" && !subState.allowedModules.includes("inventory")) {
-      replaceView("dashboard");
-    }
-    if (view === "activity" && !subState.allowedModules.includes("inventory")) {
+    const inventoryViews: AppView[] = ["inventory", "usage", "orders", "activity"];
+    if (inventoryViews.includes(view) && !subState.allowedModules.includes("inventory")) {
       replaceView("dashboard");
     }
   }, [view, subState.allowedModules]);
@@ -465,11 +435,10 @@ export default function App() {
   const seatsRemaining = subState.seatLimit - subState.seatsUsed;
   const canInviteMore = subState.canInviteUsers && seatsRemaining > 0;
   const canAccessInventory = subState.allowedModules.includes("inventory");
-  const canAccessUsage = subState.allowedModules.includes("usage");
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
-  const canReviewUsageSubmissions = canEditInventory && canAccessUsage;
+  const canReviewUsageSubmissions = canEditInventory && canAccessInventory;
 
   let content: JSX.Element;
   if (view === "settings") {
@@ -514,7 +483,7 @@ export default function App() {
       <InventoryPage
         key={inventoryKey}
         canEditInventory={canEditInventory}
-        canLogUsage={canAccessUsage}
+        canLogUsage={canAccessInventory}
         initialFilter={inventoryInitialFilter}
         initialSearch={inventoryInitialSearch}
         initialEditCell={inventoryInitialEditCell}
@@ -533,7 +502,7 @@ export default function App() {
       />
     );
   } else if (view === "usage") {
-    content = canAccessUsage ? (
+    content = canAccessInventory ? (
       <InventoryUsagePage selectedLocation={selectedLocation} />
     ) : (
       <DashboardPage
@@ -629,7 +598,7 @@ export default function App() {
   }
 
   return (
-    <section className={`app-shell${isMobile && !keyboardOpen ? " app-shell--mobile" : ""}`}>
+    <section className="app-shell">
       <AppToolbar
         view={view}
         onNavigate={(v) => void navigateTo(v as AppView)}
@@ -641,26 +610,6 @@ export default function App() {
         onNavigate={(v) => void navigateTo(v as AppView)}
       />
       {content}
-      {isMobile && !keyboardOpen && (
-        <nav className="app-bottom-bar" aria-label="Main navigation">
-          <button
-            type="button"
-            className={`app-bottom-bar-item${view === "dashboard" ? " active" : ""}`}
-            onClick={() => void navigateTo("dashboard")}
-          >
-            <LayoutDashboard size={20} />
-            <span>Dashboard</span>
-          </button>
-          <button
-            type="button"
-            className={`app-bottom-bar-item${view === "settings" || view === "invite" ? " active" : ""}`}
-            onClick={() => void navigateTo("settings")}
-          >
-            <SettingsIcon size={20} />
-            <span>Settings</span>
-          </button>
-        </nav>
-      )}
     </section>
   );
 }

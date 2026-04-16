@@ -61,19 +61,19 @@ const routes: Route[] = [
   { method: "POST",   pattern: "/inventory/locations/rename",           needsStorage: true, module: "inventory", handler: handleRenameLocation },
 
   // Dashboard / bootstrap
-  { method: "GET",    pattern: "/inventory/alert-summary",              needsStorage: true, module: ["inventory", "usage"], handler: handleAlertSummary },
-  { method: "GET",    pattern: "/inventory/bootstrap",                  needsStorage: true, module: ["inventory", "usage"], handler: handleBootstrap },
+  { method: "GET",    pattern: "/inventory/alert-summary",              needsStorage: true, module: "inventory", handler: handleAlertSummary },
+  { method: "GET",    pattern: "/inventory/bootstrap",                  needsStorage: true, module: "inventory", handler: handleBootstrap },
 
   // Items
   { method: "GET",    pattern: "/inventory/items",                      needsStorage: true, module: "inventory", handler: handleListItems },
   { method: "POST",   pattern: "/inventory/items/save",                 needsStorage: true, module: "inventory", handler: handleSaveItems },
 
-  // Usage
-  { method: "POST",   pattern: "/inventory/usage/submit",              needsStorage: true, module: "usage", handler: handleSubmitUsage },
-  { method: "GET",    pattern: "/inventory/usage/pending",             needsStorage: true, module: "usage", handler: handleListPendingSubmissions },
-  { method: "POST",   pattern: /\/inventory\/usage\/pending\/[^/]+\/approve$/, needsStorage: true, module: "usage", handler: handleApproveSubmission },
-  { method: "POST",   pattern: /\/inventory\/usage\/pending\/[^/]+\/reject$/,  needsStorage: true, module: "usage", handler: handleRejectSubmission },
-  { method: "DELETE",  pattern: /\/inventory\/usage\/pending\/[^/]+$/,  needsStorage: true, module: "usage", handler: handleDeleteSubmission },
+  // Usage (feature within the inventory module; role-based gating applies inside handlers)
+  { method: "POST",   pattern: "/inventory/usage/submit",              needsStorage: true, module: "inventory", handler: handleSubmitUsage },
+  { method: "GET",    pattern: "/inventory/usage/pending",             needsStorage: true, module: "inventory", handler: handleListPendingSubmissions },
+  { method: "POST",   pattern: /\/inventory\/usage\/pending\/[^/]+\/approve$/, needsStorage: true, module: "inventory", handler: handleApproveSubmission },
+  { method: "POST",   pattern: /\/inventory\/usage\/pending\/[^/]+\/reject$/,  needsStorage: true, module: "inventory", handler: handleRejectSubmission },
+  { method: "DELETE",  pattern: /\/inventory\/usage\/pending\/[^/]+$/,  needsStorage: true, module: "inventory", handler: handleDeleteSubmission },
 
   // CSV import
   { method: "POST",   pattern: "/inventory/import-csv",                needsStorage: true, module: "inventory", handler: handleImportCsv },

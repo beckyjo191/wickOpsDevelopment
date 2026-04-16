@@ -115,14 +115,6 @@ export default function App() {
   };
   const [loadingLine, setLoadingLine] = useState(() => pickLoadingLine());
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 780px)").matches);
-
-  useEffect(() => {
-    const mql = window.matchMedia("(max-width: 780px)");
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
-  }, []);
 
   const userViewScope =
     String(user?.attributes?.sub ?? "") ||

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
+import { formatCurrency } from "../lib/currency";
 import { Check, ExternalLink, Link2Off, Package, Plus, Save, X } from "lucide-react";
 
 export type OrderItem = {
@@ -32,6 +33,9 @@ type ReorderItem = {
   suggestedQty: number;
   hasExpired: boolean;
   orderedAt: string | null; // most recent orderedAt across all rows
+  // Per-unit price: prefers packCost / packSize when both are set, falls back
+  // to the row's stored unitCost. Null when we have no price data at all.
+  unitCost: number | null;
 };
 
 type VendorGroup = {
@@ -388,6 +392,11 @@ function VendorChecklistCard({
                     <span className="reorder-item-status reorder-status-lowStock">
                       Low: {itemData.activeQty}/{itemData.minQuantity}
                     </span>
+                    {itemData.unitCost !== null && (
+                      <span className="reorder-item-unitcost">
+                        {formatCurrency(itemData.unitCost)}/unit
+                      </span>
+                    )}
                   </span>
                 )}
               </div>
@@ -490,6 +499,11 @@ function NoLinkCard({
                   <span className="reorder-item-status reorder-status-lowStock">
                     Low: {item.activeQty}/{item.minQuantity}
                   </span>
+                  {item.unitCost !== null && (
+                    <span className="reorder-item-unitcost">
+                      {formatCurrency(item.unitCost)}/unit
+                    </span>
+                  )}
                 </span>
               </div>
               <input
@@ -631,6 +645,19 @@ export function ReorderTab({
         Number(r.values.quantity ?? 0) < Number(best.values.quantity ?? 0) ? r : best,
       );
 
+      // Effective unit cost for estimating reorder spend: prefer the derived
+      // price from packCost / packSize when both are set, else the row's
+      // stored unitCost. Null when neither is available.
+      const packCost = Number(repRow.values.packCost);
+      const packSize = Number(repRow.values.packSize);
+      const storedUnit = Number(repRow.values.unitCost);
+      let unitCost: number | null = null;
+      if (Number.isFinite(packCost) && Number.isFinite(packSize) && packSize > 0) {
+        unitCost = packCost / packSize;
+      } else if (Number.isFinite(storedUnit) && storedUnit >= 0) {
+        unitCost = storedUnit;
+      }
+
       const item: ReorderItem = {
         row: repRow,
         allRowIds: agg.rows.map((r) => r.id),
@@ -642,6 +669,7 @@ export function ReorderTab({
         suggestedQty,
         hasExpired: agg.expiredQty > 0,
         orderedAt: agg.latestOrderedAt,
+        unitCost,
       };
 
       if (agg.reorderLink) {
@@ -740,6 +768,19 @@ export function ReorderTab({
   const isEmpty =
     totalReorderItems === 0 && noLinkItems.length === 0 && rawLines.length === 0;
 
+  // Estimated total to reorder everything in the list at the suggested qty.
+  // Raw-added items (Add Item Not Listed) and items without a known price are
+  // skipped; we count those separately so the user sees what's missing.
+  const priceableItems = [
+    ...vendorGroups.flatMap((g) => g.items),
+    ...noLinkItems,
+  ];
+  const estimatedTotal = priceableItems.reduce((sum, item) => {
+    if (item.unitCost === null) return sum;
+    return sum + item.unitCost * item.suggestedQty;
+  }, 0);
+  const missingPriceCount = priceableItems.filter((i) => i.unitCost === null).length;
+
   return (
     <div className="reorder-tab">
       <div className="reorder-header">
@@ -754,6 +795,17 @@ export function ReorderTab({
             <span className="reorder-subtitle">
               {allGroups.length} vendor{allGroups.length !== 1 ? "s" : ""}
               {noLinkItems.length > 0 && ` · ${noLinkItems.length} missing link${noLinkItems.length !== 1 ? "s" : ""}`}
+            </span>
+          )}
+          {!isEmpty && (estimatedTotal > 0 || missingPriceCount > 0) && (
+            <span className="reorder-estimate">
+              Estimated:{" "}
+              <strong>{formatCurrency(estimatedTotal)}</strong>
+              {missingPriceCount > 0 && (
+                <span className="reorder-estimate-missing">
+                  {" "}({missingPriceCount} item{missingPriceCount !== 1 ? "s" : ""} without prices)
+                </span>
+              )}
             </span>
           )}
         </div>

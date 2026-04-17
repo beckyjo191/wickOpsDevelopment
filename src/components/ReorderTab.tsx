@@ -36,6 +36,10 @@ type ReorderItem = {
   // Per-unit price: prefers packCost / packSize when both are set, falls back
   // to the row's stored unitCost. Null when we have no price data at all.
   unitCost: number | null;
+  // True when the user added this item via the "Add Items" panel (not flagged
+  // as low by the auto-reorder logic). Pre-checked in the vendor card so it
+  // rolls into Mark-as-Ordered alongside low-stock items.
+  isExtra?: boolean;
 };
 
 type VendorGroup = {
@@ -76,6 +80,7 @@ function AddItemCard({
   defaultLocation,
   onAdd,
   onClose,
+  onBack,
 }: {
   availableLocations: string[];
   defaultLocation: string;
@@ -86,6 +91,10 @@ function AddItemCard({
     location: string;
   }) => void;
   onClose: () => void;
+  /** Optional: when provided, shows a "← Back" button that returns the user
+   *  to the previous view (typically the OrderBuilderPanel). Without this
+   *  prop, only Close (×) is shown. */
+  onBack?: () => void;
 }) {
   const [name, setName] = useState("");
   const [link, setLink] = useState("");
@@ -110,6 +119,15 @@ function AddItemCard({
   return (
     <div className="reorder-add-item-form app-card">
       <div className="reorder-add-item-form-header">
+        {onBack ? (
+          <button
+            type="button"
+            className="button button-ghost button-sm reorder-add-item-back"
+            onClick={onBack}
+          >
+            ← Back
+          </button>
+        ) : null}
         <h4>Add Item Not Listed</h4>
         <button
           type="button"
@@ -174,6 +192,262 @@ function AddItemCard({
           onClick={handleSubmit}
         >
           Add to reorder list
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── OrderBuilderPanel ──────────────────────────────────────────────────────
+// Top-of-reorder-page search panel. Lets users add existing inventory items
+// to the current reorder (even if they're not low) and fall through to the
+// "+ Add new item" flow for brand-new items. Picked items route into the
+// matching vendor card by reorderLink domain, pre-checked.
+
+function OrderBuilderPanel({
+  inventoryRows,
+  availableLocations,
+  defaultLocation,
+  alreadyPickedRowIds,
+  onPick,
+  onAddNew,
+  onClose,
+  onSaveReorderLink,
+}: {
+  inventoryRows: InventoryRow[];
+  availableLocations: string[];
+  defaultLocation: string;
+  /** Row IDs already in the reorder list (low-stock, No-Link, or previously
+   *  picked). We exclude these from search results so users don't add dupes. */
+  alreadyPickedRowIds: Set<string>;
+  onPick: (rowId: string) => void;
+  onAddNew: () => void;
+  onClose: () => void;
+  /** When provided, picking an item that has no reorderLink triggers an inline
+   *  prompt to add one before the item goes onto the reorder list. The user
+   *  can also skip, in which case the item lands in the No-Link card. */
+  onSaveReorderLink?: (rowIds: string[], link: string) => Promise<void> | void;
+}) {
+  const [search, setSearch] = useState("");
+  const [location, setLocation] = useState(defaultLocation);
+  // When the user picks an unlinked row, we hold it here and show an inline
+  // link-prompt form instead of adding to the reorder list immediately.
+  const [linkPromptRow, setLinkPromptRow] = useState<InventoryRow | null>(null);
+  const [linkDraft, setLinkDraft] = useState("");
+  const [savingLink, setSavingLink] = useState(false);
+
+  const results = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = inventoryRows.filter((row) => {
+      if (alreadyPickedRowIds.has(row.id)) return false;
+      // Skip retired rows — they're not orderable.
+      if (row.values.retiredAt) return false;
+      const rowLocation = String(row.values.location ?? "").trim();
+      if (location) {
+        // If the user picked a location, only include matches. Empty location
+        // on the row means "unassigned" — only matches when filter is also "".
+        if (rowLocation !== location) return false;
+      }
+      if (!q) return true;
+      const itemName = String(row.values.itemName ?? "").trim().toLowerCase();
+      return itemName.includes(q);
+    });
+    // Limit to first 20 so the panel doesn't explode for huge inventories.
+    return filtered.slice(0, 20);
+  }, [inventoryRows, alreadyPickedRowIds, search, location]);
+
+  const formatItem = (row: InventoryRow) => {
+    const name = String(row.values.itemName ?? "").trim() || "Untitled";
+    const qty = Number(row.values.quantity ?? 0);
+    const min = Number(row.values.minQuantity ?? 0);
+    const qtyLabel = Number.isFinite(min) && min > 0 ? `${qty}/${min}` : String(qty);
+    const loc = String(row.values.location ?? "").trim();
+    const hasLink = String(row.values.reorderLink ?? "").trim() !== "";
+    return { name, qtyLabel, loc, hasLink };
+  };
+
+  const handleResultClick = (row: InventoryRow) => {
+    const hasLink = String(row.values.reorderLink ?? "").trim() !== "";
+    if (hasLink) {
+      onPick(row.id);
+      return;
+    }
+    // No link — open the inline link prompt before adding.
+    setLinkPromptRow(row);
+    setLinkDraft("");
+  };
+
+  const handleSkipLink = () => {
+    if (!linkPromptRow) return;
+    onPick(linkPromptRow.id);
+    setLinkPromptRow(null);
+    setLinkDraft("");
+  };
+
+  const handleSaveLinkAndAdd = async () => {
+    if (!linkPromptRow) return;
+    const trimmed = linkDraft.trim();
+    if (!trimmed) {
+      // Empty = same as skip.
+      handleSkipLink();
+      return;
+    }
+    if (onSaveReorderLink) {
+      setSavingLink(true);
+      try {
+        await onSaveReorderLink([linkPromptRow.id], normalizeLinkValue(trimmed));
+      } finally {
+        setSavingLink(false);
+      }
+    }
+    onPick(linkPromptRow.id);
+    setLinkPromptRow(null);
+    setLinkDraft("");
+  };
+
+  return (
+    <div className="order-builder-panel app-card">
+      <div className="order-builder-header">
+        <div>
+          <h4>Add items to this reorder</h4>
+          <p className="order-builder-hint">
+            Search your inventory and tap an item to add it to the reorder
+            list. Items stay unchecked — you'll check them when you're ready
+            to Mark as Ordered.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="button button-ghost button-sm"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <div className="order-builder-controls">
+        <label className="order-builder-field">
+          <span>Location</span>
+          <select
+            className="field"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+          >
+            <option value="">All / Unassigned</option>
+            {availableLocations.map((loc) => (
+              <option key={loc} value={loc}>
+                {loc}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="order-builder-field order-builder-field--search">
+          <span>Search inventory</span>
+          <input
+            className="field"
+            type="search"
+            placeholder="Type an item name…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            autoFocus
+          />
+        </label>
+      </div>
+      {linkPromptRow ? (
+        <div className="order-builder-link-prompt">
+          <div className="order-builder-link-prompt-head">
+            <Link2Off size={16} />
+            <span>
+              <strong>{String(linkPromptRow.values.itemName ?? "").trim() || "This item"}</strong>{" "}
+              has no vendor link. Add one now so it's ready next time, or skip
+              to add it to the list anyway.
+            </span>
+          </div>
+          <div className="order-builder-link-prompt-row">
+            <input
+              className="field"
+              type="url"
+              placeholder="https://vendor.com/product..."
+              value={linkDraft}
+              onChange={(e) => setLinkDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveLinkAndAdd();
+              }}
+              autoFocus
+              disabled={savingLink}
+            />
+            <button
+              type="button"
+              className="button button-primary button-sm"
+              onClick={handleSaveLinkAndAdd}
+              disabled={savingLink}
+            >
+              <Save size={13} /> Save &amp; add
+            </button>
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={handleSkipLink}
+              disabled={savingLink}
+            >
+              Skip
+            </button>
+            <button
+              type="button"
+              className="button button-ghost button-sm"
+              onClick={() => {
+                setLinkPromptRow(null);
+                setLinkDraft("");
+              }}
+              disabled={savingLink}
+              aria-label="Cancel"
+              title="Cancel"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <div className="order-builder-results">
+        {results.length === 0 ? (
+          <p className="order-builder-empty">
+            {search.trim()
+              ? "No matching items in this location."
+              : "Start typing to search inventory, or add a new item below."}
+          </p>
+        ) : (
+          results.map((row) => {
+            const { name, qtyLabel, loc, hasLink } = formatItem(row);
+            return (
+              <button
+                key={row.id}
+                type="button"
+                className="order-builder-result"
+                onClick={() => handleResultClick(row)}
+              >
+                <span className="order-builder-result-name">{name}</span>
+                <span className="order-builder-result-meta">
+                  qty {qtyLabel}
+                  {loc && ` · ${loc}`}
+                  {!hasLink && (
+                    <span className="order-builder-result-nolink">
+                      <Link2Off size={11} /> No link
+                    </span>
+                  )}
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+      <div className="order-builder-footer">
+        <span className="order-builder-footer-hint">Can't find it?</span>
+        <button
+          type="button"
+          className="button button-secondary button-sm"
+          onClick={onAddNew}
+        >
+          <Plus size={13} /> Add new item
         </button>
       </div>
     </div>
@@ -286,12 +560,16 @@ function VendorChecklistCard({
   onUpdateRawLine,
   onRemoveRawLine,
   onMarkOrdered,
+  onRemoveExtra,
 }: {
   group: VendorGroup;
   rawLines: RawLine[];
   onUpdateRawLine: (id: string, patch: Partial<RawLine>) => void;
   onRemoveRawLine: (id: string) => void;
   onMarkOrdered: (rowIds: string[], vendor: string, orderItems: OrderItem[]) => void;
+  /** Called when the user removes an extra-picked item (non-low item they
+   *  added via the OrderBuilderPanel) from the reorder list. */
+  onRemoveExtra?: (rowId: string) => void;
 }) {
   const [lines, setLines] = useState<LineState[]>(() =>
     group.items.map((item) => ({
@@ -299,6 +577,9 @@ function VendorChecklistCard({
       allRowIds: item.allRowIds,
       name: item.itemName,
       link: item.reorderLink,
+      // All items start unchecked — including extras manually added via
+      // OrderBuilderPanel. Extras live in the list as "reorder this" until
+      // the user explicitly checks them to roll into Mark-as-Ordered.
       checked: false,
       qty: String(item.suggestedQty),
     })),
@@ -317,6 +598,27 @@ function VendorChecklistCard({
   const checkedCount =
     lines.filter((l) => l.checked).length +
     rawLines.filter((r) => r.name.trim() && Number(r.qty) > 0).length;
+
+  // Running subtotal across checked lines (inventory items with a known
+  // unit cost). Raw/freeform lines don't have a price attached so they're
+  // excluded — we surface a count of those separately so users know why
+  // the subtotal might look light.
+  const checkedSubtotal = lines.reduce((sum, line) => {
+    if (!line.checked) return sum;
+    const item = group.items.find((i) => i.row.id === line.rowId);
+    if (!item || item.unitCost === null) return sum;
+    const qty = Math.max(0, Number(line.qty) || 0);
+    return sum + item.unitCost * qty;
+  }, 0);
+  const checkedMissingPrice = lines.filter((line) => {
+    if (!line.checked) return false;
+    const item = group.items.find((i) => i.row.id === line.rowId);
+    return !item || item.unitCost === null;
+  }).length;
+  const freeformCheckedCount = rawLines.filter(
+    (r) => r.name.trim() && Number(r.qty) > 0,
+  ).length;
+  const unpricedCount = checkedMissingPrice + freeformCheckedCount;
 
   const handlePlaceOrder = () => {
     const inventoryItems = lines
@@ -365,8 +667,9 @@ function VendorChecklistCard({
 
         {lines.map((line) => {
           const itemData = group.items.find((i) => i.row.id === line.rowId);
+          const isExtra = itemData?.isExtra === true;
           return (
-            <div key={line.rowId} className={`checklist-item checklist-item--form${line.checked ? " checked" : ""}`}>
+            <div key={line.rowId} className={`checklist-item checklist-item--form${line.checked ? " checked" : ""}${isExtra ? " checklist-item--extra" : ""}`}>
               <button
                 type="button"
                 className={`checklist-checkbox${line.checked ? " checked" : ""}`}
@@ -389,9 +692,28 @@ function VendorChecklistCard({
                 </a>
                 {itemData && (
                   <span className="checklist-item-detail">
-                    <span className="reorder-item-status reorder-status-lowStock">
-                      Low: {itemData.activeQty}/{itemData.minQuantity}
-                    </span>
+                    {isExtra ? (
+                      onRemoveExtra ? (
+                        <button
+                          type="button"
+                          className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
+                          onClick={() => onRemoveExtra(line.rowId)}
+                          title="Remove from reorder list"
+                          aria-label={`Remove ${line.name} from reorder`}
+                        >
+                          Added
+                          <X size={11} />
+                        </button>
+                      ) : (
+                        <span className="reorder-item-status reorder-status-extra">
+                          Added
+                        </span>
+                      )
+                    ) : (
+                      <span className="reorder-item-status reorder-status-lowStock">
+                        Low: {itemData.activeQty}/{itemData.minQuantity}
+                      </span>
+                    )}
                     {itemData.unitCost !== null && (
                       <span className="reorder-item-unitcost">
                         {formatCurrency(itemData.unitCost)}/unit
@@ -425,9 +747,28 @@ function VendorChecklistCard({
       {checkedCount > 0 && (
         <div className="checklist-done-banner checklist-done-banner--inline">
           <div className="checklist-done-banner-row">
-            <span className="checklist-done-banner-count">
-              {checkedCount} item{checkedCount !== 1 ? "s" : ""} selected
-            </span>
+            <div className="checklist-done-banner-summary">
+              <span className="checklist-done-banner-count">
+                {checkedCount} item{checkedCount !== 1 ? "s" : ""} selected
+              </span>
+              {checkedSubtotal > 0 && (
+                <span className="checklist-done-banner-subtotal">
+                  Subtotal: <strong>{formatCurrency(checkedSubtotal)}</strong>
+                  {unpricedCount > 0 && (
+                    <span className="checklist-done-banner-unpriced">
+                      {" "}(+{unpricedCount} without price)
+                    </span>
+                  )}
+                </span>
+              )}
+              {checkedSubtotal === 0 && unpricedCount > 0 && (
+                <span className="checklist-done-banner-subtotal">
+                  <span className="checklist-done-banner-unpriced">
+                    No pricing on selected items
+                  </span>
+                </span>
+              )}
+            </div>
             <button
               type="button"
               className="button button-primary button-sm"
@@ -450,9 +791,11 @@ function VendorChecklistCard({
 function NoLinkCard({
   items,
   onSaveReorderLink,
+  onRemoveExtra,
 }: {
   items: ReorderItem[];
   onSaveReorderLink?: (rowIds: string[], link: string) => Promise<void> | void;
+  onRemoveExtra?: (rowId: string) => void;
 }) {
   const [linkInputs, setLinkInputs] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -492,13 +835,32 @@ function NoLinkCard({
           const value = linkInputs[item.row.id] ?? "";
           const saving = savingId === item.row.id;
           return (
-            <div key={item.row.id} className="reorder-nolink-row">
+            <div key={item.row.id} className={`reorder-nolink-row${item.isExtra ? " reorder-nolink-row--extra" : ""}`}>
               <div className="reorder-nolink-name">
                 <span className="reorder-item-name">{item.itemName}</span>
                 <span className="reorder-item-badges">
-                  <span className="reorder-item-status reorder-status-lowStock">
-                    Low: {item.activeQty}/{item.minQuantity}
-                  </span>
+                  {item.isExtra ? (
+                    onRemoveExtra ? (
+                      <button
+                        type="button"
+                        className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
+                        onClick={() => onRemoveExtra(item.row.id)}
+                        title="Remove from reorder list"
+                        aria-label={`Remove ${item.itemName} from reorder`}
+                      >
+                        Added
+                        <X size={11} />
+                      </button>
+                    ) : (
+                      <span className="reorder-item-status reorder-status-extra">
+                        Added
+                      </span>
+                    )
+                  ) : (
+                    <span className="reorder-item-status reorder-status-lowStock">
+                      Low: {item.activeQty}/{item.minQuantity}
+                    </span>
+                  )}
                   {item.unitCost !== null && (
                     <span className="reorder-item-unitcost">
                       {formatCurrency(item.unitCost)}/unit
@@ -699,12 +1061,124 @@ export function ReorderTab({
   // smart-routed to vendor cards based on the link domain.
   const [rawLines, setRawLines] = useState<RawLine[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showOrderBuilder, setShowOrderBuilder] = useState(false);
+  // Rows the user has explicitly picked for this reorder via the panel (not
+  // low-stock). Stored as rowId — we look up the live row from inventoryRows
+  // during rendering so stale pick state doesn't drift if the row changes.
+  const [extraPickRowIds, setExtraPickRowIds] = useState<string[]>([]);
+
+  // Build a ReorderItem for each extra-picked row, using the same shape and
+  // unit-cost derivation as low-stock items. Items already represented in
+  // vendorGroups/noLinkItems (user picked something that became low) are
+  // skipped so we don't render duplicates.
+  const extraPickedItems = useMemo<ReorderItem[]>(() => {
+    if (extraPickRowIds.length === 0) return [];
+    const alreadyCoveredRowIds = new Set<string>();
+    for (const g of vendorGroups) {
+      for (const item of g.items) {
+        item.allRowIds.forEach((id) => alreadyCoveredRowIds.add(id));
+      }
+    }
+    for (const item of noLinkItems) {
+      item.allRowIds.forEach((id) => alreadyCoveredRowIds.add(id));
+    }
+    const out: ReorderItem[] = [];
+    for (const rowId of extraPickRowIds) {
+      if (alreadyCoveredRowIds.has(rowId)) continue;
+      const row = rows.find((r) => r.id === rowId);
+      if (!row) continue;
+      const itemName = String(row.values.itemName ?? "").trim() || `Item ${row.id.slice(0, 8)}`;
+      const activeQty = Number.isFinite(Number(row.values.quantity)) ? Number(row.values.quantity) : 0;
+      const minQuantity = Number(row.values.minQuantity);
+      const hasMin = Number.isFinite(minQuantity) && minQuantity > 0;
+      const reorderLink = normalizeLinkValue(String(row.values.reorderLink ?? "").trim());
+      // Effective unit cost — same rules as low-stock items.
+      const packCost = Number(row.values.packCost);
+      const packSize = Number(row.values.packSize);
+      const storedUnit = Number(row.values.unitCost);
+      let unitCost: number | null = null;
+      if (Number.isFinite(packCost) && Number.isFinite(packSize) && packSize > 0) {
+        unitCost = packCost / packSize;
+      } else if (Number.isFinite(storedUnit) && storedUnit >= 0) {
+        unitCost = storedUnit;
+      }
+      out.push({
+        row,
+        allRowIds: [row.id],
+        itemName,
+        reorderLink,
+        activeQty,
+        expiredQty: 0,
+        minQuantity: hasMin ? minQuantity : 0,
+        suggestedQty: 1, // default 1 for proactive picks
+        hasExpired: false,
+        orderedAt: null,
+        unitCost,
+        isExtra: true,
+      });
+    }
+    return out;
+  }, [extraPickRowIds, vendorGroups, noLinkItems, rows]);
+
+  // Merge extra picks into the same vendor-domain grouping as low-stock items.
+  // Items with a reorderLink route to the matching vendor card; items without
+  // one go to the No-Link card (treated just like low-stock unlinked items).
+  const vendorGroupsWithExtras = useMemo<VendorGroup[]>(() => {
+    if (extraPickedItems.length === 0) return vendorGroups;
+    // Clone the groups so we don't mutate the original memo result.
+    const cloned: VendorGroup[] = vendorGroups.map((g) => ({
+      domain: g.domain,
+      items: [...g.items],
+    }));
+    const domainIndex = new Map(cloned.map((g, i) => [g.domain, i]));
+    for (const item of extraPickedItems) {
+      if (!item.reorderLink) continue; // no-link extras handled below
+      const domain = getVendorDomain(item.reorderLink);
+      const idx = domainIndex.get(domain);
+      if (idx === undefined) {
+        domainIndex.set(domain, cloned.length);
+        cloned.push({ domain, items: [item] });
+      } else {
+        cloned[idx].items.push(item);
+      }
+    }
+    return cloned;
+  }, [vendorGroups, extraPickedItems]);
+
+  const noLinkItemsWithExtras = useMemo<ReorderItem[]>(() => {
+    const extras = extraPickedItems.filter((i) => !i.reorderLink);
+    if (extras.length === 0) return noLinkItems;
+    return [...noLinkItems, ...extras];
+  }, [noLinkItems, extraPickedItems]);
+
+  // Set of row IDs already in the reorder list — used by OrderBuilderPanel to
+  // hide already-covered items from search results.
+  const alreadyPickedRowIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of vendorGroupsWithExtras) {
+      for (const item of g.items) {
+        item.allRowIds.forEach((id) => set.add(id));
+      }
+    }
+    for (const item of noLinkItemsWithExtras) {
+      item.allRowIds.forEach((id) => set.add(id));
+    }
+    return set;
+  }, [vendorGroupsWithExtras, noLinkItemsWithExtras]);
+
+  const handlePickExtra = (rowId: string) => {
+    setExtraPickRowIds((prev) => (prev.includes(rowId) ? prev : [...prev, rowId]));
+  };
+
+  const handleRemoveExtra = (rowId: string) => {
+    setExtraPickRowIds((prev) => prev.filter((id) => id !== rowId));
+  };
 
   // Combine real vendor groups with synthetic groups for raw lines whose link
   // points to a domain that isn't already in the reorder list (or to a brand
   // new vendor).
   const allGroups = useMemo(() => {
-    const existingDomains = new Set(vendorGroups.map((g) => g.domain));
+    const existingDomains = new Set(vendorGroupsWithExtras.map((g) => g.domain));
     const syntheticDomains = new Set<string>();
     for (const raw of rawLines) {
       const domain = computeRawLineDomain(raw);
@@ -713,8 +1187,8 @@ export function ReorderTab({
     const synthetic: VendorGroup[] = Array.from(syntheticDomains)
       .sort()
       .map((domain) => ({ domain, items: [] }));
-    return [...vendorGroups, ...synthetic];
-  }, [vendorGroups, rawLines]);
+    return [...vendorGroupsWithExtras, ...synthetic];
+  }, [vendorGroupsWithExtras, rawLines]);
 
   const getRawLinesForDomain = (domain: string) =>
     rawLines.filter((r) => computeRawLineDomain(r) === domain);
@@ -764,16 +1238,16 @@ export function ReorderTab({
     setRawLines((prev) => prev.filter((r) => computeRawLineDomain(r) !== vendor));
   };
 
-  const totalReorderItems = vendorGroups.reduce((sum, g) => sum + g.items.length, 0);
+  const totalReorderItems = vendorGroupsWithExtras.reduce((sum, g) => sum + g.items.length, 0);
   const isEmpty =
-    totalReorderItems === 0 && noLinkItems.length === 0 && rawLines.length === 0;
+    totalReorderItems === 0 && noLinkItemsWithExtras.length === 0 && rawLines.length === 0;
 
   // Estimated total to reorder everything in the list at the suggested qty.
   // Raw-added items (Add Item Not Listed) and items without a known price are
   // skipped; we count those separately so the user sees what's missing.
   const priceableItems = [
-    ...vendorGroups.flatMap((g) => g.items),
-    ...noLinkItems,
+    ...vendorGroupsWithExtras.flatMap((g) => g.items),
+    ...noLinkItemsWithExtras,
   ];
   const estimatedTotal = priceableItems.reduce((sum, item) => {
     if (item.unitCost === null) return sum;
@@ -794,7 +1268,7 @@ export function ReorderTab({
           {!isEmpty && (
             <span className="reorder-subtitle">
               {allGroups.length} vendor{allGroups.length !== 1 ? "s" : ""}
-              {noLinkItems.length > 0 && ` · ${noLinkItems.length} missing link${noLinkItems.length !== 1 ? "s" : ""}`}
+              {noLinkItemsWithExtras.length > 0 && ` · ${noLinkItemsWithExtras.length} missing link${noLinkItemsWithExtras.length !== 1 ? "s" : ""}`}
             </span>
           )}
           {!isEmpty && (estimatedTotal > 0 || missingPriceCount > 0) && (
@@ -809,16 +1283,32 @@ export function ReorderTab({
             </span>
           )}
         </div>
-        {!showAddForm && (
+        {!showOrderBuilder && !showAddForm && (
           <button
             type="button"
             className="button button-secondary reorder-add-item-btn"
-            onClick={() => setShowAddForm(true)}
+            onClick={() => setShowOrderBuilder(true)}
           >
-            <Plus size={15} /> Add Item Not Listed
+            <Plus size={15} /> Add Items
           </button>
         )}
       </div>
+
+      {showOrderBuilder && (
+        <OrderBuilderPanel
+          inventoryRows={rows}
+          availableLocations={availableLocations}
+          defaultLocation={selectedLocation ?? ""}
+          alreadyPickedRowIds={alreadyPickedRowIds}
+          onPick={handlePickExtra}
+          onAddNew={() => {
+            setShowOrderBuilder(false);
+            setShowAddForm(true);
+          }}
+          onClose={() => setShowOrderBuilder(false)}
+          onSaveReorderLink={onSaveReorderLink}
+        />
+      )}
 
       {showAddForm && (
         <AddItemCard
@@ -826,6 +1316,10 @@ export function ReorderTab({
           defaultLocation={selectedLocation ?? ""}
           onAdd={handleAddRawLine}
           onClose={() => setShowAddForm(false)}
+          onBack={() => {
+            setShowAddForm(false);
+            setShowOrderBuilder(true);
+          }}
         />
       )}
 
@@ -847,12 +1341,17 @@ export function ReorderTab({
             onUpdateRawLine={handleUpdateRawLine}
             onRemoveRawLine={handleRemoveRawLine}
             onMarkOrdered={handleMarkOrderedForVendor}
+            onRemoveExtra={handleRemoveExtra}
           />
         );
       })}
 
-      {noLinkItems.length > 0 && (
-        <NoLinkCard items={noLinkItems} onSaveReorderLink={onSaveReorderLink} />
+      {noLinkItemsWithExtras.length > 0 && (
+        <NoLinkCard
+          items={noLinkItemsWithExtras}
+          onSaveReorderLink={onSaveReorderLink}
+          onRemoveExtra={handleRemoveExtra}
+        />
       )}
     </div>
   );

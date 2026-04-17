@@ -1,12 +1,32 @@
 // ── Shared: columns.ts ──────────────────────────────────────────────────────
 // Column listing and core-column seeding.
 
-import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "./clients";
 import { INVENTORY_COLUMN_BY_MODULE_INDEX } from "./config";
 import { normalizeLooseKey } from "./normalize";
 import { ensureStorageForOrganization } from "./storage";
 import type { InventoryColumn, InventoryStorage } from "./types";
+
+/**
+ * Authoritative `isEditable` flag per core column key. Used by
+ * `ensureColumns` to reconcile existing orgs' column rows when the flag
+ * changes across releases (lazy-seed's `attribute_not_exists` blocks updates
+ * to existing rows, so schema drift accumulates without this step).
+ *
+ * Keep in sync with the `defaults` array below.
+ */
+const CORE_COLUMN_IS_EDITABLE: Record<string, boolean> = {
+  itemName: true,
+  quantity: true,
+  minQuantity: true,
+  expirationDate: true,
+  location: true,
+  reorderLink: true,
+  unitCost: false,   // derived from packCost / packSize (or restock events)
+  packSize: true,    // user enters the box size
+  packCost: true,    // user enters the per-pack price (source of truth)
+};
 
 export const listColumns = async (storage: InventoryStorage): Promise<InventoryColumn[]> => {
   const out: InventoryColumn[] = [];
@@ -205,12 +225,39 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       }
     }
 
+    // Reconcile isEditable on existing core columns so schema changes across
+    // releases (e.g. packCost flipped to editable) propagate without needing
+    // a manual backfill. Only touches core columns whose current value
+    // disagrees with CORE_COLUMN_IS_EDITABLE.
+    let reconciled = false;
+    for (const col of existing) {
+      if (!col.isCore) continue;
+      const authoritative = CORE_COLUMN_IS_EDITABLE[col.key];
+      if (authoritative === undefined) continue;
+      if (col.isEditable === authoritative) continue;
+      try {
+        await ddb.send(
+          new UpdateCommand({
+            TableName: storage.columnTable,
+            Key: { id: col.id },
+            UpdateExpression: "SET isEditable = :v",
+            ExpressionAttributeValues: { ":v": authoritative },
+          }),
+        );
+        reconciled = true;
+      } catch (err) {
+        // Non-critical — next ensureColumns call will try again.
+        console.warn(`Failed to reconcile isEditable on ${col.key}`, err);
+      }
+    }
+
     if (
       !hasLocationColumn
       || !hasReorderLinkColumn
       || !hasUnitCostColumn
       || !hasPackSizeColumn
       || !hasPackCostColumn
+      || reconciled
     ) {
       return listColumns(storage);
     }

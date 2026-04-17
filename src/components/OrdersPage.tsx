@@ -317,20 +317,43 @@ function ReceiveOrderForm({
                 </label>
               )}
               {line.packSize > 0 && (
-                <label className="order-receive-add-inventory">
-                  <input
-                    type="checkbox"
-                    checked={line.receivingAsBoxes}
-                    onChange={(e) => updateLine(line.itemId, {
-                      receivingAsBoxes: e.target.checked,
-                      // Reset qty/cost to defaults when flipping mode so the
-                      // numbers stay coherent.
-                      qtyThisReceive: "",
-                      unitCost: "",
-                    })}
-                  />
-                  Received by box ({line.packSize}/box)
-                </label>
+                <div className="order-receive-box-toggle">
+                  <label className="order-receive-add-inventory">
+                    <input
+                      type="checkbox"
+                      checked={line.receivingAsBoxes}
+                      onChange={(e) => updateLine(line.itemId, {
+                        receivingAsBoxes: e.target.checked,
+                        // Reset qty/cost to defaults when flipping mode so the
+                        // numbers stay coherent.
+                        qtyThisReceive: "",
+                        unitCost: "",
+                      })}
+                    />
+                    {line.receivingAsBoxes ? "Received by box —" : `Received by box (${line.packSize}/box)`}
+                  </label>
+                  {line.receivingAsBoxes && (
+                    <span className="order-receive-packsize-wrap">
+                      <input
+                        type="number"
+                        min="1"
+                        className="order-receive-packsize-input"
+                        value={line.packSize}
+                        onChange={(e) => {
+                          // Per-receive override: change pack size for this
+                          // shipment without writing back to the inventory
+                          // row. Handles vendors that ship different box
+                          // sizes than the row's default.
+                          const n = Number(e.target.value);
+                          updateLine(line.itemId, {
+                            packSize: Number.isFinite(n) && n > 0 ? n : 0,
+                          });
+                        }}
+                      />
+                      <span>/box</span>
+                    </span>
+                  )}
+                </div>
               )}
               {line.error && <span className="order-form-line-error">{line.error}</span>}
             </div>

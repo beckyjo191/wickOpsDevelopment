@@ -6,7 +6,7 @@ import { RETIRE_REASONS } from "../types";
 import { ddb } from "../clients";
 import { json, parseNextToken } from "../http";
 import { getParentItemId, listItemsPage, validateNonNegativeField } from "../items";
-import { buildAuditEvent, writeAuditEvents, computeValuesDiff, hasProtectedHistory } from "../audit";
+import { buildAuditEvent, writeAuditEvents, writeAuditEventsCoalesced, computeValuesDiff, hasProtectedHistory } from "../audit";
 
 // Machine-managed fields in valuesJson. Changes to these shouldn't produce
 // ITEM_EDIT audit events — they're either identity (parentItemId) or state
@@ -25,6 +25,10 @@ export const handleListItems = async (ctx: RouteContext) => {
   const page = await listItemsPage(storage, access.organizationId, limit, start);
   return json(200, page);
 };
+
+/** True when every value is an empty string, zero, or null/undefined — i.e. a blank row. */
+const isAllDefaults = (vals: Record<string, unknown>): boolean =>
+  Object.values(vals).every((v) => v === null || v === undefined || v === "" || v === 0);
 
 export const handleSaveItems = async (ctx: RouteContext) => {
   const { storage, access, body } = ctx;
@@ -131,10 +135,6 @@ export const handleSaveItems = async (ctx: RouteContext) => {
     if (values.quantity !== undefined && values.quantity !== null) snapshot.quantity = values.quantity;
     if (values.minQuantity !== undefined && values.minQuantity !== null) snapshot.minQuantity = values.minQuantity;
     if (values.expirationDate !== undefined && values.expirationDate !== null && values.expirationDate !== "") snapshot.expirationDate = values.expirationDate;
-
-    /** True when every value is an empty string, zero, or null/undefined — i.e. a blank row. */
-    const isAllDefaults = (vals: Record<string, unknown>): boolean =>
-      Object.values(vals).every((v) => v === null || v === undefined || v === "" || v === 0);
 
     // Retire metadata: when present, the qty-to-zero change on this row is a
     // retirement, not a generic edit. Emit ITEM_RETIRE with reason + parent link
@@ -261,15 +261,35 @@ export const handleSaveItems = async (ctx: RouteContext) => {
           },
         }),
       );
-      auditEvents.push(buildAuditEvent(access, "ITEM_DELETE", deletedId, deletedName, {
-        deletedValues: oldValues ?? {},
-      }));
+      // Suppress ITEM_DELETE for rows that were never populated — a blank row
+      // created and then cleaned up is accidental noise, not activity worth
+      // logging. The delete guard above already ensures anything with real
+      // history is forced through retire, so a blank-defaults oldValues here
+      // means the row genuinely never had content.
+      const isBlankRow = !oldValues || isAllDefaults(oldValues);
+      if (!isBlankRow) {
+        auditEvents.push(buildAuditEvent(access, "ITEM_DELETE", deletedId, deletedName, {
+          deletedValues: oldValues ?? {},
+        }));
+      }
     } catch (err: any) {
       if (err?.name === "ConditionalCheckFailedException") continue;
       throw err;
     }
   }
 
-  await writeAuditEvents(storage.auditTable, auditEvents);
+  // Split events: ITEM_CREATE/ITEM_EDIT go through the coalescing path so rapid
+  // edits by the same user within a 5-minute window merge into one event.
+  // Everything else (restock, retire, delete, etc.) writes straight through.
+  const coalescibleEvents = auditEvents.filter(
+    (e) => e.action === "ITEM_CREATE" || e.action === "ITEM_EDIT",
+  );
+  const otherEvents = auditEvents.filter(
+    (e) => e.action !== "ITEM_CREATE" && e.action !== "ITEM_EDIT",
+  );
+  await Promise.all([
+    writeAuditEventsCoalesced(storage.auditTable, coalescibleEvents),
+    writeAuditEvents(storage.auditTable, otherEvents),
+  ]);
   return json(200, { ok: true });
 };

@@ -138,7 +138,81 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       }
     }
 
-    if (!hasLocationColumn || !hasReorderLinkColumn || !hasUnitCostColumn) {
+    // Ensure the packSize core column exists (items that come in cases/boxes).
+    // Hidden by default; editable so users can set per-item pack size.
+    const hasPackSizeColumn = existing.some(
+      (c) => normalizeLooseKey(c.key) === "packsize",
+    );
+    if (!hasPackSizeColumn) {
+      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 70);
+      try {
+        await ddb.send(
+          new PutCommand({
+            TableName: storage.columnTable,
+            Item: {
+              id: coreColumnIdForKey("packSize"),
+              organizationId,
+              module: "inventory",
+              key: "packSize",
+              label: "Pack Size",
+              type: "number",
+              isCore: true,
+              isRequired: false,
+              isVisible: false,
+              isEditable: true,
+              sortOrder: maxSort + 10,
+              createdAt: new Date().toISOString(),
+            } satisfies InventoryColumn,
+            ConditionExpression: "attribute_not_exists(id)",
+          }),
+        );
+      } catch (err: any) {
+        if (err?.name !== "ConditionalCheckFailedException") throw err;
+      }
+    }
+
+    // Ensure the packCost core column exists. Derived from unitCost × packSize
+    // — the frontend computes + displays; no stored value is expected.
+    // Hidden by default + non-editable so users can toggle visibility but
+    // can't type into it.
+    const hasPackCostColumn = existing.some(
+      (c) => normalizeLooseKey(c.key) === "packcost",
+    );
+    if (!hasPackCostColumn) {
+      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 80);
+      try {
+        await ddb.send(
+          new PutCommand({
+            TableName: storage.columnTable,
+            Item: {
+              id: coreColumnIdForKey("packCost"),
+              organizationId,
+              module: "inventory",
+              key: "packCost",
+              label: "Pack Cost",
+              type: "number",
+              isCore: true,
+              isRequired: false,
+              isVisible: false,
+              isEditable: false,
+              sortOrder: maxSort + 10,
+              createdAt: new Date().toISOString(),
+            } satisfies InventoryColumn,
+            ConditionExpression: "attribute_not_exists(id)",
+          }),
+        );
+      } catch (err: any) {
+        if (err?.name !== "ConditionalCheckFailedException") throw err;
+      }
+    }
+
+    if (
+      !hasLocationColumn
+      || !hasReorderLinkColumn
+      || !hasUnitCostColumn
+      || !hasPackSizeColumn
+      || !hasPackCostColumn
+    ) {
       return listColumns(storage);
     }
     return existing;
@@ -238,6 +312,36 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       // or Orders receive) so the cached latest-price matches audit history.
       isEditable: false,
       sortOrder: 70,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      organizationId,
+      module: "inventory",
+      key: "packSize",
+      label: "Pack Size",
+      type: "number",
+      isCore: true,
+      isRequired: false,
+      // Hidden by default — orgs that don't buy in boxes don't see it.
+      isVisible: false,
+      isEditable: true,
+      sortOrder: 80,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      organizationId,
+      module: "inventory",
+      key: "packCost",
+      label: "Pack Cost",
+      type: "number",
+      isCore: true,
+      isRequired: false,
+      // Hidden by default + read-only — value is derived (unitCost × packSize)
+      // and computed by the frontend; users can reveal the column but can't
+      // edit the cell directly.
+      isVisible: false,
+      isEditable: false,
+      sortOrder: 90,
       createdAt: new Date().toISOString(),
     },
   ];

@@ -1549,6 +1549,22 @@ details[open] > .settings-section-title::after {
   box-shadow: 0 0 0 2px var(--focus-ring-soft);
 }
 
+/* Fast Restock "Adding by box" toggle — shown for items with packSize > 0 */
+.quickadd-box-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.quickadd-box-toggle input {
+  cursor: pointer;
+}
+
 /* Secondary row under each Fast Restock entry: Source / vendor link / unit cost */
 .quickadd-entry-extras {
   display: grid;

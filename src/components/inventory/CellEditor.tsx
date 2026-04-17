@@ -80,6 +80,21 @@ export function CellEditor({
       );
     }
 
+    // packCost is derived: unitCost × packSize. Computed here so users can
+    // toggle the column on and see the pack price without anything being
+    // stored. Stays read-only.
+    if (column.key === "packCost") {
+      const unit = Number(row.values.unitCost);
+      const pack = Number(row.values.packSize);
+      const derived = Number.isFinite(unit) && Number.isFinite(pack) && pack > 0
+        ? formatCurrency(unit * pack)
+        : "";
+      if (variant === "mobile") {
+        return <span className="inventory-card-field-value">{derived || "--"}</span>;
+      }
+      return <div className="inventory-readonly-cell">{derived}</div>;
+    }
+
     // Non-link read-only
     if (variant === "mobile") {
       return (

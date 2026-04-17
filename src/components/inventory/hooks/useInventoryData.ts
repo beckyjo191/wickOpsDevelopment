@@ -314,34 +314,40 @@ export function useInventoryData({
     const cellKey = `${rowId}:${columnKey}`;
     if (editSessionCellRef.current === cellKey) return;
     editSessionCellRef.current = cellKey;
+
+    // Figure out whether the user is continuing on the same row (blur→focus
+    // between cells of one row) or switching to a new row. The previously-
+    // pinned row can be held in editingRowIdRef (active edit) OR
+    // recentlyEditedRowIdRef (grace period after blur).
+    const prevPinnedRowId = editingRowIdRef.current ?? recentlyEditedRowIdRef.current;
+    const switchingRow = prevPinnedRowId !== null && prevPinnedRowId !== rowId;
+
     editingRowIdRef.current = rowId;
-    // Capture the row's current position in the filtered list so the filters
-    // hook can keep the row pinned there during the edit — prevents it from
-    // jumping around as its sort key (e.g. item name) changes per keystroke.
-    // Skip if this is a newly-added row (anchor already governs its spot).
-    if (!newRowAnchorIdRef.current) {
-      const idx = filteredRowIds.indexOf(rowId);
-      editingOriginalIndexRef.current = idx >= 0 ? idx : null;
-    }
-    // Clear grace-period timers if the user is resuming edits on the same row
-    if (recentlyEditedRowIdRef.current === rowId) {
-      if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
-      recentlyEditedRowIdRef.current = null;
-      recentlyEditedTimerRef.current = null;
-      if (anchorReleaseTimerRef.current) clearTimeout(anchorReleaseTimerRef.current);
-      anchorReleaseTimerRef.current = null;
-    } else if (recentlyEditedRowIdRef.current && recentlyEditedRowIdRef.current !== rowId) {
-      // User moved to a different row — clear the old grace timers and
-      // release the anchor immediately so the previous row re-sorts now.
-      if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
-      recentlyEditedRowIdRef.current = null;
-      recentlyEditedTimerRef.current = null;
-      if (anchorReleaseTimerRef.current) clearTimeout(anchorReleaseTimerRef.current);
-      anchorReleaseTimerRef.current = null;
+
+    // Cancel any grace-period timers from the previous edit session.
+    if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
+    recentlyEditedRowIdRef.current = null;
+    recentlyEditedTimerRef.current = null;
+    if (anchorReleaseTimerRef.current) clearTimeout(anchorReleaseTimerRef.current);
+    anchorReleaseTimerRef.current = null;
+
+    if (switchingRow) {
+      // Release the previous row's anchor + pin — user has moved on.
       if (newRowAnchorIdRef.current) {
         newRowAnchorIdRef.current = null;
-        setSortEpoch((n) => n + 1);
       }
+      editingOriginalIndexRef.current = null;
+      setSortEpoch((n) => n + 1);
+    }
+
+    // Capture this row's current position for pinning so it doesn't jump
+    // around as its sort key changes per keystroke. Skip if:
+    //  - the row is a newly-added row with an anchor (anchor governs its spot), or
+    //  - we already have a pin captured for this row (resuming same-row edit,
+    //    or onAddRow's top-pin set it to 0 before any cell click).
+    if (!newRowAnchorIdRef.current && editingOriginalIndexRef.current === null) {
+      const idx = filteredRowIds.indexOf(rowId);
+      editingOriginalIndexRef.current = idx >= 0 ? idx : null;
     }
     // Defer state updates so they don't cause a re-render that clears
     // the text selection from select(). Also re-select after the deferred
@@ -365,21 +371,18 @@ export function useInventoryData({
     const rowId = editingRowIdRef.current;
     editSessionCellRef.current = null;
     editingRowIdRef.current = null;
-    // Release the pinned position so the row re-sorts naturally once the
-    // user leaves it. Bump sortEpoch to force the memo to re-run.
-    if (editingOriginalIndexRef.current !== null) {
-      editingOriginalIndexRef.current = null;
-      setSortEpoch((n) => n + 1);
-    }
-    // Keep the row protected from autosave for a short grace period so
-    // rapid cross-cell edits (blur → focus next cell) don't create
-    // intermediate audit entries for each field.
+    // Keep editingOriginalIndexRef set through the grace period below so
+    // the row stays pinned across blur→focus when tabbing between cells of
+    // the same row. It's cleared by the grace timer (or by
+    // beginCellEditSession when the user switches to a different row).
     if (rowId) {
       recentlyEditedRowIdRef.current = rowId;
       if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
       recentlyEditedTimerRef.current = setTimeout(() => {
         recentlyEditedRowIdRef.current = null;
         recentlyEditedTimerRef.current = null;
+        editingOriginalIndexRef.current = null;
+        setSortEpoch((n) => n + 1);
       }, 5000);
       // Short timer for releasing the sort anchor — just long enough to
       // survive the blur→focus gap when tabbing between cells (~200ms).

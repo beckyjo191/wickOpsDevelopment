@@ -97,6 +97,13 @@ type ReceiveLine = {
   /** True when this specific item has an expiration date on its inventory row.
    *  Drives whether the expiration input shows + whether it's required. */
   tracksExpiration: boolean;
+  /** Pack size from the item's inventory row. >0 enables "Received by box?"
+   *  mode where the user enters boxes + box cost instead of units + unit cost. */
+  packSize: number;
+  /** Box mode toggle (only meaningful when packSize > 0). When true,
+   *  qtyThisReceive is in BOXES and unitCost is the PER-BOX price. We convert
+   *  back to units on submit. */
+  receivingAsBoxes: boolean;
   error: string;
 };
 
@@ -125,6 +132,7 @@ function ReceiveOrderForm({
       // User can override in the input.
       let prefillCost: number | undefined = i.unitCost;
       let tracksExpiration = false;
+      let packSize = 0;
       if (!freeform) {
         const row = inventoryRows.find((r) => r.id === i.itemId);
         if (row) {
@@ -136,6 +144,8 @@ function ReceiveOrderForm({
           // already has a non-empty expiration date. Permanent items (e.g.
           // stethoscopes) have no expiration and shouldn't prompt for one.
           tracksExpiration = String(row.values.expirationDate ?? "").trim() !== "";
+          const rowPack = Number(row.values.packSize);
+          if (Number.isFinite(rowPack) && rowPack > 0) packSize = rowPack;
         }
       }
       return {
@@ -150,6 +160,8 @@ function ReceiveOrderForm({
         unitCost: prefillCost !== undefined ? formatCurrency(prefillCost) : "",
         addToInventory: freeform,  // default to save for freeform items
         tracksExpiration,
+        packSize,
+        receivingAsBoxes: false,
         error: "",
       };
     }),
@@ -181,15 +193,26 @@ function ReceiveOrderForm({
       // Drop qty=0 lines — they're "received nothing of this item," a no-op
       // on the backend. If the user entered 0 across the board, close the form
       // without calling the API (handled earlier in handleConfirmClick).
+      // When receivingAsBoxes, qtyThisReceive is # of boxes and unitCost is
+      // the per-box price; convert both back to per-unit terms before sending.
       const receiveLines: RestockReceiveLine[] = validated
         .filter((l) => Number(l.qtyThisReceive) > 0)
-        .map((l) => ({
-          itemId: l.itemId,
-          qtyThisReceive: Number(l.qtyThisReceive),
-          ...(l.expirationDate ? { expirationDate: l.expirationDate } : {}),
-          ...(l.unitCost.trim() ? { unitCost: parseCurrency(l.unitCost) } : {}),
-          ...(l.isFreeform ? { addToInventory: l.addToInventory } : {}),
-        }));
+        .map((l) => {
+          const rawQty = Number(l.qtyThisReceive);
+          const unitQty = l.receivingAsBoxes && l.packSize > 0 ? rawQty * l.packSize : rawQty;
+          const perUnitCost = l.unitCost.trim()
+            ? (l.receivingAsBoxes && l.packSize > 0
+                ? parseCurrency(l.unitCost) / l.packSize
+                : parseCurrency(l.unitCost))
+            : undefined;
+          return {
+            itemId: l.itemId,
+            qtyThisReceive: unitQty,
+            ...(l.expirationDate ? { expirationDate: l.expirationDate } : {}),
+            ...(perUnitCost !== undefined ? { unitCost: perUnitCost } : {}),
+            ...(l.isFreeform ? { addToInventory: l.addToInventory } : {}),
+          };
+        });
       if (receiveLines.length === 0) {
         // Nothing to send — backend requires at least one line.
         setError("Enter at least one received quantity above 0.");
@@ -293,6 +316,22 @@ function ReceiveOrderForm({
                   Save to inventory
                 </label>
               )}
+              {line.packSize > 0 && (
+                <label className="order-receive-add-inventory">
+                  <input
+                    type="checkbox"
+                    checked={line.receivingAsBoxes}
+                    onChange={(e) => updateLine(line.itemId, {
+                      receivingAsBoxes: e.target.checked,
+                      // Reset qty/cost to defaults when flipping mode so the
+                      // numbers stay coherent.
+                      qtyThisReceive: "",
+                      unitCost: "",
+                    })}
+                  />
+                  Received by box ({line.packSize}/box)
+                </label>
+              )}
               {line.error && <span className="order-form-line-error">{line.error}</span>}
             </div>
             <div className="order-receive-cell" data-label="Ordered">
@@ -303,12 +342,17 @@ function ReceiveOrderForm({
                 )}
               </div>
             </div>
-            <div className="order-receive-cell" data-label="Qty Receiving">
+            <div
+              className="order-receive-cell"
+              data-label={line.receivingAsBoxes ? "Boxes Receiving" : "Qty Receiving"}
+            >
               <input
                 className="field"
                 type="number"
                 min="0"
-                max={line.qtyRemaining}
+                max={line.receivingAsBoxes && line.packSize > 0
+                  ? Math.ceil(line.qtyRemaining / line.packSize)
+                  : line.qtyRemaining}
                 value={line.qtyThisReceive}
                 onChange={(e) => updateLine(line.itemId, { qtyThisReceive: e.target.value, error: "" })}
               />
@@ -327,7 +371,10 @@ function ReceiveOrderForm({
                 )}
               </div>
             )}
-            <div className="order-receive-cell" data-label="Unit Cost">
+            <div
+              className="order-receive-cell"
+              data-label={line.receivingAsBoxes ? "Cost per Box" : "Unit Cost"}
+            >
               <input
                 className="field"
                 type="text"

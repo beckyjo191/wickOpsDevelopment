@@ -397,7 +397,10 @@ export function useInventoryFilters({
     // jump around as its sort key (e.g. item name) changes per keystroke. The
     // row re-sorts normally after blur (endCellEditSession clears the ref).
     const anchorId = newRowAnchorIdRef.current;
-    const editingId = editingRowIdRef.current;
+    // Fall back to recentlyEditedRowIdRef so the row stays pinned through the
+    // blur→focus gap when tabbing between cells of the same row — the pin is
+    // only fully released on row switch or when the grace timer expires.
+    const editingId = editingRowIdRef.current ?? recentlyEditedRowIdRef.current;
     const editingOriginalIdx = editingOriginalIndexRef.current;
     let newRowEntry: (typeof filtered)[number] | null = null;
     let toSort = filtered;

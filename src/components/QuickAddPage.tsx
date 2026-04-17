@@ -36,6 +36,12 @@ type RestockEntry = {
   // Where this stock came from. Persisted to the audit event metadata so
   // analytics can distinguish supplier deliveries from donations/corrections.
   source: RestockSource;
+  /** Pack size from the selected item's inventory row. >0 enables box mode
+   *  where quantityToAdd is # of boxes and unitCost is per-box price. */
+  packSize: number;
+  /** When true, quantityToAdd is in BOXES and unitCost is the PER-BOX price.
+   *  Converted to units + per-unit cost on submit. */
+  addingAsBoxes: boolean;
   error: string;
 };
 
@@ -84,6 +90,8 @@ const createRestockEntry = (): RestockEntry => ({
   vendor: "",
   unitCost: "",
   source: "supplier",
+  packSize: 0,
+  addingAsBoxes: false,
   error: "",
 });
 
@@ -531,7 +539,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
           );
           next.entries = next.entries.map((entry) => {
             if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-            return { ...entry, itemId: "", itemSearch: "", quantityToAdd: "", needsExpiration: false, expirationDate: "", reorderLink: "", vendor: "", unitCost: "", source: "supplier", error: "" };
+            return { ...entry, itemId: "", itemSearch: "", quantityToAdd: "", needsExpiration: false, expirationDate: "", reorderLink: "", vendor: "", unitCost: "", source: "supplier", packSize: 0, addingAsBoxes: false, error: "" };
           });
         }
         return next;
@@ -560,11 +568,17 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       !!expirationDateKey &&
       !!row &&
       String(row.values[expirationDateKey] ?? "").trim().length > 0;
+    const rowPack = row ? Number(row.values.packSize) : NaN;
+    const packSize = Number.isFinite(rowPack) && rowPack > 0 ? rowPack : 0;
     updateEntry(groupId, entryId, {
       itemId,
       itemSearch: name,
       needsExpiration: hasExpiration,
       expirationDate: "",
+      packSize,
+      // Don't auto-enable box mode — user opts in. Reset in case a prior
+      // pick had it on.
+      addingAsBoxes: false,
       error: "",
     });
   };
@@ -575,6 +589,8 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
       itemId: "",
       needsExpiration: false,
       expirationDate: "",
+      packSize: 0,
+      addingAsBoxes: false,
       error: "",
     });
   };
@@ -643,11 +659,12 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
 
       const nextEntries = group.entries.map((entry) => {
         const itemId = entry.itemId.trim();
-        const quantityToAdd = Number(entry.quantityToAdd);
+        const rawQty = Number(entry.quantityToAdd);
         const isEmpty = !itemId && entry.quantityToAdd.trim() === "";
         if (isEmpty) return entry;
 
         // Validate the optional unit cost if provided — ignore otherwise.
+        // In box mode this is the PER-BOX price; converted below.
         let parsedCost: number | null = null;
         const rawCost = entry.unitCost.trim();
         if (rawCost) {
@@ -659,12 +676,23 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
           parsedCost = n;
         }
 
+        // Convert box inputs to unit inputs. In box mode the user entered
+        // # of boxes + per-box price; the restock + inventory math is all
+        // per-unit, so multiply / divide once here.
+        const isBoxMode = entry.addingAsBoxes && entry.packSize > 0;
+        const quantityToAdd = isBoxMode ? rawQty * entry.packSize : rawQty;
+        const perUnitCost = parsedCost !== null && isBoxMode
+          ? parsedCost / entry.packSize
+          : parsedCost;
+
         let error = "";
         if (!itemId) {
           error = "Select an item";
           hasError = true;
         } else if (!Number.isFinite(quantityToAdd) || quantityToAdd <= 0) {
-          error = "Enter a quantity greater than 0";
+          error = isBoxMode
+            ? "Enter a box count greater than 0"
+            : "Enter a quantity greater than 0";
           hasError = true;
         } else if (entry.needsExpiration && !entry.expirationDate) {
           error = "Enter an expiration date";
@@ -682,7 +710,7 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
               needsExpiration: entry.needsExpiration,
               reorderLink: entry.reorderLink.trim() ? normalizeLink(entry.reorderLink) : "",
               vendor: entry.vendor.trim(),
-              unitCost: parsedCost,
+              unitCost: perUnitCost,
               source: entry.source,
             });
           }
@@ -979,7 +1007,9 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
                           />
                         </div>
                         <div className="usage-entry-qty">
-                          <label className="usage-field-label">Qty to Add</label>
+                          <label className="usage-field-label">
+                            {entry.addingAsBoxes ? `Boxes to Add (${entry.packSize}/box)` : "Qty to Add"}
+                          </label>
                           <QtyStepper
                             value={entry.quantityToAdd}
                             onChange={(v) => updateEntry(group.id, entry.id, { quantityToAdd: v, error: "" })}
@@ -1061,7 +1091,9 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
                           />
                         </div>
                         <div className="quickadd-entry-extra quickadd-entry-extra--cost">
-                          <label className="usage-field-label">Unit cost (optional)</label>
+                          <label className="usage-field-label">
+                            {entry.addingAsBoxes ? "Cost per Box (optional)" : "Unit cost (optional)"}
+                          </label>
                           <input
                             type="text"
                             inputMode="decimal"
@@ -1075,6 +1107,26 @@ export function QuickAddPage({ selectedLocation }: { selectedLocation?: string |
                           />
                         </div>
                       </div>
+
+                      {entry.packSize > 0 && (
+                        <label className="quickadd-box-toggle">
+                          <input
+                            type="checkbox"
+                            checked={entry.addingAsBoxes}
+                            onChange={(e) =>
+                              updateEntry(group.id, entry.id, {
+                                addingAsBoxes: e.target.checked,
+                                // Clear inputs when flipping so numbers stay coherent.
+                                quantityToAdd: "",
+                                unitCost: "",
+                                error: "",
+                              })
+                            }
+                            disabled={submitting}
+                          />
+                          Adding by box ({entry.packSize}/box)
+                        </label>
+                      )}
 
                       {entry.error && (
                         <span className="usage-inline-error">{entry.error}</span>

@@ -23,6 +23,6 @@ export const parseCurrency = (input: string): number => Number(input.replace(/[$
  * those shouldn't get the $ treatment. If more currency fields appear later
  * (shipping cost, fees, etc.), add them here.
  */
-const CURRENCY_COLUMN_KEYS = new Set<string>(["unitCost"]);
+const CURRENCY_COLUMN_KEYS = new Set<string>(["unitCost", "packCost"]);
 
 export const isCurrencyColumnKey = (key: string): boolean => CURRENCY_COLUMN_KEYS.has(key);

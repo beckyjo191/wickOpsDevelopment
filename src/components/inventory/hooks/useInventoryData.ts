@@ -479,6 +479,13 @@ export function useInventoryData({
     editingRowIdRef.current = newRowId;
     newRowAnchorIdRef.current = anchorRowId;
     newRowPositionRef.current = position === "top" ? "above" : position;
+    // "top" add (or above/below without a valid anchor) has no anchor row to
+    // pin next to — blank values would otherwise sort the new row to the end.
+    // Pin via editingOriginalIndexRef (the "existing row being edited" path)
+    // so the filters hook puts it at index 0. Cleared by endCellEditSession.
+    if (!anchorRowId) {
+      editingOriginalIndexRef.current = 0;
+    }
     setSelectedRowId(newRowId);
     // Bump sort epoch so filtered-rows memo re-evaluates with the new ref values
     setSortEpoch((n) => n + 1);

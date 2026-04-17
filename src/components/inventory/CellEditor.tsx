@@ -1,4 +1,5 @@
-import { isCurrencyColumnKey, parseCurrency } from "../../lib/currency";
+import { useState, type ChangeEvent, type FocusEvent } from "react";
+import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../lib/currency";
 import type { InventoryColumn, InventoryRow } from "./inventoryTypes";
 
 export type CellEditorProps = {
@@ -266,70 +267,16 @@ export function CellEditor({
 
   // -- Number column --
   if (column.type === "number") {
-    const isCurrency = isCurrencyColumnKey(column.key);
-    // Currency columns accept decimals ($0.89) and allow "$" / "," on paste.
-    // Qty/min columns stay integer-only for mobile keyboard affordance.
-    const inputMode: "numeric" | "decimal" = isCurrency ? "decimal" : "numeric";
-    const pattern = isCurrency ? undefined : "[0-9]*";
-
-    // On blur, normalize a currency cell so ".89" → "0.89", "$4,239" → "4239".
-    // We store the numeric string (not "$0.89") so analytics / save events can
-    // still `Number()` the value cleanly.
-    const normalizeOnBlur = (raw: string) => {
-      if (!isCurrency) return;
-      const trimmed = raw.trim();
-      if (!trimmed) return;
-      const parsed = parseCurrency(trimmed);
-      if (Number.isFinite(parsed) && String(parsed) !== trimmed) {
-        onCellChange(row.id, column, String(parsed));
-      }
-    };
-
-    if (variant === "mobile") {
-      return (
-        <input
-          type="text"
-          inputMode={inputMode}
-          {...(pattern ? { pattern } : {})}
-          className={inputClass}
-          value={String(value ?? "")}
-          onFocus={(e) => {
-            e.currentTarget.select();
-            beginCellEditSession?.(row.id, column.key);
-          }}
-          onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
-          onBlur={(e) => {
-            normalizeOnBlur(e.currentTarget.value);
-            endCellEditSession?.();
-          }}
-        />
-      );
-    }
-    // Desktop: number uses text input with numeric/decimal mode
     return (
-      <input
-        type="text"
-        inputMode={inputMode}
-        {...(pattern ? { pattern } : {})}
-        value={String(value ?? "")}
-        onFocus={(event) => {
-          event.currentTarget.select();
-          const el = event.currentTarget;
-          const cancel = (e: Event) => { e.preventDefault(); el.removeEventListener("mouseup", cancel); };
-          el.addEventListener("mouseup", cancel, { once: true });
-          beginCellEditSession?.(row.id, column.key);
-        }}
-        onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
-        onBlur={(event) => {
-          normalizeOnBlur(event.currentTarget.value);
-          endCellEditSession?.();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            (event.currentTarget as HTMLInputElement).blur();
-          }
-        }}
-        disabled={!canEdit}
+      <NumberCell
+        column={column}
+        row={row}
+        value={value}
+        variant={variant}
+        inputClass={inputClass}
+        onCellChange={onCellChange}
+        beginCellEditSession={beginCellEditSession}
+        endCellEditSession={endCellEditSession}
       />
     );
   }
@@ -464,6 +411,98 @@ export function CellEditor({
         }
       }}
       disabled={!canEdit}
+    />
+  );
+}
+
+// ── NumberCell ─────────────────────────────────────────────────────────────
+// Editable number input. For currency columns (unitCost), the cell shows the
+// formatted value ("$4,239.00") when not focused and the raw numeric string
+// ("4239" / "4239.50") while focused so editing is clean — on blur, the value
+// is normalized (stripping "$" / "," / whitespace) and committed.
+function NumberCell({
+  column,
+  row,
+  value,
+  variant,
+  inputClass,
+  onCellChange,
+  beginCellEditSession,
+  endCellEditSession,
+}: {
+  column: InventoryColumn;
+  row: InventoryRow;
+  value: unknown;
+  variant: "desktop" | "mobile";
+  inputClass: string | undefined;
+  onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
+  beginCellEditSession?: (rowId: string, columnKey: string) => void;
+  endCellEditSession?: () => void;
+}) {
+  const isCurrency = isCurrencyColumnKey(column.key);
+  const inputMode: "numeric" | "decimal" = isCurrency ? "decimal" : "numeric";
+  const pattern = isCurrency ? undefined : "[0-9]*";
+
+  const [focused, setFocused] = useState(false);
+
+  const rawString = String(value ?? "");
+  const parsed = isCurrency ? parseCurrency(rawString) : Number(rawString);
+  const displayValue =
+    isCurrency && !focused && rawString.trim() !== "" && Number.isFinite(parsed)
+      ? formatCurrency(parsed)
+      : rawString;
+
+  // On blur, normalize a currency cell so ".89" → "0.89", "$4,239" → "4239".
+  // Store as a numeric string so save events / analytics Number() it cleanly.
+  const normalizeOnBlur = (raw: string) => {
+    if (!isCurrency) return;
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const n = parseCurrency(trimmed);
+    if (Number.isFinite(n) && String(n) !== trimmed) {
+      onCellChange(row.id, column, String(n));
+    }
+  };
+
+  const commonProps = {
+    type: "text" as const,
+    inputMode,
+    ...(pattern ? { pattern } : {}),
+    value: displayValue,
+    onFocus: (e: FocusEvent<HTMLInputElement>) => {
+      setFocused(true);
+      e.currentTarget.select();
+      beginCellEditSession?.(row.id, column.key);
+    },
+    onChange: (e: ChangeEvent<HTMLInputElement>) =>
+      onCellChange(row.id, column, e.currentTarget.value),
+    onBlur: (e: FocusEvent<HTMLInputElement>) => {
+      normalizeOnBlur(e.currentTarget.value);
+      setFocused(false);
+      endCellEditSession?.();
+    },
+  };
+
+  if (variant === "mobile") {
+    return <input {...commonProps} className={inputClass} />;
+  }
+
+  return (
+    <input
+      {...commonProps}
+      onFocus={(event) => {
+        // Desktop: suppress the mouseup that follows focus — otherwise it
+        // clobbers the text-selection we just applied in commonProps.onFocus.
+        const el = event.currentTarget;
+        const cancel = (e: Event) => { e.preventDefault(); el.removeEventListener("mouseup", cancel); };
+        el.addEventListener("mouseup", cancel, { once: true });
+        commonProps.onFocus(event);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          (event.currentTarget as HTMLInputElement).blur();
+        }
+      }}
     />
   );
 }

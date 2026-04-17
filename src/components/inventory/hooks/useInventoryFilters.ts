@@ -326,6 +326,25 @@ export function useInventoryFilters({
     const filtered = rows
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => {
+        // Search always applies — a user-initiated query shouldn't keep stale
+        // selections (editing/recently-edited) pinned in the results.
+        if (normalizedSearch) {
+          const matchesSearch = visibleColumns.some((column) => {
+            if (column.type === "date" || column.key === "expirationDate") {
+              return normalizeDateForSearch(row.values[column.key]).some((value) =>
+                value.includes(normalizedSearch),
+              );
+            }
+            return String(row.values[column.key] ?? "")
+              .toLowerCase()
+              .includes(normalizedSearch);
+          });
+          if (!matchesSearch) return false;
+        }
+
+        // Tab/location/category filters are bypassed for the row being edited
+        // (and briefly after) so its values can change mid-edit without the
+        // row disappearing out from under the user.
         if (editingRowIdRef.current && row.id === editingRowIdRef.current) return true;
         if (recentlyEditedRowIdRef.current && row.id === recentlyEditedRowIdRef.current) return true;
         const quantityRaw = row.values.quantity;
@@ -366,17 +385,7 @@ export function useInventoryFilters({
           return false;
         }
 
-        if (!normalizedSearch) return true;
-        return visibleColumns.some((column) => {
-          if (column.type === "date" || column.key === "expirationDate") {
-            return normalizeDateForSearch(row.values[column.key]).some((value) =>
-              value.includes(normalizedSearch),
-            );
-          }
-          return String(row.values[column.key] ?? "")
-            .toLowerCase()
-            .includes(normalizedSearch);
-        });
+        return true;
       });
 
     // If a *newly added* row has an anchor, pull it out before sorting so it

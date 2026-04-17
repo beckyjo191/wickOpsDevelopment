@@ -80,19 +80,22 @@ export function CellEditor({
       );
     }
 
-    // packCost is derived: unitCost × packSize. Computed here so users can
-    // toggle the column on and see the pack price without anything being
-    // stored. Stays read-only.
-    if (column.key === "packCost") {
-      const unit = Number(row.values.unitCost);
-      const pack = Number(row.values.packSize);
-      const derived = Number.isFinite(unit) && Number.isFinite(pack) && pack > 0
-        ? formatCurrency(unit * pack)
-        : "";
+    // unitCost is derived from packCost / packSize when both are present.
+    // Falls back to the stored unitCost value (from restock events) when pack
+    // info is missing. Users enter the per-pack price on the Pack Cost cell;
+    // the per-unit price updates automatically here.
+    if (column.key === "unitCost") {
+      const packCost = Number(row.values.packCost);
+      const packSize = Number(row.values.packSize);
+      const hasPack = Number.isFinite(packCost) && Number.isFinite(packSize) && packSize > 0;
+      const derived = hasPack ? formatCurrency(packCost / packSize) : "";
+      // Prefer derivation when pack info is present; else fall back to the
+      // stored value (which getReadOnlyCellText formats as currency).
+      const displayText = derived || getReadOnlyCellText(column, value);
       if (variant === "mobile") {
-        return <span className="inventory-card-field-value">{derived || "--"}</span>;
+        return <span className="inventory-card-field-value">{displayText || "--"}</span>;
       }
-      return <div className="inventory-readonly-cell">{derived}</div>;
+      return <div className="inventory-readonly-cell">{displayText}</div>;
     }
 
     // Non-link read-only

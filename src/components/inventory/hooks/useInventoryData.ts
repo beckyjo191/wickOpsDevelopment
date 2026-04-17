@@ -15,7 +15,7 @@ import {
   type PendingEntry,
 } from "../../../lib/inventoryApi";
 import { pickLoadingLine } from "../../../lib/loadingLines";
-import { formatCurrency, isCurrencyColumnKey } from "../../../lib/currency";
+import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../../lib/currency";
 import type {
   ActiveTab,
   CsvImportDialogState,
@@ -438,13 +438,29 @@ export function useInventoryData({
         }
         if (String(currentValue ?? "") === value) return row;
         changedRowId = row.id;
-        return {
-          ...row,
-          values: {
-            ...row.values,
-            [column.key]: value,
-          },
+        const nextValues: Record<string, string | number | boolean | null> = {
+          ...row.values,
+          [column.key]: value,
         };
+        // When the user edits packCost or packSize, recompute the derived
+        // unitCost from (packCost / packSize) so the stored cache stays in
+        // sync with what the Unit Cost cell will display. Analytics consumers
+        // read values.unitCost — this keeps them honest after a manual edit.
+        if (column.key === "packCost" || column.key === "packSize") {
+          const rawPackCost = column.key === "packCost" ? value : String(row.values.packCost ?? "");
+          const rawPackSize = column.key === "packSize" ? value : String(row.values.packSize ?? "");
+          const packCost = parseCurrency(rawPackCost);
+          const packSize = Number(rawPackSize);
+          if (
+            Number.isFinite(packCost)
+            && packCost >= 0
+            && Number.isFinite(packSize)
+            && packSize > 0
+          ) {
+            nextValues.unitCost = packCost / packSize;
+          }
+        }
+        return { ...row, values: nextValues };
       });
       // Synchronously update ref so onSave (via endCellEditSession/onBlur)
       // sees the latest rows before React commits the state update.

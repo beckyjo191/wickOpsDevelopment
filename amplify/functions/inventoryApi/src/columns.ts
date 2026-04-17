@@ -171,10 +171,9 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       }
     }
 
-    // Ensure the packCost core column exists. Derived from unitCost × packSize
-    // — the frontend computes + displays; no stored value is expected.
-    // Hidden by default + non-editable so users can toggle visibility but
-    // can't type into it.
+    // Ensure the packCost core column exists. Source of truth for per-pack
+    // pricing — user enters the box price. unitCost is derived from
+    // packCost / packSize for display and analytics.
     const hasPackCostColumn = existing.some(
       (c) => normalizeLooseKey(c.key) === "packcost",
     );
@@ -194,7 +193,7 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
               isCore: true,
               isRequired: false,
               isVisible: false,
-              isEditable: false,
+              isEditable: true,
               sortOrder: maxSort + 10,
               createdAt: new Date().toISOString(),
             } satisfies InventoryColumn,
@@ -336,11 +335,10 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       type: "number",
       isCore: true,
       isRequired: false,
-      // Hidden by default + read-only — value is derived (unitCost × packSize)
-      // and computed by the frontend; users can reveal the column but can't
-      // edit the cell directly.
+      // Editable — users enter the per-pack price. unitCost is derived from
+      // packCost / packSize for display and analytics.
       isVisible: false,
-      isEditable: false,
+      isEditable: true,
       sortOrder: 90,
       createdAt: new Date().toISOString(),
     },

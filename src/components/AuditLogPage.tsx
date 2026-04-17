@@ -139,26 +139,46 @@ function deriveAction(event: AuditEvent): DerivedAction {
   return "ITEM_EDIT";
 }
 
+/** True when every value is empty / zero / null — i.e. a blank row. */
+function isAllDefaultValues(vals: Record<string, unknown>): boolean {
+  const entries = Object.entries(vals);
+  if (entries.length === 0) return true;
+  return entries.every(([, v]) => v === null || v === undefined || v === "" || v === 0);
+}
+
 /**
  * True when an event carries no user-visible information and should be hidden
- * from the activity feed — notably ITEM_EDIT events whose only change is a
- * system-field stamp (parentItemId backfill, retiredAt markers, etc.).
+ * from the activity feed. Two flavours:
+ *   - ITEM_EDIT whose only changes are machine-managed system fields (the
+ *     parentItemId backfill noise, retiredAt markers, etc.).
+ *   - ITEM_DELETE of a row that never had content (accidentally created blank
+ *     row that got cleaned up) — shows up as "Deleted · Qty: 0" with no name.
  *
  * Mirrors the server-side filter in routes/audit.ts `isNoiseAuditItem`. The
  * server does the heavy lifting so pagination stays correct; this is a safety
  * net for any noise that slipped through before the server filter landed.
  */
 function isNoiseEvent(event: AuditEvent): boolean {
-  if (event.action !== "ITEM_EDIT") return false;
   const details = event.details ?? {};
-  const rawChanges = Array.isArray(details.changes)
-    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
-    : [];
-  // Empty-changes edits are unusual but keep them — they may carry context we
-  // haven't anticipated. We only suppress edits where every change is a known
-  // system field.
-  if (rawChanges.length === 0) return false;
-  return rawChanges.every((c) => SYSTEM_FIELDS.has(c.field));
+  if (event.action === "ITEM_EDIT") {
+    const rawChanges = Array.isArray(details.changes)
+      ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
+      : [];
+    // Empty-changes edits are unusual but keep them — they may carry context we
+    // haven't anticipated. We only suppress edits where every change is a known
+    // system field.
+    if (rawChanges.length === 0) return false;
+    return rawChanges.every((c) => SYSTEM_FIELDS.has(c.field));
+  }
+  if (event.action === "ITEM_DELETE") {
+    if (event.itemName && String(event.itemName).trim().length > 0) return false;
+    const deletedValues = (details.deletedValues && typeof details.deletedValues === "object")
+      ? (details.deletedValues as Record<string, unknown>)
+      : null;
+    if (!deletedValues) return true;
+    return isAllDefaultValues(deletedValues);
+  }
+  return false;
 }
 
 const ACTION_COLORS: Record<string, string> = {

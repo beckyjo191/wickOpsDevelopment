@@ -769,6 +769,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
+  const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [hasExpirationColumn, setHasExpirationColumn] = useState(false);
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
   const inventoryRowsRef = useRef<InventoryRow[]>([]);
@@ -804,7 +805,9 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
       inventoryRowsRef.current = items;
       setHasExpirationColumn(columns.some((c) => c.key === "expirationDate" && c.isVisible));
       setRegisteredLocations(Array.isArray(locs) ? locs : []);
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      setInventoryLoaded(true);
+    });
   }, []);
 
   useEffect(() => {
@@ -999,13 +1002,15 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
             </div>
           )}
 
-          <ReorderTab
-            rows={inventoryRows}
-            availableLocations={locationValues}
-            selectedLocation={selectedLocation ?? null}
-            onMarkOrdered={handleMarkOrdered}
-            onSaveReorderLink={handleSaveReorderLink}
-          />
+          {inventoryLoaded && (
+            <ReorderTab
+              rows={inventoryRows}
+              availableLocations={locationValues}
+              selectedLocation={selectedLocation ?? null}
+              onMarkOrdered={handleMarkOrdered}
+              onSaveReorderLink={handleSaveReorderLink}
+            />
+          )}
 
           {closedOrders.length > 0 && (
             <div className="orders-section">

@@ -17,23 +17,44 @@ const SYSTEM_FIELDS = new Set<string>([
   "retirementReason",
 ]);
 
+/** True when every value is an empty string, zero, or null/undefined. */
+const isAllDefaultsValues = (vals: Record<string, unknown>): boolean => {
+  const entries = Object.entries(vals);
+  if (entries.length === 0) return true;
+  return entries.every(([, v]) => v === null || v === undefined || v === "" || v === 0);
+};
+
 /**
- * True when the raw DynamoDB audit item is a system-field-only ITEM_EDIT.
- * Filters it out of the feed before it takes up a pagination slot.
+ * True when the raw DynamoDB audit item is pure noise and shouldn't appear in
+ * the feed — either a system-field-only ITEM_EDIT (parentItemId backfill, etc.)
+ * or a blank-row ITEM_DELETE (a blank row cleaned up before it ever had content
+ * is an accident, not activity). Filters it out before it takes up a pagination
+ * slot.
  */
 const isNoiseAuditItem = (item: Record<string, unknown>): boolean => {
-  if (item.action !== "ITEM_EDIT") return false;
-  let details: { changes?: unknown } = {};
+  let details: { changes?: unknown; deletedValues?: unknown } = {};
   try {
     details = JSON.parse(String(item.detailsJson ?? "{}"));
   } catch {
     return false;
   }
-  const rawChanges = Array.isArray(details.changes)
-    ? (details.changes as Array<{ field: string }>)
-    : [];
-  if (rawChanges.length === 0) return false;
-  return rawChanges.every((c) => SYSTEM_FIELDS.has(c.field));
+  if (item.action === "ITEM_EDIT") {
+    const rawChanges = Array.isArray(details.changes)
+      ? (details.changes as Array<{ field: string }>)
+      : [];
+    if (rawChanges.length === 0) return false;
+    return rawChanges.every((c) => SYSTEM_FIELDS.has(c.field));
+  }
+  if (item.action === "ITEM_DELETE") {
+    const hasItemName = typeof item.itemName === "string" && String(item.itemName).trim().length > 0;
+    if (hasItemName) return false;
+    const deletedValues = (details.deletedValues && typeof details.deletedValues === "object")
+      ? (details.deletedValues as Record<string, unknown>)
+      : null;
+    if (!deletedValues) return true;
+    return isAllDefaultsValues(deletedValues);
+  }
+  return false;
 };
 
 export const handleAuditFeed = async (ctx: RouteContext) => {

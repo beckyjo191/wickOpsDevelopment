@@ -199,7 +199,20 @@ export function InventoryDesktopTable({
                   </button>
                 </td>
               ) : null}
-              {visibleColumns.map((column) => (
+              {visibleColumns.map((column) => {
+                // Per-row editability override: unitCost is normally read-only
+                // (derived from packCost / packSize) — but when a specific row
+                // has no pack info, let the user type the per-unit price
+                // directly. Rows that do have pack info keep Unit Cost as a
+                // derived display.
+                const rowHasPackInfo =
+                  Number.isFinite(Number(row.values.packCost))
+                  && Number.isFinite(Number(row.values.packSize))
+                  && Number(row.values.packSize) > 0;
+                const cellEditable = column.key === "unitCost"
+                  ? !rowHasPackInfo
+                  : column.isEditable !== false;
+                return (
                 <td
                   key={`${row.id}-${column.id}`}
                   className={`inventory-col-${column.key}`}
@@ -210,7 +223,7 @@ export function InventoryDesktopTable({
                     column={column}
                     row={row}
                     value={row.values[column.key]}
-                    canEdit={canEditTable && column.isEditable !== false}
+                    canEdit={canEditTable && cellEditable}
                     variant="desktop"
                     isEditingLink={isEditingLinkCell(row.id, column.key)}
                     isEditingDate={isEditingDateCell(row.id, column.key)}
@@ -229,7 +242,8 @@ export function InventoryDesktopTable({
                     onSetSelectedRowId={onSetSelectedRowId}
                   />
                 </td>
-              ))}
+                );
+              })}
             </tr>
           ))}
         </tbody>

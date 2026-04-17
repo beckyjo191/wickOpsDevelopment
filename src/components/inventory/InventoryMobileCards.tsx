@@ -235,14 +235,25 @@ export function InventoryMobileCards({
 
               {isExpanded && (
                 <div className="inventory-card-detail">
-                  {visibleColumns.map((column) => (
+                  {visibleColumns.map((column) => {
+                    // Per-row editability: unitCost is derived (read-only)
+                    // when the row has pack info, but editable when it
+                    // doesn't — lets users set prices for single-unit items.
+                    const rowHasPackInfo =
+                      Number.isFinite(Number(row.values.packCost))
+                      && Number.isFinite(Number(row.values.packSize))
+                      && Number(row.values.packSize) > 0;
+                    const cellEditable = column.key === "unitCost"
+                      ? !rowHasPackInfo
+                      : column.isEditable !== false;
+                    return (
                     <div key={column.id} className="inventory-card-field" onClick={(e) => e.stopPropagation()}>
                       <label className="inventory-card-field-label">{column.label}</label>
                       <CellEditor
                         column={column}
                         row={row}
                         value={row.values[column.key]}
-                        canEdit={canEditTable && column.isEditable !== false}
+                        canEdit={canEditTable && cellEditable}
                         variant="mobile"
                         isEditingLink={isEditingLinkCell(row.id, column.key)}
                         onCellChange={onCellChange}
@@ -256,7 +267,8 @@ export function InventoryMobileCards({
                         onSetSelectedRowId={onSetSelectedRowId}
                       />
                     </div>
-                  ))}
+                    );
+                  })}
                   <div className="inventory-card-actions" onClick={(e) => e.stopPropagation()}>
                     {showRetire && (
                       <button

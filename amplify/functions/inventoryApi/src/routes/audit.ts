@@ -269,7 +269,9 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
   const since = new Date(Date.now() - days * 86400000).toISOString();
 
-  // Fetch all audit events in the time range
+  // Fetch all audit events in the period (oldest → newest so the last-known
+  // unit cost map can accumulate chronologically before ITEM_RETIRE events
+  // consume it for loss valuation).
   let allEvents: Record<string, unknown>[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
@@ -289,84 +291,157 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     lastKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (lastKey && allEvents.length < 10000);
 
-  // Usage over time: group USAGE_APPROVE events by day
+  // Aggregation buckets. All group by parentItemId (fallback to itemId) so
+  // multi-lot items roll up as one logical SKU in every view.
   const usageByDay = new Map<string, number>();
-  // User comparison: count events per user
-  const userActivity = new Map<string, { email: string; name: string; edits: number; approvals: number; submissions: number }>();
-  // Top items: count changes per item
-  const itemActivity = new Map<string, { itemName: string; changeCount: number; totalUsed: number }>();
+  const usageByItem = new Map<string, { itemName: string; qtyUsed: number }>();
+  const vendorSpend = new Map<string, { spend: number; orderIds: Set<string>; restockCount: number }>();
+  const itemSpend = new Map<string, { itemName: string; spend: number; qtyReceived: number }>();
+  const lossByReason = new Map<string, { qty: number; value: number }>();
+  /** itemKey → most recent unitCost seen so far (within period). Drives loss valuation. */
+  const lastUnitCost = new Map<string, number>();
+
+  let totalQtyUsed = 0;
+  let totalSpend = 0;
+  let totalLossQty = 0;
+  let totalLossValue = 0;
+  let restockQtyAll = 0;
+  let donationQty = 0;
 
   for (const evt of allEvents) {
     const action = String(evt.action ?? "");
     const day = String(evt.timestamp ?? "").slice(0, 10);
-    const userId = String(evt.userId ?? "");
     const itemId = String(evt.itemId ?? "");
     const itemName = String(evt.itemName ?? "");
 
-    // User activity tracking
-    if (!userActivity.has(userId)) {
-      userActivity.set(userId, {
-        email: String(evt.userEmail ?? ""),
-        name: String(evt.userName ?? ""),
-        edits: 0,
-        approvals: 0,
-        submissions: 0,
-      });
-    }
-    const ua = userActivity.get(userId)!;
-
     let details: Record<string, unknown> = {};
-    try {
-      details = JSON.parse(String(evt.detailsJson ?? "{}"));
-    } catch { /* ignore */ }
+    try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
+
+    const parentItemId = typeof details.parentItemId === "string" && details.parentItemId.trim()
+      ? String(details.parentItemId).trim()
+      : itemId;
+    const itemKey = parentItemId || itemName || itemId;
+    if (!itemKey) continue;
 
     if (action === "USAGE_APPROVE") {
-      const qtyUsed = Number(details.quantityUsed ?? 0);
-      usageByDay.set(day, (usageByDay.get(day) ?? 0) + qtyUsed);
-      ua.approvals += 1;
-      if (itemId) {
-        const ia = itemActivity.get(itemId) ?? { itemName, changeCount: 0, totalUsed: 0 };
-        ia.totalUsed += qtyUsed;
-        ia.changeCount += 1;
-        itemActivity.set(itemId, ia);
+      const qty = Number(details.quantityUsed ?? 0);
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      totalQtyUsed += qty;
+      usageByDay.set(day, (usageByDay.get(day) ?? 0) + qty);
+      const bucket = usageByItem.get(itemKey) ?? { itemName, qtyUsed: 0 };
+      bucket.qtyUsed += qty;
+      if (!bucket.itemName && itemName) bucket.itemName = itemName;
+      usageByItem.set(itemKey, bucket);
+      continue;
+    }
+
+    if (action === "RESTOCK_RECEIVED" || action === "RESTOCK_ADDED") {
+      // RESTOCK_ORDER_CREATE is intentionally skipped — it represents intent
+      // to purchase. Actual spend is realized when the order is RECEIVED (or
+      // when stock is fast-added outside the order flow). Counting both would
+      // double-count the same restock.
+      const qty = Number(
+        action === "RESTOCK_RECEIVED" ? details.qtyReceived ?? 0 : details.qtyDelta ?? 0,
+      );
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+
+      const unitCost = Number(details.unitCost ?? 0);
+      const vendor = typeof details.vendor === "string" ? details.vendor.trim() : "";
+      const source = typeof details.source === "string" ? details.source : "";
+      const isDonation = source === "donation";
+
+      restockQtyAll += qty;
+      if (isDonation) donationQty += qty;
+
+      // Remember the latest unit cost even for donations — it's useful for
+      // loss valuation later (we still value a lost donated item at its
+      // implied market price if we know it).
+      if (Number.isFinite(unitCost) && unitCost > 0) {
+        lastUnitCost.set(itemKey, unitCost);
       }
-    } else if (action === "ITEM_EDIT") {
-      ua.edits += 1;
-      if (itemId) {
-        const ia = itemActivity.get(itemId) ?? { itemName, changeCount: 0, totalUsed: 0 };
-        ia.changeCount += 1;
-        itemActivity.set(itemId, ia);
+
+      // Donations don't contribute to spend totals, by definition.
+      if (isDonation || !Number.isFinite(unitCost) || unitCost <= 0) continue;
+
+      const spend = qty * unitCost;
+      totalSpend += spend;
+
+      if (vendor) {
+        const v = vendorSpend.get(vendor)
+          ?? { spend: 0, orderIds: new Set<string>(), restockCount: 0 };
+        v.spend += spend;
+        const orderId = typeof details.orderId === "string" ? details.orderId : "";
+        if (orderId) v.orderIds.add(orderId);
+        else v.restockCount += 1;
+        vendorSpend.set(vendor, v);
       }
-    } else if (action === "USAGE_SUBMIT") {
-      ua.submissions += 1;
-    } else if (action === "ITEM_CREATE" || action === "ITEM_DELETE") {
-      ua.edits += 1;
+
+      const bucket = itemSpend.get(itemKey) ?? { itemName, spend: 0, qtyReceived: 0 };
+      bucket.spend += spend;
+      bucket.qtyReceived += qty;
+      if (!bucket.itemName && itemName) bucket.itemName = itemName;
+      itemSpend.set(itemKey, bucket);
+      continue;
+    }
+
+    if (action === "ITEM_RETIRE") {
+      const qty = Number(details.qty ?? 0);
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+      const reason = typeof details.reason === "string" ? details.reason : "unknown";
+      const unitCost = lastUnitCost.get(itemKey) ?? 0;
+      const value = qty * unitCost;
+      totalLossQty += qty;
+      totalLossValue += value;
+      const bucket = lossByReason.get(reason) ?? { qty: 0, value: 0 };
+      bucket.qty += qty;
+      bucket.value += value;
+      lossByReason.set(reason, bucket);
     }
   }
 
-  // Build usage-over-time sorted by day
   const usageOverTime = [...usageByDay.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([date, totalUsed]) => ({ date, totalUsed }));
 
-  // Build user comparison sorted by total activity descending
-  const userComparison = [...userActivity.entries()]
-    .map(([userId, data]) => ({ userId, ...data, total: data.edits + data.approvals + data.submissions }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 20);
+  const byVendor = [...vendorSpend.entries()]
+    .map(([vendor, v]) => ({
+      vendor,
+      spend: v.spend,
+      orderCount: v.orderIds.size + v.restockCount,
+    }))
+    .sort((a, b) => b.spend - a.spend)
+    .slice(0, 10);
 
-  // Build top items sorted by change count descending
-  const topItems = [...itemActivity.entries()]
-    .map(([itemId, data]) => ({ itemId, ...data }))
-    .sort((a, b) => b.changeCount - a.changeCount)
-    .slice(0, 20);
+  const bySpendItem = [...itemSpend.values()]
+    .map((v) => ({ itemName: v.itemName || "Unnamed item", spend: v.spend, qtyReceived: v.qtyReceived }))
+    .sort((a, b) => b.spend - a.spend)
+    .slice(0, 10);
+
+  const byUsageItem = [...usageByItem.values()]
+    .map((v) => ({ itemName: v.itemName || "Unnamed item", qtyUsed: v.qtyUsed }))
+    .sort((a, b) => b.qtyUsed - a.qtyUsed)
+    .slice(0, 10);
+
+  const lossByReasonArr = [...lossByReason.entries()]
+    .map(([reason, v]) => ({ reason, qty: v.qty, value: v.value }))
+    .sort((a, b) => b.qty - a.qty);
+
+  const donationPct = restockQtyAll > 0 ? (donationQty / restockQtyAll) * 100 : 0;
 
   return json(200, {
     period,
     days,
-    totalEvents: allEvents.length,
+    totals: {
+      qtyUsed: totalQtyUsed,
+      spend: totalSpend,
+      lossQty: totalLossQty,
+      lossValue: totalLossValue,
+      donationPct,
+    },
     usageOverTime,
-    userComparison,
-    topItems,
+    byVendor,
+    bySpendItem,
+    byUsageItem,
+    lossByReason: lossByReasonArr,
   });
 };

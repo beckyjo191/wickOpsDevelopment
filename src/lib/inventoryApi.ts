@@ -1049,23 +1049,23 @@ export type AuditFeedResponse = {
 export type AuditAnalytics = {
   period: string;
   days: number;
-  totalEvents: number;
+  totals: {
+    /** Sum of USAGE_APPROVE.quantityUsed in the period. */
+    qtyUsed: number;
+    /** Sum of (qty × unitCost) from RESTOCK_RECEIVED + RESTOCK_ADDED, excluding donations. */
+    spend: number;
+    /** Sum of ITEM_RETIRE.qty across all reason codes. */
+    lossQty: number;
+    /** Sum of lossQty × last-known-unitCost per item at the moment of retirement. */
+    lossValue: number;
+    /** Share of total restock qty coming in as donations (0-100). */
+    donationPct: number;
+  };
   usageOverTime: Array<{ date: string; totalUsed: number }>;
-  userComparison: Array<{
-    userId: string;
-    email: string;
-    name: string;
-    edits: number;
-    approvals: number;
-    submissions: number;
-    total: number;
-  }>;
-  topItems: Array<{
-    itemId: string;
-    itemName: string;
-    changeCount: number;
-    totalUsed: number;
-  }>;
+  byVendor: Array<{ vendor: string; spend: number; orderCount: number }>;
+  bySpendItem: Array<{ itemName: string; spend: number; qtyReceived: number }>;
+  byUsageItem: Array<{ itemName: string; qtyUsed: number }>;
+  lossByReason: Array<{ reason: string; qty: number; value: number }>;
 };
 
 export const fetchAuditFeed = async (params: {

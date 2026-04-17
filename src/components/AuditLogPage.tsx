@@ -17,7 +17,6 @@ import {
   Filter,
   Loader2,
   Package,
-  TrendingUp,
   User,
 } from "lucide-react";
 import { usePendingSubmissions } from "./inventory/hooks/usePendingSubmissions";
@@ -594,14 +593,51 @@ function groupEventsByDay(events: AuditEvent[]): Array<{ label: string; events: 
 
 // ── Analytics sub-components ──────────────────────────────────────────────────
 
-function SimpleBarChart({ data, labelKey, valueKey, title }: {
+/** Formats a number as USD. Keeps decimals for values under $100, rounds above. */
+function formatUsd(value: number): string {
+  if (!Number.isFinite(value)) return "$0";
+  const abs = Math.abs(value);
+  if (abs >= 1000) return `$${Math.round(value).toLocaleString()}`;
+  if (abs >= 100) return `$${value.toFixed(0)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function formatQty(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Math.round(value).toLocaleString();
+}
+
+function formatPct(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  if (value >= 10) return `${Math.round(value)}%`;
+  return `${value.toFixed(1)}%`;
+}
+
+const REASON_LABELS: Record<string, string> = {
+  expired: "Expired",
+  damaged: "Damaged",
+  lost: "Lost",
+  recalled: "Recalled",
+  donated: "Donated",
+  unknown: "Unknown",
+};
+
+function SimpleBarChart({ data, labelKey, valueKey, title, formatValue }: {
   data: Array<Record<string, unknown>>;
   labelKey: string;
   valueKey: string;
   title: string;
+  /** Optional value formatter — defaults to integer toLocaleString. */
+  formatValue?: (value: number) => string;
 }) {
-  if (!data.length) return <p className="audit-empty">No data for this period.</p>;
+  if (!data.length) return (
+    <div className="audit-chart-card">
+      <h4 className="audit-chart-title">{title}</h4>
+      <p className="audit-empty">No data for this period.</p>
+    </div>
+  );
   const max = Math.max(...data.map((d) => Number(d[valueKey] ?? 0)), 1);
+  const fmt = formatValue ?? ((v: number) => Math.round(v).toLocaleString());
   return (
     <div className="audit-chart-card">
       <h4 className="audit-chart-title">{title}</h4>
@@ -617,7 +653,7 @@ function SimpleBarChart({ data, labelKey, valueKey, title }: {
               <div className="audit-bar-track">
                 <div className="audit-bar-fill" style={{ width: `${pct}%` }} />
               </div>
-              <span className="audit-bar-value">{val}</span>
+              <span className="audit-bar-value">{fmt(val)}</span>
             </div>
           );
         })}
@@ -652,6 +688,98 @@ function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: numbe
         <span>{formatDate(data[data.length - 1].date)}</span>
       </div>
     </div>
+  );
+}
+
+function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="audit-stat-card">
+      <div className="audit-stat-card-body">
+        <span className="audit-stat-value">{value}</span>
+        <span className="audit-stat-label">{label}</span>
+        {sub ? <span className="audit-stat-sub">{sub}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsDashboard({ analytics }: { analytics: AuditAnalytics }) {
+  const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
+  const hasData =
+    totals.qtyUsed > 0 || totals.spend > 0 || totals.lossQty > 0 || usageOverTime.length > 0;
+
+  if (!hasData) {
+    return (
+      <div className="audit-analytics-empty">
+        <p className="audit-empty">
+          No spend, usage, or loss data yet for this period. Data flows in as you
+          approve usage, receive restock orders, or retire expired items.
+        </p>
+      </div>
+    );
+  }
+
+  const lossRows = lossByReason.map((r) => ({
+    ...r,
+    reasonLabel: REASON_LABELS[r.reason] ?? r.reason,
+  }));
+
+  return (
+    <>
+      <div className="audit-analytics-summary">
+        <StatCard label="Qty used" value={formatQty(totals.qtyUsed)} />
+        <StatCard label="Spend" value={formatUsd(totals.spend)} />
+        <StatCard
+          label="Loss"
+          value={formatQty(totals.lossQty)}
+          sub={totals.lossValue > 0 ? `~${formatUsd(totals.lossValue)}` : undefined}
+        />
+        <StatCard label="Donations" value={formatPct(totals.donationPct)} sub="of intake" />
+      </div>
+
+      <section className="audit-analytics-section">
+        <h3 className="audit-analytics-section-title">Spend</h3>
+        <div className="audit-analytics-grid">
+          <SimpleBarChart
+            data={byVendor as unknown as Array<Record<string, unknown>>}
+            labelKey="vendor"
+            valueKey="spend"
+            title="Top vendors by spend"
+            formatValue={formatUsd}
+          />
+          <SimpleBarChart
+            data={bySpendItem as unknown as Array<Record<string, unknown>>}
+            labelKey="itemName"
+            valueKey="spend"
+            title="Top items by spend"
+            formatValue={formatUsd}
+          />
+        </div>
+      </section>
+
+      <section className="audit-analytics-section">
+        <h3 className="audit-analytics-section-title">Usage</h3>
+        <UsageLineChart data={usageOverTime} />
+        <SimpleBarChart
+          data={byUsageItem as unknown as Array<Record<string, unknown>>}
+          labelKey="itemName"
+          valueKey="qtyUsed"
+          title="Top items by qty consumed"
+          formatValue={formatQty}
+        />
+      </section>
+
+      <section className="audit-analytics-section">
+        <h3 className="audit-analytics-section-title">Loss</h3>
+        <SimpleBarChart
+          data={lossRows as unknown as Array<Record<string, unknown>>}
+          labelKey="reasonLabel"
+          valueKey="qty"
+          title="Retired qty by reason"
+          formatValue={formatQty}
+        />
+      </section>
+    </>
   );
 }
 
@@ -974,20 +1102,7 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
           )}
 
           {!analyticsLoading && analytics && (
-            <>
-              <div className="audit-analytics-summary">
-                <div className="audit-stat-card">
-                  <TrendingUp size={20} />
-                  <div>
-                    <span className="audit-stat-value">{analytics.totalEvents}</span>
-                    <span className="audit-stat-label">Total Events</span>
-                  </div>
-                </div>
-              </div>
-              <UsageLineChart data={analytics.usageOverTime} />
-              <SimpleBarChart data={analytics.userComparison} labelKey="name" valueKey="total" title="Activity by User" />
-              <SimpleBarChart data={analytics.topItems} labelKey="itemName" valueKey="changeCount" title="Most Active Items" />
-            </>
+            <AnalyticsDashboard analytics={analytics} />
           )}
         </div>
       )}

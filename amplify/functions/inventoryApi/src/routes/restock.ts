@@ -360,10 +360,15 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     ExpressionAttributeValues: updateVals,
   }));
 
-  if (newStatus === "closed") {
+  // Only emit an explicit ORDER_CLOSED event when the close is user-driven
+  // (a partial receive closed manually). A natural close from fully receiving
+  // the order is already implied by the RESTOCK_RECEIVED events — emitting a
+  // separate "Order closed" row here would be redundant noise in the feed.
+  const closedManually = closeOrder && !allFullyReceived;
+  if (newStatus === "closed" && closedManually) {
     auditEvents.push(buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, {
       orderId,
-      closedManually: closeOrder && !allFullyReceived,
+      closedManually: true,
     }));
   }
 

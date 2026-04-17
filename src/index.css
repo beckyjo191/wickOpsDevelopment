@@ -33,6 +33,9 @@
   --caution: #EAB308;
   --caution-border: #FDE047;
   --caution-surface: #FEFCE8;
+  --success: #16A34A;
+  --success-border: #86EFAC;
+  --success-surface: #F0FDF4;
   --notice: #2563EB;
   --notice-border: #93C5FD;
   --notice-surface: #EFF6FF;
@@ -152,6 +155,9 @@ p {
   --caution: #FACC15;
   --caution-border: #422006;
   --caution-surface: #1A1504;
+  --success: #86EFAC;
+  --success-border: #14532D;
+  --success-surface: #052E16;
   --notice: #93C5FD;
   --notice-border: #1E3A5F;
   --notice-surface: #0F1D2D;

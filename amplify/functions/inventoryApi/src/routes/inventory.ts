@@ -10,12 +10,16 @@ import { buildAuditEvent, writeAuditEvents, writeAuditEventsCoalesced, computeVa
 
 // Machine-managed fields in valuesJson. Changes to these shouldn't produce
 // ITEM_EDIT audit events — they're either identity (parentItemId) or state
-// already captured by a dedicated audit action (retire/restock).
+// already captured by a dedicated audit action (retire/restock). `orderedAt`
+// is auto-flipped by the restock flow whenever an order is placed or received,
+// so showing those edits alongside the RESTOCK_ORDER_CREATE / RESTOCK_RECEIVED
+// events is pure noise.
 const SYSTEM_FIELDS = new Set<string>([
   "parentItemId",
   "retiredAt",
   "retiredQty",
   "retirementReason",
+  "orderedAt",
 ]);
 
 export const handleListItems = async (ctx: RouteContext) => {

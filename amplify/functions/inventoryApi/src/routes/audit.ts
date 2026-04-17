@@ -7,14 +7,15 @@ import { json, parseNextToken, encodeNextToken } from "../http";
 import { AUDIT_BY_TIMESTAMP_INDEX, AUDIT_BY_USER_INDEX } from "../config";
 
 // Machine-managed valuesJson keys. ITEM_EDIT events whose only changes are in
-// this set are pure noise — the one-time parentItemId backfill or retire-row
-// markers that the dedicated ITEM_RETIRE / RESTOCK_* events already cover.
-// Kept in sync with the client filter in AuditLogPage.tsx.
+// this set are pure noise — the one-time parentItemId backfill, retire-row
+// markers, or orderedAt flips that the dedicated ITEM_RETIRE / RESTOCK_*
+// events already cover. Kept in sync with the client filter in AuditLogPage.
 const SYSTEM_FIELDS = new Set<string>([
   "parentItemId",
   "retiredAt",
   "retiredQty",
   "retirementReason",
+  "orderedAt",
 ]);
 
 /** True when every value is an empty string, zero, or null/undefined. */
@@ -32,7 +33,7 @@ const isAllDefaultsValues = (vals: Record<string, unknown>): boolean => {
  * slot.
  */
 const isNoiseAuditItem = (item: Record<string, unknown>): boolean => {
-  let details: { changes?: unknown; deletedValues?: unknown } = {};
+  let details: { changes?: unknown; deletedValues?: unknown; closedManually?: unknown } = {};
   try {
     details = JSON.parse(String(item.detailsJson ?? "{}"));
   } catch {
@@ -53,6 +54,10 @@ const isNoiseAuditItem = (item: Record<string, unknown>): boolean => {
       : null;
     if (!deletedValues) return true;
     return isAllDefaultsValues(deletedValues);
+  }
+  if (item.action === "RESTOCK_ORDER_CLOSED") {
+    // Hide auto-close events (fully-received orders); keep deliberate closes.
+    return details.closedManually !== true;
   }
   return false;
 };

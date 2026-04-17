@@ -4540,6 +4540,53 @@ textarea.inventory-card-input {
   justify-content: space-between;
   gap: 1rem;
   padding: 1rem 0;
+  flex-wrap: wrap;
+}
+
+/* Filter input that scopes the reorder list to items matching the query.
+ * Sits between the title block and the "Add Items" button so it doesn't
+ * consume its own row on wider screens. */
+.reorder-list-filter {
+  position: relative;
+  flex: 0 1 240px;
+  margin-left: auto;
+}
+
+.reorder-list-filter-input {
+  width: 100%;
+  padding-right: 1.75rem;
+}
+
+.reorder-list-filter-clear {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.reorder-list-filter-clear:hover {
+  background: var(--surface-hover, var(--surface-alt));
+  color: var(--text);
+}
+
+.reorder-filter-empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  background: var(--surface-soft);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
 }
 
 .reorder-header-left {
@@ -4641,12 +4688,18 @@ textarea.inventory-card-input {
   min-width: 0;
 }
 
+/* Match the height of the autocomplete input so the Location select and
+ * Search input line up cleanly in the same row. */
+.order-builder-field > select.field {
+  height: 44px;
+}
+
 .order-builder-field > span {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  /* Match Log Usage label style — plain title-case, not uppercase —
+   * so the two search flows feel like the same component. */
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-soft, var(--text-muted));
 }
 
 .order-builder-results {
@@ -4728,6 +4781,122 @@ textarea.inventory-card-input {
   font-size: 0.8rem;
   color: var(--text-muted);
   max-width: 52ch;
+}
+
+/* ─── Autocomplete-style search (matches usage-autocomplete pattern).
+ *   Keeps the panel compact when idle — dropdown only appears while the
+ *   input has focus and the user is typing. */
+.order-builder-autocomplete {
+  position: relative;
+}
+
+.order-builder-autocomplete-input {
+  /* Mirror .usage-autocomplete-input so this search bar visually matches
+   * the one in Log Usage / Fast Restock. */
+  width: 100%;
+  height: 44px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-heading);
+  padding: 0 2rem 0 0.65rem;
+  font-size: 0.9rem;
+}
+
+.order-builder-autocomplete-input:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+}
+
+.order-builder-autocomplete-clear {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.order-builder-autocomplete-clear:hover {
+  background: var(--surface-hover, var(--surface-alt));
+  color: var(--text);
+}
+
+.order-builder-autocomplete-list {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+}
+
+.order-builder-autocomplete-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+
+.order-builder-autocomplete-option:hover,
+.order-builder-autocomplete-option--hl {
+  background: var(--surface-hover, var(--surface-alt));
+}
+
+.order-builder-autocomplete-option-name {
+  font-weight: 500;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+
+.order-builder-autocomplete-option-meta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.order-builder-autocomplete-empty {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  text-align: center;
 }
 
 /* "No link" chip on a search result row */
@@ -4820,8 +4989,10 @@ textarea.inventory-card-input {
 }
 
 /* Back button on the "Add item not listed" form */
+/* Back button sits inline before the title; nothing special needed here
+ * (layout handled by the header's flex gap). Kept as a hook for theming. */
 .reorder-add-item-back {
-  margin-right: auto;
+  flex-shrink: 0;
 }
 
 .reorder-vendor-card {
@@ -5397,7 +5568,8 @@ textarea.inventory-card-input {
 .reorder-add-item-form-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
 }
 
 .reorder-add-item-form-header h4 {
@@ -5405,6 +5577,10 @@ textarea.inventory-card-input {
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--text);
+  /* Title grows to fill the space between Back and the close button,
+   * so the × button is reliably pushed to the far right. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .reorder-add-item-grid {
@@ -6884,6 +7060,169 @@ textarea.inventory-card-input {
 .audit-event-row--group {
   grid-template-columns: 3.5rem 7.5rem 1fr auto;
   grid-auto-rows: min-content;
+}
+
+/* Search box replacing the old filter button. */
+.audit-search-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 420px;
+}
+
+.audit-search-icon {
+  position: absolute;
+  left: 0.625rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.audit-search-input {
+  width: 100%;
+  padding: 0.4rem 2rem 0.4rem 2rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-family: inherit;
+}
+
+.audit-search-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.audit-search-input::-webkit-search-cancel-button,
+.audit-search-input::-webkit-search-decoration {
+  appearance: none;
+}
+
+.audit-search-clear {
+  position: absolute;
+  right: 0.375rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.audit-search-clear:hover {
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+/* Day-section collapse chevron. */
+.audit-day-report-header {
+  cursor: pointer;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+}
+
+.audit-day-report-header:hover {
+  background: var(--surface-soft);
+}
+
+.audit-day-report-chevron {
+  color: var(--text-muted);
+  margin-right: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.audit-day-report--collapsed {
+  padding-bottom: 0;
+}
+
+.audit-day-show-more {
+  margin: 0.5rem auto 0.25rem;
+}
+
+/* Item-day group row: disclose to reveal sub-events for this item. */
+.audit-item-group-children {
+  grid-column: 1 / -1;
+  margin-top: 0.375rem;
+  padding: 0.5rem 0 0.25rem;
+  border-top: 1px dashed var(--border);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.audit-item-group-child {
+  display: grid;
+  grid-template-columns: 3.5rem 1fr auto;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem 0.25rem 1.25rem;
+  font-size: 0.78125rem;
+  color: var(--text);
+  border-left: 2px solid var(--border);
+  margin-left: 0.5rem;
+}
+
+.audit-item-group-child-time {
+  color: var(--text-muted);
+  font-size: 0.71875rem;
+  text-align: right;
+}
+
+.audit-item-group-child-detail {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.audit-item-group-child-user {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.audit-item-group-footer {
+  padding: 0.25rem 0.5rem 0.25rem 1.25rem;
+  margin-left: 0.5rem;
+  border-left: 2px solid transparent;
+}
+
+.audit-item-group-history-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--primary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.audit-item-group-history-link:hover {
+  text-decoration-style: solid;
+}
+
+/* Item history toolbar — Back + Open in Inventory side by side. */
+.audit-item-history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.audit-open-in-inventory {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 .audit-event-group-toggle {

@@ -12,11 +12,13 @@ import {
   Activity,
   BarChart3,
   ChevronLeft,
+  ChevronRight,
   CheckSquare,
   Clock,
-  Filter,
+  ExternalLink,
   Loader2,
   Package,
+  Search,
   User,
 } from "lucide-react";
 import { usePendingSubmissions } from "./inventory/hooks/usePendingSubmissions";
@@ -28,6 +30,11 @@ type AuditTab = "feed" | "analytics" | "item-history" | "pending";
 interface AuditLogPageProps {
   canManageColumns: boolean;
   canReviewSubmissions?: boolean;
+  /** Called when the user clicks "Open in Inventory" from the item-history
+   *  view. Parent handles switching to the Inventory tab and focusing the row.
+   *  Passes the item name rather than id because we filter inventory via
+   *  search term — robust across lots + renames. */
+  onOpenInInventory?: (itemName: string) => void;
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -52,26 +59,6 @@ const ACTION_LABELS: Record<string, string> = {
   RESTOCK_ADDED: "Fast restock",
 };
 
-// Labels for filter menu (more descriptive)
-const FILTER_LABELS: Record<string, string> = {
-  ITEM_CREATE: "Added item",
-  ITEM_EDIT: "Updated item",
-  ITEM_DELETE: "Deleted item",
-  ITEM_RETIRE: "Retired item",
-  USAGE_SUBMIT: "Submitted usage",
-  USAGE_APPROVE: "Approved usage",
-  USAGE_REJECT: "Rejected usage",
-  COLUMN_CREATE: "Created column",
-  COLUMN_DELETE: "Deleted column",
-  COLUMN_UPDATE: "Updated column",
-  CSV_IMPORT: "Imported CSV",
-  TEMPLATE_APPLY: "Applied template",
-  RESTOCK_ORDER_CREATE: "Placed restock order",
-  RESTOCK_RECEIVED: "Received restock order",
-  RESTOCK_ORDER_CLOSED: "Closed restock order",
-  RESTOCK_ADDED: "Fast restock",
-};
-
 const FIELD_LABELS: Record<string, string> = {
   itemName: "Name",
   quantity: "Qty",
@@ -85,12 +72,14 @@ const FIELD_LABELS: Record<string, string> = {
 // Machine-managed valuesJson keys. Stamped by the server during save — they
 // carry no user-visible semantics so they must never render as "field changed"
 // rows in the activity feed. Also used to drop events whose ONLY change is one
-// of these (e.g. the one-time parentItemId backfill on legacy rows).
+// of these (parentItemId backfill on legacy rows, orderedAt flips from the
+// restock flow, retire markers, etc.). Kept in sync with routes/audit.ts.
 const SYSTEM_FIELDS = new Set<string>([
   "parentItemId",
   "retiredAt",
   "retiredQty",
   "retirementReason",
+  "orderedAt",
 ]);
 
 function humanizeFieldName(field: string): string {
@@ -177,6 +166,12 @@ function isNoiseEvent(event: AuditEvent): boolean {
     if (!deletedValues) return true;
     return isAllDefaultValues(deletedValues);
   }
+  if (event.action === "RESTOCK_ORDER_CLOSED") {
+    // An auto-close from a full receive is redundant with the RESTOCK_RECEIVED
+    // events already in the feed. Only keep the close event when the user
+    // closed the order deliberately (cancelled, or closed a partial receive).
+    return details.closedManually !== true;
+  }
   return false;
 }
 
@@ -201,14 +196,6 @@ const ACTION_COLORS: Record<string, string> = {
   RESTOCK_ORDER_CLOSED: "var(--text-muted)",
   RESTOCK_ADDED: "var(--success)",
 };
-
-const ALL_ACTIONS = [
-  "ITEM_CREATE", "ITEM_EDIT", "ITEM_DELETE", "ITEM_RETIRE",
-  "USAGE_SUBMIT", "USAGE_APPROVE", "USAGE_REJECT",
-  "RESTOCK_ORDER_CREATE", "RESTOCK_RECEIVED", "RESTOCK_ORDER_CLOSED", "RESTOCK_ADDED",
-  "COLUMN_CREATE", "COLUMN_DELETE", "COLUMN_UPDATE",
-  "CSV_IMPORT", "TEMPLATE_APPLY",
-];
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -295,6 +282,21 @@ function buildEventDetail(event: AuditEvent): string {
 
 // ── Compact event row ─────────────────────────────────────────────────────────
 
+/** Multi-field ITEM_EDIT threshold. At/below this, changes render inline in the
+ *  row detail. Above it, the row shows an "N fields" chip and reveals the full
+ *  diff list when clicked. Keeps the feed readable when a CSV import touches a
+ *  row's Pack Size + Unit Cost + Pack Cost + Reorder Link in one shot. */
+const INLINE_CHANGE_LIMIT = 2;
+
+function getVisibleEditChanges(event: AuditEvent): Array<{ field: string; from: unknown; to: unknown }> {
+  if (event.action !== "ITEM_EDIT") return [];
+  const details = event.details ?? {};
+  const raw = Array.isArray(details.changes)
+    ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
+    : [];
+  return raw.filter((c) => !SYSTEM_FIELDS.has(c.field) && c.field !== "position");
+}
+
 function AuditEventRow({
   event,
   onViewItemHistory,
@@ -304,15 +306,19 @@ function AuditEventRow({
   onViewItemHistory?: (itemId: string, name: string) => void;
   showDate?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const derivedAction = deriveAction(event);
   const actionLabel = ACTION_LABELS[derivedAction] ?? event.action;
   const color = ACTION_COLORS[derivedAction] ?? "var(--text-muted)";
-  const detail = buildEventDetail(event);
   const d = new Date(event.timestamp);
   const timeStr = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
+  const editChanges = getVisibleEditChanges(event);
+  const shouldCollapseEdit = event.action === "ITEM_EDIT" && editChanges.length > INLINE_CHANGE_LIMIT;
+  const detail = shouldCollapseEdit ? "" : buildEventDetail(event);
+
   return (
-    <div className="audit-event-row">
+    <div className={`audit-event-row${expanded ? " audit-event-row--expanded" : ""}`}>
       <span className="audit-event-row-time">
         {showDate ? formatDate(event.timestamp) : timeStr}
       </span>
@@ -328,84 +334,200 @@ function AuditEventRow({
             {event.itemName}
           </button>
         ) : null}
+        {shouldCollapseEdit ? (
+          <button
+            type="button"
+            className="audit-event-fields-chip"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            title={expanded ? "Hide changes" : "Show changes"}
+          >
+            {expanded ? "▾" : "▸"} {editChanges.length} fields
+          </button>
+        ) : null}
         {detail && <span className="audit-event-row-detail">{detail}</span>}
       </div>
       <span className="audit-event-row-user">
         <User size={11} />
         {event.userName || event.userEmail}
       </span>
+      {expanded && shouldCollapseEdit ? (
+        <ul className="audit-event-changes-list">
+          {editChanges.map((c, idx) => (
+            <li key={idx} className="audit-event-changes-row">
+              <span className="audit-event-changes-field">{humanizeFieldName(c.field)}</span>
+              <span className="audit-event-changes-arrow">
+                {formatFieldValue(c.field, c.from)} → {formatFieldValue(c.field, c.to)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
 
-// ── Restock order grouping ────────────────────────────────────────────────────
-// Restock orders emit one audit event per line item. In the activity feed we
-// collapse contiguous same-order events into a single expandable row so a
-// 10-item order reads as "Bekah placed restock order (10 items)" instead of
-// spamming ten rows. Per-item events are still preserved under the fold and
-// available to analytics queries.
+// ── Day-level event grouping ──────────────────────────────────────────────────
+// Two grouping axes, applied in sequence to each day's events:
+//
+//   1. Restock-order grouping: contiguous events sharing {action, orderId}
+//      collapse into one "Order placed (10 items)" row. Covers the
+//      RESTOCK_ORDER_CREATE / RESTOCK_RECEIVED noise from bulk orders.
+//
+//   2. Item-day grouping: any 2+ events on the same {action, itemId} within
+//      the day collapse into one "Updated · Safety Razors · 4 edits" row.
+//      Covers the fluff when a single item is touched multiple times in a day
+//      (field-at-a-time edits, multiple usage approvals, etc.). Click to
+//      disclose each timestamped sub-event.
+//
+// Both preserve the per-event data for analytics; grouping is presentation only.
 
-const GROUPABLE_ACTIONS = new Set([
-  "RESTOCK_ORDER_CREATE",
-  "RESTOCK_RECEIVED",
+// Actions whose events carry a shared "batch id" in details — one order or one
+// usage submission that touched N items emits N per-item audit events. We
+// collapse those back into a single row in the feed and disclose the per-item
+// sub-events on click. The map tells the grouper which details field to key on.
+const BATCH_KEY_BY_ACTION: Record<string, string> = {
+  RESTOCK_ORDER_CREATE: "orderId",
+  RESTOCK_RECEIVED: "orderId",
+  USAGE_SUBMIT: "submissionId",
+  USAGE_APPROVE: "submissionId",
+  USAGE_REJECT: "submissionId",
+};
+const BATCH_GROUPABLE_ACTIONS = new Set(Object.keys(BATCH_KEY_BY_ACTION));
+
+// Actions that aggregate by {action, itemId} within a day. Excludes the batch-
+// grouped actions (orders, usage submissions — handled separately via their
+// batch id) and one-shot actions like RESTOCK_ORDER_CLOSED.
+const ITEM_DAY_GROUPABLE_ACTIONS = new Set([
+  "ITEM_EDIT",
+  "ITEM_CREATE",
+  "ITEM_RETIRE",
+  "RESTOCK_ADDED",
 ]);
 
 type OrderGroup = {
   kind: "order-group";
   groupId: string;
   action: string;
-  orderId: string;
+  /** The shared batch id (orderId for restocks, submissionId for usage). */
+  batchId: string;
+  events: AuditEvent[];
+  representative: AuditEvent;
+};
+
+type ItemGroup = {
+  kind: "item-group";
+  groupId: string;
+  action: string;
+  itemId: string;
+  itemName: string;
   events: AuditEvent[];
   representative: AuditEvent;
 };
 
 type DisplayRow =
   | { kind: "event"; event: AuditEvent }
-  | OrderGroup;
+  | OrderGroup
+  | ItemGroup;
 
-function groupRestockEvents(events: AuditEvent[]): DisplayRow[] {
-  // Bucket groupable events by {action, orderId}. Non-groupable events and
-  // events without an orderId pass through as singletons, preserving order
-  // via an insertion-index fallback.
-  type Bucket = { rows: AuditEvent[]; firstIndex: number };
-  const buckets = new Map<string, Bucket>();
-  const flat: Array<{ index: number; row: DisplayRow }> = [];
+function groupDayEvents(events: AuditEvent[]): DisplayRow[] {
+  // Pass 1: order groups — contiguous events sharing {action, orderId}.
+  type OrderBucket = { rows: AuditEvent[] };
+  const orderBuckets = new Map<string, OrderBucket>();
+  const pass1: DisplayRow[] = [];
 
-  events.forEach((event, idx) => {
-    const orderId = typeof event.details?.orderId === "string"
-      ? String(event.details.orderId)
+  events.forEach((event) => {
+    const batchKey = BATCH_KEY_BY_ACTION[event.action];
+    const batchId = batchKey && typeof event.details?.[batchKey] === "string"
+      ? String(event.details[batchKey])
       : "";
-    if (GROUPABLE_ACTIONS.has(event.action) && orderId) {
-      const key = `${event.action}:${orderId}`;
-      const bucket = buckets.get(key);
+    if (BATCH_GROUPABLE_ACTIONS.has(event.action) && batchId) {
+      const key = `${event.action}:${batchId}`;
+      const bucket = orderBuckets.get(key);
       if (bucket) {
         bucket.rows.push(event);
       } else {
-        buckets.set(key, { rows: [event], firstIndex: idx });
-        flat.push({
-          index: idx,
-          row: {
-            kind: "order-group",
-            groupId: key,
-            action: event.action,
-            orderId,
-            events: [],
-            representative: event,
-          },
+        orderBuckets.set(key, { rows: [event] });
+        pass1.push({
+          kind: "order-group",
+          groupId: key,
+          action: event.action,
+          batchId,
+          events: [],
+          representative: event,
         });
       }
       return;
     }
-    flat.push({ index: idx, row: { kind: "event", event } });
+    pass1.push({ kind: "event", event });
+  });
+  for (const row of pass1) {
+    if (row.kind !== "order-group") continue;
+    const bucket = orderBuckets.get(row.groupId);
+    if (bucket) row.events = bucket.rows;
+  }
+
+  // Pass 2: item-day groups — for non-order singletons, bucket by {action,
+  // itemId}. A bucket with 2+ events becomes an ItemGroup; 1 event stays a
+  // singleton. Group position = first occurrence in the day's stream, so
+  // newest-first input produces a group pinned to the most recent event.
+  type ItemBucket = { rows: AuditEvent[]; groupId: string; action: string; itemId: string; itemName: string; representative: AuditEvent; firstIndex: number };
+  const itemBuckets = new Map<string, ItemBucket>();
+  const pass2Positions: Array<{ kind: "slot"; row: DisplayRow } | { kind: "bucket"; groupId: string }> = [];
+
+  pass1.forEach((row, idx) => {
+    if (row.kind !== "event") {
+      pass2Positions.push({ kind: "slot", row });
+      return;
+    }
+    const event = row.event;
+    const itemId = String(event.itemId ?? "");
+    if (!itemId || !ITEM_DAY_GROUPABLE_ACTIONS.has(event.action)) {
+      pass2Positions.push({ kind: "slot", row });
+      return;
+    }
+    const key = `${event.action}:${itemId}`;
+    const existing = itemBuckets.get(key);
+    if (existing) {
+      existing.rows.push(event);
+      return;
+    }
+    const itemName = String(event.itemName ?? "").trim() || `Item ${itemId.slice(0, 8)}`;
+    itemBuckets.set(key, {
+      rows: [event],
+      groupId: key,
+      action: event.action,
+      itemId,
+      itemName,
+      representative: event,
+      firstIndex: idx,
+    });
+    pass2Positions.push({ kind: "bucket", groupId: key });
   });
 
-  // Fill the groups with their accumulated events.
-  for (const entry of flat) {
-    if (entry.row.kind !== "order-group") continue;
-    const bucket = buckets.get(entry.row.groupId);
-    if (bucket) entry.row.events = bucket.rows;
+  const flat: DisplayRow[] = [];
+  for (const slot of pass2Positions) {
+    if (slot.kind === "slot") {
+      flat.push(slot.row);
+      continue;
+    }
+    const bucket = itemBuckets.get(slot.groupId);
+    if (!bucket) continue;
+    if (bucket.rows.length === 1) {
+      flat.push({ kind: "event", event: bucket.rows[0] });
+    } else {
+      flat.push({
+        kind: "item-group",
+        groupId: bucket.groupId,
+        action: bucket.action,
+        itemId: bucket.itemId,
+        itemName: bucket.itemName,
+        events: bucket.rows,
+        representative: bucket.representative,
+      });
+    }
   }
-  return flat.map((e) => e.row);
+  return flat;
 }
 
 function OrderGroupRow({
@@ -427,19 +549,26 @@ function OrderGroupRow({
 
   const details = representative.details ?? {};
   const vendor = typeof details.vendor === "string" ? details.vendor : "";
+  const isRestockAction = group.action === "RESTOCK_ORDER_CREATE" || group.action === "RESTOCK_RECEIVED";
+  const isUsageAction = group.action === "USAGE_SUBMIT" || group.action === "USAGE_APPROVE" || group.action === "USAGE_REJECT";
 
-  // Aggregate qty + cost across the grouped events.
+  // Aggregate qty across the grouped events. Cost / vendor are restock-only —
+  // a usage submission doesn't have a unit cost so we skip those fields.
   let totalQty = 0;
   let totalCost = 0;
   let hasCost = false;
   for (const ev of group.events) {
     const dd = ev.details ?? {};
     const qty = Number(
-      group.action === "RESTOCK_RECEIVED" ? dd.qtyReceived : dd.qtyOrdered,
+      group.action === "RESTOCK_RECEIVED"
+        ? dd.qtyReceived
+        : group.action === "RESTOCK_ORDER_CREATE"
+          ? dd.qtyOrdered
+          : dd.quantityUsed, // USAGE_*
     );
     const unitCost = Number(dd.unitCost);
     if (Number.isFinite(qty)) totalQty += qty;
-    if (Number.isFinite(qty) && Number.isFinite(unitCost)) {
+    if (isRestockAction && Number.isFinite(qty) && Number.isFinite(unitCost)) {
       totalCost += qty * unitCost;
       hasCost = true;
     }
@@ -448,8 +577,16 @@ function OrderGroupRow({
   const summaryParts: string[] = [];
   summaryParts.push(`${count} item${count !== 1 ? "s" : ""}`);
   if (totalQty > 0) summaryParts.push(`qty ${totalQty}`);
-  if (hasCost) summaryParts.push(`$${totalCost.toFixed(2)}`);
-  if (vendor) summaryParts.push(`vendor: ${vendor}`);
+  if (isRestockAction && hasCost) summaryParts.push(`$${totalCost.toFixed(2)}`);
+  if (isRestockAction && vendor) summaryParts.push(`vendor: ${vendor}`);
+
+  // Batch-id label shown inline: "Order #..." for restock events, omit the
+  // meaningless submissionId for usage events (users don't care about IDs).
+  const batchLabel = isRestockAction
+    ? `Order #${group.batchId.slice(0, 8)}`
+    : isUsageAction
+      ? "Usage submission"
+      : group.batchId.slice(0, 8);
 
   return (
     <div className="audit-event-row audit-event-row--group">
@@ -465,7 +602,7 @@ function OrderGroupRow({
           aria-expanded={expanded}
           title={expanded ? "Collapse line items" : "Expand line items"}
         >
-          {expanded ? "▾" : "▸"} Order #{group.orderId.slice(0, 8)}
+          {expanded ? "▾" : "▸"} {batchLabel}
         </button>
         <span className="audit-event-row-detail">{summaryParts.join(" · ")}</span>
       </div>
@@ -483,6 +620,98 @@ function OrderGroupRow({
             />
           ))}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ItemGroupRow({
+  group,
+  onViewItemHistory,
+}: {
+  group: ItemGroup;
+  onViewItemHistory?: (itemId: string, name: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const count = group.events.length;
+  const actionLabel = ACTION_LABELS[group.action] ?? group.action;
+  const color = ACTION_COLORS[group.action] ?? "var(--text-muted)";
+  const representative = group.representative;
+  const repTime = new Date(representative.timestamp).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  // User string: one user if all events share, else "N users".
+  const uniqueUsers = new Set(group.events.map((e) => e.userName || e.userEmail));
+  const userLabel = uniqueUsers.size === 1
+    ? (representative.userName || representative.userEmail)
+    : `${uniqueUsers.size} users`;
+
+  const countLabel = `${count} ${
+    group.action === "USAGE_APPROVE" || group.action === "USAGE_SUBMIT" || group.action === "USAGE_REJECT"
+      ? (count === 1 ? "entry" : "entries")
+      : group.action === "RESTOCK_ADDED"
+        ? (count === 1 ? "restock" : "restocks")
+        : group.action === "ITEM_CREATE"
+          ? "add events"
+          : group.action === "ITEM_RETIRE"
+            ? (count === 1 ? "retire" : "retires")
+            : (count === 1 ? "edit" : "edits")
+  }`;
+
+  return (
+    <div className={`audit-event-row audit-event-row--group${expanded ? " audit-event-row--expanded" : ""}`}>
+      <span className="audit-event-row-time">{repTime}</span>
+      <span className="audit-event-row-action" style={{ color }}>{actionLabel}</span>
+      <div className="audit-event-row-center">
+        <button
+          type="button"
+          className="audit-event-item-link audit-event-group-toggle"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          title={expanded ? "Hide changes" : "Show changes"}
+        >
+          {expanded ? "▾" : "▸"} {group.itemName}
+        </button>
+        <span className="audit-event-row-detail">{countLabel}</span>
+      </div>
+      <span className="audit-event-row-user">
+        <User size={11} />
+        {userLabel}
+      </span>
+      {expanded ? (
+        <ul className="audit-event-group-children audit-item-group-children">
+          {group.events.map((child) => {
+            const childTime = new Date(child.timestamp).toLocaleTimeString(undefined, {
+              hour: "numeric",
+              minute: "2-digit",
+            });
+            const childDetail = buildEventDetail(child);
+            const childUser = child.userName || child.userEmail;
+            return (
+              <li key={child.eventId} className="audit-item-group-child">
+                <span className="audit-item-group-child-time">{childTime}</span>
+                <span className="audit-item-group-child-detail">
+                  {childDetail || "—"}
+                </span>
+                {uniqueUsers.size > 1 ? (
+                  <span className="audit-item-group-child-user">{childUser}</span>
+                ) : null}
+              </li>
+            );
+          })}
+          <li className="audit-item-group-footer">
+            <button
+              type="button"
+              className="audit-item-group-history-link"
+              onClick={() => onViewItemHistory?.(group.itemId, group.itemName)}
+              title="View full item history"
+            >
+              View full history →
+            </button>
+          </li>
+        </ul>
       ) : null}
     </div>
   );
@@ -508,17 +737,28 @@ const SUMMARY_ORDER: Array<[string, string]> = [
 
 function buildDaySummary(events: AuditEvent[]): string {
   const counts: Record<string, number> = {};
-  // Track unique orderIds for groupable restock actions so a 10-item order
-  // counts as "1 order placed", not 10.
-  const seenOrderIds: Record<string, Set<string>> = {};
+  // Collapse counts by the same keys the UI collapses by: unique batchIds for
+  // batch-groupable actions (orders / usage submissions), unique itemIds for
+  // item-day-groupable actions, everything else counts raw. Stops "149
+  // updated" from inflating when really we touched 28 items four times each.
+  const seenBatchIds: Record<string, Set<string>> = {};
+  const seenItemIds: Record<string, Set<string>> = {};
   for (const e of events) {
     const a = deriveAction(e);
-    if (GROUPABLE_ACTIONS.has(a)) {
-      const orderId = typeof e.details?.orderId === "string" ? String(e.details.orderId) : "";
-      if (orderId) {
-        const bucket = seenOrderIds[a] ?? (seenOrderIds[a] = new Set());
-        if (bucket.has(orderId)) continue;
-        bucket.add(orderId);
+    const batchKey = BATCH_KEY_BY_ACTION[a];
+    if (batchKey) {
+      const batchId = typeof e.details?.[batchKey] === "string" ? String(e.details[batchKey]) : "";
+      if (batchId) {
+        const bucket = seenBatchIds[a] ?? (seenBatchIds[a] = new Set());
+        if (bucket.has(batchId)) continue;
+        bucket.add(batchId);
+      }
+    } else if (ITEM_DAY_GROUPABLE_ACTIONS.has(a)) {
+      const itemId = String(e.itemId ?? "");
+      if (itemId) {
+        const bucket = seenItemIds[a] ?? (seenItemIds[a] = new Set());
+        if (bucket.has(itemId)) continue;
+        bucket.add(itemId);
       }
     }
     counts[a] = (counts[a] ?? 0) + 1;
@@ -533,46 +773,90 @@ function buildDaySummary(events: AuditEvent[]): string {
   return shown.join(" · ");
 }
 
+/** Default visible rows inside an expanded day. When exceeded we show a
+ *  "Show N more" button so a 149-event day doesn't spill forever. */
+const DAY_INITIAL_ROW_CAP = 25;
+
 function DayReport({
   label,
   events,
   onViewItemHistory,
+  defaultCollapsed = false,
 }: {
   label: string;
   events: AuditEvent[];
   onViewItemHistory?: (itemId: string, name: string) => void;
+  /** True for all non-Today day groups so older history stays out of the way. */
+  defaultCollapsed?: boolean;
 }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const [expandedAll, setExpandedAll] = useState(false);
   const uniqueUsers = new Set(events.map((e) => e.userName || e.userEmail)).size;
   const summary = buildDaySummary(events);
-  const displayRows = groupRestockEvents(events);
+  const displayRows = groupDayEvents(events);
+  const overCap = displayRows.length > DAY_INITIAL_ROW_CAP;
+  const visibleRows = overCap && !expandedAll
+    ? displayRows.slice(0, DAY_INITIAL_ROW_CAP)
+    : displayRows;
 
   return (
-    <div className="audit-day-report app-card">
-      <div className="audit-day-report-header">
+    <div className={`audit-day-report app-card${collapsed ? " audit-day-report--collapsed" : ""}`}>
+      <button
+        type="button"
+        className="audit-day-report-header"
+        onClick={() => setCollapsed((v) => !v)}
+        aria-expanded={!collapsed}
+      >
+        <span className="audit-day-report-chevron" aria-hidden="true">
+          {collapsed ? "▸" : "▾"}
+        </span>
         <span className="audit-day-report-label">{label}</span>
         <span className="audit-day-report-summary">{summary}</span>
         <span className="audit-day-report-users">
           <User size={11} />
           {uniqueUsers}
         </span>
-      </div>
-      <div className="audit-day-report-rows">
-        {displayRows.map((row) =>
-          row.kind === "order-group" ? (
-            <OrderGroupRow
-              key={row.groupId}
-              group={row}
-              onViewItemHistory={onViewItemHistory}
-            />
-          ) : (
-            <AuditEventRow
-              key={row.event.eventId}
-              event={row.event}
-              onViewItemHistory={onViewItemHistory}
-            />
-          ),
-        )}
-      </div>
+      </button>
+      {!collapsed ? (
+        <div className="audit-day-report-rows">
+          {visibleRows.map((row) => {
+            if (row.kind === "order-group") {
+              return (
+                <OrderGroupRow
+                  key={row.groupId}
+                  group={row}
+                  onViewItemHistory={onViewItemHistory}
+                />
+              );
+            }
+            if (row.kind === "item-group") {
+              return (
+                <ItemGroupRow
+                  key={row.groupId}
+                  group={row}
+                  onViewItemHistory={onViewItemHistory}
+                />
+              );
+            }
+            return (
+              <AuditEventRow
+                key={row.event.eventId}
+                event={row.event}
+                onViewItemHistory={onViewItemHistory}
+              />
+            );
+          })}
+          {overCap && !expandedAll ? (
+            <button
+              type="button"
+              className="button button-ghost button-sm audit-day-show-more"
+              onClick={() => setExpandedAll(true)}
+            >
+              Show {displayRows.length - DAY_INITIAL_ROW_CAP} more
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -845,14 +1129,16 @@ function AnalyticsDashboard({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLogPageProps) {
+export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInInventory }: AuditLogPageProps) {
   const [tab, setTab] = useState<AuditTab>("feed");
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [actionFilter, setActionFilter] = useState<string[]>([]);
-  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  // Client-side search across loaded events. Matches itemName + userName
+  // case-insensitively. For history older than what's loaded, the user can
+  // still hit Load More and it'll pick up more events to search.
+  const [searchTerm, setSearchTerm] = useState("");
 
   const [historyItemId, setHistoryItemId] = useState<string | null>(null);
   const [historyItemName, setHistoryItemName] = useState("");
@@ -873,11 +1159,9 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
     setLoading(true);
     setError(null);
     try {
-      const filterStr = actionFilter.length > 0 ? actionFilter.join(",") : undefined;
       const res = await fetchAuditFeed({
         limit: 50,
         ...(append && cursor ? { cursor } : {}),
-        action: filterStr,
       });
       setEvents((prev) => append ? [...prev, ...(res.events ?? [])] : (res.events ?? []));
       setNextCursor(res.nextCursor);
@@ -886,12 +1170,12 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
     } finally {
       setLoading(false);
     }
-  }, [actionFilter]);
+  }, []);
 
   useEffect(() => {
     if (tab === "feed") loadFeed(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, actionFilter]);
+  }, [tab]);
 
   useEffect(() => {
     if (tab === "analytics" && canManageColumns) {
@@ -931,17 +1215,24 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
     }
   }, [historyItemId, historyCursor]);
 
-  const toggleFilter = (action: string) => {
-    setActionFilter((prev) =>
-      prev.includes(action) ? prev.filter((a) => a !== action) : [...prev, action]
-    );
-  };
-
   // Strip system-field-only ITEM_EDIT events before display. Without this, the
   // one-time parentItemId backfill on every legacy row floods the feed with
   // "Parent Item Id: — → {uuid}" rows — pure machine noise.
-  const visibleEvents = events.filter((e) => !isNoiseEvent(e));
+  const noiseFreeEvents = events.filter((e) => !isNoiseEvent(e));
   const visibleHistoryEvents = historyEvents.filter((e) => !isNoiseEvent(e));
+
+  // Client-side search across the currently-loaded feed. Matches item names
+  // and user names case-insensitively. For hits older than what's loaded the
+  // user still needs to Load More, which is why we don't strip events with
+  // no itemName (system events, imports) until they explicitly search.
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const visibleEvents = normalizedSearch
+    ? noiseFreeEvents.filter((e) => {
+        const hay = `${e.itemName ?? ""} ${e.userName ?? ""} ${e.userEmail ?? ""}`.toLowerCase();
+        return hay.includes(normalizedSearch);
+      })
+    : noiseFreeEvents;
+
   const feedGroups = groupEventsByDay(visibleEvents);
   const historyGroups = groupEventsByDay(visibleHistoryEvents);
 
@@ -1026,38 +1317,27 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
       {tab === "feed" && (
         <div className="audit-feed">
           <div className="audit-feed-toolbar">
-            <div className="audit-filter-container">
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => setShowFilterMenu(!showFilterMenu)}
-              >
-                <Filter size={14} />
-                Filter{actionFilter.length > 0 ? ` (${actionFilter.length})` : ""}
-              </button>
-              {showFilterMenu && (
-                <div className="audit-filter-menu">
-                  {ALL_ACTIONS.map((action) => (
-                    <label key={action} className="audit-filter-option">
-                      <input
-                        type="checkbox"
-                        checked={actionFilter.includes(action)}
-                        onChange={() => toggleFilter(action)}
-                      />
-                      {FILTER_LABELS[action] ?? ACTION_LABELS[action]}
-                    </label>
-                  ))}
-                  {actionFilter.length > 0 && (
-                    <button
-                      type="button"
-                      className="button button-ghost button-sm"
-                      onClick={() => setActionFilter([])}
-                    >
-                      Clear filters
-                    </button>
-                  )}
-                </div>
-              )}
+            <div className="audit-search-container">
+              <Search size={14} className="audit-search-icon" aria-hidden="true" />
+              <input
+                type="search"
+                className="audit-search-input"
+                placeholder="Search items or users…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                aria-label="Search activity"
+              />
+              {searchTerm ? (
+                <button
+                  type="button"
+                  className="audit-search-clear"
+                  onClick={() => setSearchTerm("")}
+                  aria-label="Clear search"
+                  title="Clear search"
+                >
+                  ×
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -1077,6 +1357,9 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
               label={group.label}
               events={group.events}
               onViewItemHistory={viewItemHistory}
+              // Today stays open; older days collapse so the list doesn't
+              // scroll past a mountain of yesterday's activity to find today.
+              defaultCollapsed={group.label !== "Today"}
             />
           ))}
 
@@ -1100,13 +1383,25 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
 
       {tab === "item-history" && (
         <div className="audit-feed">
-          <button
-            type="button"
-            className="button button-ghost button-sm audit-back-btn"
-            onClick={() => setTab("feed")}
-          >
-            <ChevronLeft size={14} /> Back to Activity
-          </button>
+          <div className="audit-item-history-toolbar">
+            <button
+              type="button"
+              className="button button-ghost button-sm audit-back-btn"
+              onClick={() => setTab("feed")}
+            >
+              <ChevronLeft size={14} /> Back to Activity
+            </button>
+            {onOpenInInventory && historyItemName ? (
+              <button
+                type="button"
+                className="button button-secondary button-sm audit-open-in-inventory"
+                onClick={() => onOpenInInventory(historyItemName)}
+                title="Jump to this item in the inventory table"
+              >
+                Open in Inventory <ChevronRight size={14} />
+              </button>
+            ) : null}
+          </div>
           <h3 className="audit-item-history-title">
             <Package size={18} /> {historyItemName}
           </h3>
@@ -1127,6 +1422,7 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
               key={group.label}
               label={group.label}
               events={group.events}
+              defaultCollapsed={group.label !== "Today"}
             />
           ))}
 

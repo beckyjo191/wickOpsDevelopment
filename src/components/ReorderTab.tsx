@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
 import { formatCurrency } from "../lib/currency";
 import { Check, ExternalLink, Link2Off, Package, Plus, Save, X } from "lucide-react";
@@ -235,6 +235,24 @@ function OrderBuilderPanel({
   const [linkPromptRow, setLinkPromptRow] = useState<InventoryRow | null>(null);
   const [linkDraft, setLinkDraft] = useState("");
   const [savingLink, setSavingLink] = useState(false);
+  // Dropdown state — mirrors the ItemAutocomplete pattern used by Log Usage
+  // and Fast Restock so the search doesn't hog vertical space.
+  const [open, setOpen] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
 
   const results = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -256,6 +274,19 @@ function OrderBuilderPanel({
     return filtered.slice(0, 20);
   }, [inventoryRows, alreadyPickedRowIds, search, location]);
 
+  // Reset highlight whenever result set or open state changes.
+  useEffect(() => {
+    setHighlightIndex(-1);
+  }, [results.length, open, search]);
+
+  // Keep highlighted option scrolled into view.
+  useEffect(() => {
+    if (highlightIndex >= 0 && listRef.current) {
+      const el = listRef.current.children[highlightIndex] as HTMLElement | undefined;
+      el?.scrollIntoView({ block: "nearest" });
+    }
+  }, [highlightIndex]);
+
   const formatItem = (row: InventoryRow) => {
     const name = String(row.values.itemName ?? "").trim() || "Untitled";
     const qty = Number(row.values.quantity ?? 0);
@@ -270,11 +301,17 @@ function OrderBuilderPanel({
     const hasLink = String(row.values.reorderLink ?? "").trim() !== "";
     if (hasLink) {
       onPick(row.id);
+      // Clear search so the user can pick the next item without having to
+      // manually delete the previous query — mirrors the Log Usage pattern.
+      setSearch("");
+      setOpen(false);
+      inputRef.current?.focus();
       return;
     }
     // No link — open the inline link prompt before adding.
     setLinkPromptRow(row);
     setLinkDraft("");
+    setOpen(false);
   };
 
   const handleSkipLink = () => {
@@ -282,6 +319,8 @@ function OrderBuilderPanel({
     onPick(linkPromptRow.id);
     setLinkPromptRow(null);
     setLinkDraft("");
+    setSearch("");
+    inputRef.current?.focus();
   };
 
   const handleSaveLinkAndAdd = async () => {
@@ -303,7 +342,35 @@ function OrderBuilderPanel({
     onPick(linkPromptRow.id);
     setLinkPromptRow(null);
     setLinkDraft("");
+    setSearch("");
+    inputRef.current?.focus();
   };
+
+  const onInputKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "Enter") {
+        setOpen(true);
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.min(i + 1, results.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (highlightIndex >= 0 && results[highlightIndex]) {
+        handleResultClick(results[highlightIndex]);
+      }
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  const showDropdown = open && !linkPromptRow && results.length > 0;
 
   return (
     <div className="order-builder-panel app-card">
@@ -341,17 +408,90 @@ function OrderBuilderPanel({
             ))}
           </select>
         </label>
-        <label className="order-builder-field order-builder-field--search">
+        <div className="order-builder-field order-builder-field--search">
           <span>Search inventory</span>
-          <input
-            className="field"
-            type="search"
-            placeholder="Type an item name…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            autoFocus
-          />
-        </label>
+          {/* Autocomplete-style search: dropdown only appears while focused,
+           *  matches the Log Usage / Fast Restock pattern so the panel
+           *  doesn't consume a ton of vertical space when idle. */}
+          <div className="order-builder-autocomplete" ref={wrapRef}>
+            <input
+              ref={inputRef}
+              className="field order-builder-autocomplete-input"
+              type="text"
+              placeholder="Search items…"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setOpen(true);
+              }}
+              /* Match Log Usage: clicking the input opens the dropdown,
+               * showing the user the available items immediately. We
+               * deliberately don't autoFocus on mount so it only opens
+               * when the user clicks in. */
+              onFocus={() => setOpen(true)}
+              onKeyDown={onInputKeyDown}
+              role="combobox"
+              aria-expanded={showDropdown}
+              aria-autocomplete="list"
+              autoComplete="off"
+            />
+            {search && (
+              <button
+                type="button"
+                className="order-builder-autocomplete-clear"
+                onClick={() => {
+                  setSearch("");
+                  setOpen(false);
+                  inputRef.current?.focus();
+                }}
+                aria-label="Clear search"
+              >
+                <X size={13} />
+              </button>
+            )}
+            {showDropdown && (
+              <ul
+                className="order-builder-autocomplete-list"
+                ref={listRef}
+                role="listbox"
+              >
+                {results.map((row, i) => {
+                  const { name, qtyLabel, loc, hasLink } = formatItem(row);
+                  return (
+                    <li
+                      key={row.id}
+                      className={`order-builder-autocomplete-option${i === highlightIndex ? " order-builder-autocomplete-option--hl" : ""}`}
+                      role="option"
+                      aria-selected={i === highlightIndex}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleResultClick(row)}
+                    >
+                      <span className="order-builder-autocomplete-option-name">
+                        {name}
+                      </span>
+                      <span className="order-builder-autocomplete-option-meta">
+                        qty {qtyLabel}
+                        {loc && ` · ${loc}`}
+                        {!hasLink && (
+                          <span className="order-builder-result-nolink">
+                            <Link2Off size={11} /> No link
+                          </span>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {open && !linkPromptRow && results.length === 0 && (
+              <div className="order-builder-autocomplete-empty">
+                {search.trim()
+                  ? "No matching items in this location."
+                  : "Start typing to search inventory…"}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
       {linkPromptRow ? (
         <div className="order-builder-link-prompt">
@@ -408,38 +548,6 @@ function OrderBuilderPanel({
           </div>
         </div>
       ) : null}
-      <div className="order-builder-results">
-        {results.length === 0 ? (
-          <p className="order-builder-empty">
-            {search.trim()
-              ? "No matching items in this location."
-              : "Start typing to search inventory, or add a new item below."}
-          </p>
-        ) : (
-          results.map((row) => {
-            const { name, qtyLabel, loc, hasLink } = formatItem(row);
-            return (
-              <button
-                key={row.id}
-                type="button"
-                className="order-builder-result"
-                onClick={() => handleResultClick(row)}
-              >
-                <span className="order-builder-result-name">{name}</span>
-                <span className="order-builder-result-meta">
-                  qty {qtyLabel}
-                  {loc && ` · ${loc}`}
-                  {!hasLink && (
-                    <span className="order-builder-result-nolink">
-                      <Link2Off size={11} /> No link
-                    </span>
-                  )}
-                </span>
-              </button>
-            );
-          })
-        )}
-      </div>
       <div className="order-builder-footer">
         <span className="order-builder-footer-hint">Can't find it?</span>
         <button
@@ -1050,9 +1158,17 @@ export function ReorderTab({
       else domainMap.set(domain, [item]);
     }
 
+    // Alphabetize items within each vendor group so the reorder checklist has
+    // a predictable order — otherwise rows come out in Map insertion order
+    // which has no meaning to the user.
+    const nameCompare = (a: ReorderItem, b: ReorderItem) =>
+      a.itemName.localeCompare(b.itemName, undefined, { sensitivity: "base" });
+
     const groups: VendorGroup[] = Array.from(domainMap.entries())
-      .map(([domain, items]) => ({ domain, items }))
+      .map(([domain, items]) => ({ domain, items: [...items].sort(nameCompare) }))
       .sort((a, b) => b.items.length - a.items.length);
+
+    noLink.sort(nameCompare);
 
     return { vendorGroups: groups, noLinkItems: noLink };
   }, [rows]);
@@ -1125,6 +1241,8 @@ export function ReorderTab({
   // one go to the No-Link card (treated just like low-stock unlinked items).
   const vendorGroupsWithExtras = useMemo<VendorGroup[]>(() => {
     if (extraPickedItems.length === 0) return vendorGroups;
+    const nameCompare = (a: ReorderItem, b: ReorderItem) =>
+      a.itemName.localeCompare(b.itemName, undefined, { sensitivity: "base" });
     // Clone the groups so we don't mutate the original memo result.
     const cloned: VendorGroup[] = vendorGroups.map((g) => ({
       domain: g.domain,
@@ -1142,13 +1260,18 @@ export function ReorderTab({
         cloned[idx].items.push(item);
       }
     }
+    // Re-sort each group so extras slot into alphabetical position instead of
+    // appending at the end of the list.
+    for (const g of cloned) g.items.sort(nameCompare);
     return cloned;
   }, [vendorGroups, extraPickedItems]);
 
   const noLinkItemsWithExtras = useMemo<ReorderItem[]>(() => {
     const extras = extraPickedItems.filter((i) => !i.reorderLink);
     if (extras.length === 0) return noLinkItems;
-    return [...noLinkItems, ...extras];
+    const nameCompare = (a: ReorderItem, b: ReorderItem) =>
+      a.itemName.localeCompare(b.itemName, undefined, { sensitivity: "base" });
+    return [...noLinkItems, ...extras].sort(nameCompare);
   }, [noLinkItems, extraPickedItems]);
 
   // Set of row IDs already in the reorder list — used by OrderBuilderPanel to
@@ -1242,6 +1365,58 @@ export function ReorderTab({
   const isEmpty =
     totalReorderItems === 0 && noLinkItemsWithExtras.length === 0 && rawLines.length === 0;
 
+  // Filter the reorder list by item name. Vendor groups that end up with no
+  // matching items or raw lines are hidden entirely. Applies to extras +
+  // low-stock + no-link + raw lines so one input covers the whole page.
+  const [listFilter, setListFilter] = useState("");
+  const filterQ = listFilter.trim().toLowerCase();
+  const matchesFilter = (name: string) =>
+    !filterQ || name.toLowerCase().includes(filterQ);
+
+  const filteredVendorGroups = useMemo<VendorGroup[]>(() => {
+    if (!filterQ) return vendorGroupsWithExtras;
+    return vendorGroupsWithExtras
+      .map((g) => ({ domain: g.domain, items: g.items.filter((i) => matchesFilter(i.itemName)) }))
+      .filter((g) => g.items.length > 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendorGroupsWithExtras, filterQ]);
+
+  const filteredNoLinkItems = useMemo<ReorderItem[]>(() => {
+    if (!filterQ) return noLinkItemsWithExtras;
+    return noLinkItemsWithExtras.filter((i) => matchesFilter(i.itemName));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noLinkItemsWithExtras, filterQ]);
+
+  const getFilteredRawLinesForDomain = (domain: string) => {
+    const all = getRawLinesForDomain(domain);
+    if (!filterQ) return all;
+    return all.filter((r) => matchesFilter(r.name));
+  };
+
+  // Rebuild allGroups using filtered vendor groups and filtered raw lines.
+  // A synthetic (raw-line-only) group only survives if it has matching raw
+  // lines under the current filter.
+  const filteredAllGroups = useMemo<VendorGroup[]>(() => {
+    const existingDomains = new Set(filteredVendorGroups.map((g) => g.domain));
+    const syntheticDomains = new Set<string>();
+    for (const raw of rawLines) {
+      const domain = computeRawLineDomain(raw);
+      if (!existingDomains.has(domain) && matchesFilter(raw.name)) {
+        syntheticDomains.add(domain);
+      }
+    }
+    const synthetic: VendorGroup[] = Array.from(syntheticDomains)
+      .sort()
+      .map((domain) => ({ domain, items: [] }));
+    return [...filteredVendorGroups, ...synthetic];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredVendorGroups, rawLines, filterQ]);
+
+  const filteredTotalItems = filteredVendorGroups.reduce((sum, g) => sum + g.items.length, 0)
+    + filteredNoLinkItems.length
+    + rawLines.filter((r) => matchesFilter(r.name)).length;
+  const hasFilterActive = filterQ.length > 0;
+
   // Estimated total to reorder everything in the list at the suggested qty.
   // Raw-added items (Add Item Not Listed) and items without a known price are
   // skipped; we count those separately so the user sees what's missing.
@@ -1283,6 +1458,28 @@ export function ReorderTab({
             </span>
           )}
         </div>
+        {!isEmpty && (
+          <div className="reorder-list-filter">
+            <input
+              className="field reorder-list-filter-input"
+              type="search"
+              placeholder="Filter reorder list…"
+              value={listFilter}
+              onChange={(e) => setListFilter(e.target.value)}
+              aria-label="Filter reorder list"
+            />
+            {listFilter && (
+              <button
+                type="button"
+                className="reorder-list-filter-clear"
+                onClick={() => setListFilter("")}
+                aria-label="Clear filter"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        )}
         {!showOrderBuilder && !showAddForm && (
           <button
             type="button"
@@ -1331,8 +1528,14 @@ export function ReorderTab({
         </div>
       )}
 
-      {allGroups.map((group) => {
-        const cardRawLines = getRawLinesForDomain(group.domain);
+      {hasFilterActive && filteredTotalItems === 0 && !isEmpty && (
+        <p className="reorder-filter-empty">
+          No items in your reorder list match "{listFilter}".
+        </p>
+      )}
+
+      {filteredAllGroups.map((group) => {
+        const cardRawLines = getFilteredRawLinesForDomain(group.domain);
         return (
           <VendorChecklistCard
             key={`${group.domain}-${group.items.map((i) => i.row.id).sort().join(",")}`}
@@ -1346,9 +1549,9 @@ export function ReorderTab({
         );
       })}
 
-      {noLinkItemsWithExtras.length > 0 && (
+      {filteredNoLinkItems.length > 0 && (
         <NoLinkCard
-          items={noLinkItemsWithExtras}
+          items={filteredNoLinkItems}
           onSaveReorderLink={onSaveReorderLink}
           onRemoveExtra={handleRemoveExtra}
         />

@@ -522,6 +522,12 @@ export default function App() {
       <AuditLogPage
         canManageColumns={canManageInventoryColumns}
         canReviewSubmissions={canReviewUsageSubmissions}
+        onOpenInInventory={(itemName) => {
+          // Jump to the Inventory tab with the item pre-filtered via search —
+          // works for single and multi-lot items since search matches on name.
+          setInventoryInitialSearch(itemName);
+          setView("inventory");
+        }}
       />
     ) : (
       <DashboardPage

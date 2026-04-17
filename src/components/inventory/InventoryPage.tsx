@@ -107,6 +107,7 @@ export function InventoryPage({
     recentlyEditedRowIdRef: data.recentlyEditedRowIdRef,
     newRowAnchorIdRef: data.newRowAnchorIdRef,
     newRowPositionRef: data.newRowPositionRef,
+    editingOriginalIndexRef: data.editingOriginalIndexRef,
     sortEpoch: data.sortEpoch,
   });
   filtersRef.current = filters;
@@ -599,6 +600,8 @@ export function InventoryPage({
                 beginCellEditSession={data.beginCellEditSession}
                 endCellEditSession={data.endCellEditSession}
                 getDaysUntilExpiration={filters.getDaysUntilExpiration}
+                isEditingLinkCell={data.isEditingLinkCell}
+                setEditingLinkCell={data.setEditingLinkCell}
                 activeTab={filters.activeTab}
                 onRetireRow={(rowId) => void data.onRetireRows([rowId])}
               />

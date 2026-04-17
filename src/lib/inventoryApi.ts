@@ -1058,13 +1058,11 @@ export type AuditAnalytics = {
     lossQty: number;
     /** Sum of lossQty × last-known-unitCost per item at the moment of retirement. */
     lossValue: number;
-    /** Share of total restock qty coming in as donations (0-100). */
-    donationPct: number;
   };
   usageOverTime: Array<{ date: string; totalUsed: number }>;
   byVendor: Array<{ vendor: string; spend: number; orderCount: number }>;
-  bySpendItem: Array<{ itemName: string; spend: number; qtyReceived: number }>;
-  byUsageItem: Array<{ itemName: string; qtyUsed: number }>;
+  bySpendItem: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }>;
+  byUsageItem: Array<{ itemId: string; itemName: string; qtyUsed: number }>;
   lossByReason: Array<{ reason: string; qty: number; value: number }>;
 };
 

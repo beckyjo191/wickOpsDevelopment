@@ -607,12 +607,6 @@ function formatQty(value: number): string {
   return Math.round(value).toLocaleString();
 }
 
-function formatPct(value: number): string {
-  if (!Number.isFinite(value)) return "0%";
-  if (value >= 10) return `${Math.round(value)}%`;
-  return `${value.toFixed(1)}%`;
-}
-
 const REASON_LABELS: Record<string, string> = {
   expired: "Expired",
   damaged: "Damaged",
@@ -703,7 +697,72 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
-function AnalyticsDashboard({ analytics }: { analytics: AuditAnalytics }) {
+/**
+ * Feature version of a stat card. Big number + label, plus an inline preview
+ * of the top contributing rows — each clickable so you can drill into a single
+ * item's history. Used for the headline "items used" stat.
+ */
+function FeatureStatCard({
+  label,
+  value,
+  previewTitle,
+  items,
+  emptyHint,
+  onViewItemHistory,
+}: {
+  label: string;
+  value: string;
+  previewTitle: string;
+  items: Array<{ itemId: string; itemName: string; qtyUsed: number }>;
+  emptyHint: string;
+  onViewItemHistory?: (itemId: string, name: string) => void;
+}) {
+  const max = Math.max(...items.map((r) => r.qtyUsed), 1);
+  return (
+    <div className="audit-stat-card audit-stat-card--feature">
+      <div className="audit-stat-card-body">
+        <span className="audit-stat-value">{value}</span>
+        <span className="audit-stat-label">{label}</span>
+      </div>
+      <div className="audit-feature-preview">
+        <span className="audit-feature-preview-title">{previewTitle}</span>
+        {items.length === 0 ? (
+          <p className="audit-empty audit-empty--inline">{emptyHint}</p>
+        ) : (
+          <ul className="audit-feature-preview-list">
+            {items.slice(0, 8).map((row) => {
+              const pct = Math.max((row.qtyUsed / max) * 100, 2);
+              return (
+                <li key={row.itemId} className="audit-feature-preview-row">
+                  <button
+                    type="button"
+                    className="audit-feature-preview-link"
+                    onClick={() => onViewItemHistory?.(row.itemId, row.itemName)}
+                    title={`View activity for ${row.itemName}`}
+                  >
+                    {row.itemName}
+                  </button>
+                  <div className="audit-bar-track audit-feature-preview-track">
+                    <div className="audit-bar-fill" style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="audit-feature-preview-value">{formatQty(row.qtyUsed)}</span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsDashboard({
+  analytics,
+  onViewItemHistory,
+}: {
+  analytics: AuditAnalytics;
+  onViewItemHistory?: (itemId: string, name: string) => void;
+}) {
   const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
   const hasData =
     totals.qtyUsed > 0 || totals.spend > 0 || totals.lossQty > 0 || usageOverTime.length > 0;
@@ -727,14 +786,22 @@ function AnalyticsDashboard({ analytics }: { analytics: AuditAnalytics }) {
   return (
     <>
       <div className="audit-analytics-summary">
-        <StatCard label="Qty used" value={formatQty(totals.qtyUsed)} />
-        <StatCard label="Spend" value={formatUsd(totals.spend)} />
-        <StatCard
-          label="Loss"
-          value={formatQty(totals.lossQty)}
-          sub={totals.lossValue > 0 ? `~${formatUsd(totals.lossValue)}` : undefined}
+        <FeatureStatCard
+          label="items used"
+          value={formatQty(totals.qtyUsed)}
+          previewTitle="Top items consumed"
+          items={byUsageItem}
+          emptyHint="No usage logged yet for this period."
+          onViewItemHistory={onViewItemHistory}
         />
-        <StatCard label="Donations" value={formatPct(totals.donationPct)} sub="of intake" />
+        <div className="audit-analytics-summary-side">
+          <StatCard label="Spend" value={formatUsd(totals.spend)} />
+          <StatCard
+            label="Loss"
+            value={formatQty(totals.lossQty)}
+            sub={totals.lossValue > 0 ? `~${formatUsd(totals.lossValue)}` : undefined}
+          />
+        </div>
       </div>
 
       <section className="audit-analytics-section">
@@ -758,15 +825,8 @@ function AnalyticsDashboard({ analytics }: { analytics: AuditAnalytics }) {
       </section>
 
       <section className="audit-analytics-section">
-        <h3 className="audit-analytics-section-title">Usage</h3>
+        <h3 className="audit-analytics-section-title">Usage over time</h3>
         <UsageLineChart data={usageOverTime} />
-        <SimpleBarChart
-          data={byUsageItem as unknown as Array<Record<string, unknown>>}
-          labelKey="itemName"
-          valueKey="qtyUsed"
-          title="Top items by qty consumed"
-          formatValue={formatQty}
-        />
       </section>
 
       <section className="audit-analytics-section">
@@ -1102,7 +1162,7 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions }: AuditLo
           )}
 
           {!analyticsLoading && analytics && (
-            <AnalyticsDashboard analytics={analytics} />
+            <AnalyticsDashboard analytics={analytics} onViewItemHistory={viewItemHistory} />
           )}
         </div>
       )}

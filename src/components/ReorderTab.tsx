@@ -6,7 +6,6 @@ export type OrderItem = {
   rowId: string | null;
   name: string;
   qty: number;
-  unitCost?: number;
   // For freeform items only: vendor URL the user entered when adding the item.
   // Persisted onto the new inventory row when received with addToInventory.
   reorderLink?: string;
@@ -80,7 +79,6 @@ function AddItemCard({
     name: string;
     link: string;
     qty: string;
-    unitCost: string;
     location: string;
   }) => void;
   onClose: () => void;
@@ -88,7 +86,6 @@ function AddItemCard({
   const [name, setName] = useState("");
   const [link, setLink] = useState("");
   const [qty, setQty] = useState("1");
-  const [unitCost, setUnitCost] = useState("");
   const [location, setLocation] = useState(defaultLocation);
   const [error, setError] = useState("");
 
@@ -102,7 +99,7 @@ function AddItemCard({
       setError("Quantity must be greater than 0.");
       return;
     }
-    onAdd({ name, link, qty, unitCost, location });
+    onAdd({ name, link, qty, location });
     onClose();
   };
 
@@ -150,17 +147,6 @@ function AddItemCard({
           />
         </label>
         <label className="reorder-add-item-field">
-          <span>Unit cost (optional)</span>
-          <input
-            className="field"
-            type="text"
-            inputMode="decimal"
-            placeholder="$0.00"
-            value={unitCost}
-            onChange={(e) => setUnitCost(e.target.value)}
-          />
-        </label>
-        <label className="reorder-add-item-field">
           <span>Location</span>
           <select
             className="field"
@@ -197,7 +183,6 @@ type RawLine = {
   name: string;
   link: string;
   qty: string;
-  unitCost: string;
   // Location the user picked when adding the item. Threaded through to the
   // restock order so the new inventory row can be created with the right
   // location context.
@@ -268,15 +253,6 @@ function RawLineRow({
         value={raw.qty}
         onChange={(e) => onUpdate(raw.id, { qty: e.target.value })}
       />
-      <input
-        className="field checklist-cost-field"
-        type="number"
-        min="0"
-        step="0.01"
-        placeholder="$0.00"
-        value={raw.unitCost}
-        onChange={(e) => onUpdate(raw.id, { unitCost: e.target.value })}
-      />
       <button
         type="button"
         className="checklist-raw-remove"
@@ -298,7 +274,6 @@ type LineState = {
   link: string;
   checked: boolean;
   qty: string;
-  unitCost: string;
 };
 
 function VendorChecklistCard({
@@ -322,7 +297,6 @@ function VendorChecklistCard({
       link: item.reorderLink,
       checked: false,
       qty: String(item.suggestedQty),
-      unitCost: "",
     })),
   );
 
@@ -347,7 +321,6 @@ function VendorChecklistCard({
         rowId: l.rowId,
         name: l.name,
         qty: Math.max(1, Number(l.qty) || 1),
-        ...(l.unitCost.trim() ? { unitCost: Number(l.unitCost) } : {}),
       }));
     const freeformItems = rawLines
       .filter((r) => r.name.trim() && Number(r.qty) > 0)
@@ -357,7 +330,6 @@ function VendorChecklistCard({
           rowId: null as string | null,
           name: r.name.trim(),
           qty: Number(r.qty),
-          ...(r.unitCost.trim() ? { unitCost: Number(r.unitCost) } : {}),
           ...(link ? { reorderLink: normalizeLinkValue(link) } : {}),
           ...(r.location ? { location: r.location } : {}),
         };
@@ -385,7 +357,6 @@ function VendorChecklistCard({
           <span />
           <span>Item</span>
           <span>Qty</span>
-          <span>Unit Cost</span>
         </div>
 
         {lines.map((line) => {
@@ -427,15 +398,6 @@ function VendorChecklistCard({
                 placeholder="Qty"
                 value={line.qty}
                 onChange={(e) => updateLine(line.rowId, { qty: e.target.value })}
-              />
-              <input
-                className="field checklist-cost-field"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="$0.00"
-                value={line.unitCost}
-                onChange={(e) => updateLine(line.rowId, { unitCost: e.target.value })}
               />
             </div>
           );
@@ -734,7 +696,6 @@ export function ReorderTab({
     name: string;
     link: string;
     qty: string;
-    unitCost: string;
     location: string;
   }) => {
     const trimmedLink = input.link.trim();
@@ -756,7 +717,6 @@ export function ReorderTab({
         name: input.name.trim(),
         link: trimmedLink,
         qty: input.qty.trim() || "1",
-        unitCost: input.unitCost.trim(),
         location: input.location,
         originDomain,
       },

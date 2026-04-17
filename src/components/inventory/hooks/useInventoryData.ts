@@ -15,6 +15,7 @@ import {
   type PendingEntry,
 } from "../../../lib/inventoryApi";
 import { pickLoadingLine } from "../../../lib/loadingLines";
+import { formatCurrency, isCurrencyColumnKey } from "../../../lib/currency";
 import type {
   ActiveTab,
   CsvImportDialogState,
@@ -130,6 +131,11 @@ export function useInventoryData({
   const newRowAnchorIdRef = useRef<string | null>(null);
   const newRowPositionRef = useRef<"above" | "below">("below");
   const anchorReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Captured filteredRows index of the row being edited. Lets the filters
+   *  hook pin that row in place so it doesn't jump around as its sort key
+   *  (e.g. item name) changes character-by-character. Null when nothing is
+   *  being edited. */
+  const editingOriginalIndexRef = useRef<number | null>(null);
   /** Bumped when editing ends to force filteredRows memo to re-sort */
   const [sortEpoch, setSortEpoch] = useState(0);
   const rowsRef = useRef(rows);
@@ -309,6 +315,14 @@ export function useInventoryData({
     if (editSessionCellRef.current === cellKey) return;
     editSessionCellRef.current = cellKey;
     editingRowIdRef.current = rowId;
+    // Capture the row's current position in the filtered list so the filters
+    // hook can keep the row pinned there during the edit — prevents it from
+    // jumping around as its sort key (e.g. item name) changes per keystroke.
+    // Skip if this is a newly-added row (anchor already governs its spot).
+    if (!newRowAnchorIdRef.current) {
+      const idx = filteredRowIds.indexOf(rowId);
+      editingOriginalIndexRef.current = idx >= 0 ? idx : null;
+    }
     // Clear grace-period timers if the user is resuming edits on the same row
     if (recentlyEditedRowIdRef.current === rowId) {
       if (recentlyEditedTimerRef.current) clearTimeout(recentlyEditedTimerRef.current);
@@ -351,6 +365,12 @@ export function useInventoryData({
     const rowId = editingRowIdRef.current;
     editSessionCellRef.current = null;
     editingRowIdRef.current = null;
+    // Release the pinned position so the row re-sorts naturally once the
+    // user leaves it. Bump sortEpoch to force the memo to re-run.
+    if (editingOriginalIndexRef.current !== null) {
+      editingOriginalIndexRef.current = null;
+      setSortEpoch((n) => n + 1);
+    }
     // Keep the row protected from autosave for a short grace period so
     // rapid cross-cell edits (blur → focus next cell) don't create
     // intermediate audit entries for each field.
@@ -708,6 +728,12 @@ export function useInventoryData({
       const raw = String(value ?? "").trim();
       if (!raw) return "";
       const parsed = Number(raw);
+      if (isCurrencyColumnKey(column.key) && Number.isFinite(parsed)) {
+        // Format ".89" / "0.89" / "4239" as "$0.89" / "$4,239.00" — read-only
+        // display only; the stored value remains the numeric string so other
+        // consumers (analytics, save events) can Number() it cleanly.
+        return formatCurrency(parsed);
+      }
       return Number.isFinite(parsed) ? String(parsed) : raw;
     }
     return String(value ?? "");
@@ -1399,6 +1425,7 @@ export function useInventoryData({
     recentlyEditedRowIdRef,
     newRowAnchorIdRef,
     newRowPositionRef,
+    editingOriginalIndexRef,
     sortEpoch,
     pendingScrollToRowRef,
     editSessionCellRef,

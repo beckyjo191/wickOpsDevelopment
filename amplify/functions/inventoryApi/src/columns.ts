@@ -105,6 +105,8 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
 
     // Ensure the unitCost core column exists (added after reorderLink).
     // Hidden by default — orgs that don't track cost won't see an empty column.
+    // Non-editable — value is refreshed only by restock events (Fast Restock /
+    // Orders receive) so the cached latest-price stays honest.
     const hasUnitCostColumn = existing.some(
       (c) => normalizeLooseKey(c.key) === "unitcost",
     );
@@ -124,7 +126,7 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
               isCore: true,
               isRequired: false,
               isVisible: false,
-              isEditable: true,
+              isEditable: false,
               sortOrder: maxSort + 10,
               createdAt: new Date().toISOString(),
             } satisfies InventoryColumn,
@@ -232,7 +234,9 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       // Hidden by default — orgs that don't track cost won't see an empty column.
       // Users can show it from the column settings.
       isVisible: false,
-      isEditable: true,
+      // Non-editable — value is refreshed only by restock events (Fast Restock
+      // or Orders receive) so the cached latest-price matches audit history.
+      isEditable: false,
       sortOrder: 70,
       createdAt: new Date().toISOString(),
     },

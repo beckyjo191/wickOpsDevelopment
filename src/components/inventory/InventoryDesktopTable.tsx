@@ -210,7 +210,7 @@ export function InventoryDesktopTable({
                     column={column}
                     row={row}
                     value={row.values[column.key]}
-                    canEdit={canEditTable}
+                    canEdit={canEditTable && column.isEditable !== false}
                     variant="desktop"
                     isEditingLink={isEditingLinkCell(row.id, column.key)}
                     isEditingDate={isEditingDateCell(row.id, column.key)}

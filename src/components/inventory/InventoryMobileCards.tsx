@@ -30,6 +30,10 @@ export type InventoryMobileCardsProps = {
   beginCellEditSession: (rowId: string, columnKey: string) => void;
   endCellEditSession: () => void;
   getDaysUntilExpiration: (value: string | number | boolean | null | undefined) => number | null;
+  /** Same link-edit state the desktop table uses — plumbs through so mobile
+   *  cards can show "label + open-arrow" instead of a raw URL input. */
+  isEditingLinkCell: (rowId: string, columnKey: string) => boolean;
+  setEditingLinkCell: (cell: { rowId: string; columnKey: string } | null) => void;
   activeTab?: ActiveTab;
   onRetireRow?: (rowId: string) => void;
 };
@@ -63,6 +67,8 @@ export function InventoryMobileCards({
   beginCellEditSession,
   endCellEditSession,
   getDaysUntilExpiration,
+  isEditingLinkCell,
+  setEditingLinkCell,
   activeTab,
   onRetireRow,
 }: InventoryMobileCardsProps) {
@@ -236,14 +242,18 @@ export function InventoryMobileCards({
                         column={column}
                         row={row}
                         value={row.values[column.key]}
-                        canEdit={canEditTable}
+                        canEdit={canEditTable && column.isEditable !== false}
                         variant="mobile"
+                        isEditingLink={isEditingLinkCell(row.id, column.key)}
                         onCellChange={onCellChange}
+                        onLinkEditStart={(rowId, columnKey) => setEditingLinkCell({ rowId, columnKey })}
+                        onLinkEditEnd={() => setEditingLinkCell(null)}
                         getReadOnlyCellText={getReadOnlyCellText}
                         toDateInputValue={toDateInputValue}
                         normalizeLinkValue={normalizeLinkValue}
                         beginCellEditSession={beginCellEditSession}
                         endCellEditSession={endCellEditSession}
+                        onSetSelectedRowId={onSetSelectedRowId}
                       />
                     </div>
                   ))}

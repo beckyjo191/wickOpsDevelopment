@@ -240,6 +240,10 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
         if (orderItem.reorderLink) newValues.reorderLink = orderItem.reorderLink;
         // Persist location so location-filtered inventory views pick it up.
         if (orderItem.location) newValues.location = orderItem.location;
+        // Cache the latest unit cost on the row so the (read-only) Unit Cost
+        // column shows the most recent price paid. Authoritative history lives
+        // in the RESTOCK_RECEIVED audit events.
+        if (line.unitCost !== undefined) newValues.unitCost = line.unitCost;
         await ddb.send(new PutCommand({
           TableName: storage.itemTable,
           Item: {
@@ -280,6 +284,10 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     const newQty = oldQty + line.qtyThisReceive;
     const nextValues: Record<string, unknown> = { ...values, quantity: newQty };
     if (line.expirationDate) nextValues.expirationDate = line.expirationDate;
+    // Cache the latest unit cost on the row so the (read-only) Unit Cost
+    // column shows the most recent price paid. Authoritative history lives in
+    // the RESTOCK_RECEIVED audit events.
+    if (line.unitCost !== undefined) nextValues.unitCost = line.unitCost;
 
     await ddb.send(new UpdateCommand({
       TableName: storage.itemTable,

@@ -94,17 +94,24 @@ type ReceiveLine = {
   expirationDate: string;
   unitCost: string;
   addToInventory: boolean;
+  /** True when this specific item has an expiration date on its inventory row.
+   *  Drives whether the expiration input shows + whether it's required. */
+  tracksExpiration: boolean;
   error: string;
 };
 
 function ReceiveOrderForm({
   order,
   hasExpirationColumn,
+  inventoryRows,
   onReceived,
   onCancel,
 }: {
   order: RestockOrder;
   hasExpirationColumn: boolean;
+  /** Current inventory rows — used to pre-fill unit cost from the row's
+   *  cached latest price when the order item itself doesn't carry one. */
+  inventoryRows: InventoryRow[];
   onReceived: () => void;
   onCancel: () => void;
 }) {
@@ -112,6 +119,25 @@ function ReceiveOrderForm({
   const [lines, setLines] = useState<ReceiveLine[]>(
     pendingItems.map((i) => {
       const freeform = i.itemId.startsWith("freeform-");
+      // Pre-fill unit cost from (in order of freshness):
+      //   1. the order item itself (captured during a prior partial receive)
+      //   2. the inventory row's cached latest price (from past restocks)
+      // User can override in the input.
+      let prefillCost: number | undefined = i.unitCost;
+      let tracksExpiration = false;
+      if (!freeform) {
+        const row = inventoryRows.find((r) => r.id === i.itemId);
+        if (row) {
+          const rowCost = Number(row.values.unitCost);
+          if (prefillCost === undefined && Number.isFinite(rowCost) && rowCost >= 0) {
+            prefillCost = rowCost;
+          }
+          // A non-freeform item "tracks expiration" when its inventory row
+          // already has a non-empty expiration date. Permanent items (e.g.
+          // stethoscopes) have no expiration and shouldn't prompt for one.
+          tracksExpiration = String(row.values.expirationDate ?? "").trim() !== "";
+        }
+      }
       return {
         itemId: i.itemId,
         itemName: i.itemName,
@@ -121,8 +147,9 @@ function ReceiveOrderForm({
         qtyRemaining: i.qtyOrdered - i.qtyReceived,
         qtyThisReceive: String(i.qtyOrdered - i.qtyReceived),
         expirationDate: "",
-        unitCost: i.unitCost !== undefined ? formatCurrency(i.unitCost) : "",
+        unitCost: prefillCost !== undefined ? formatCurrency(prefillCost) : "",
         addToInventory: freeform,  // default to save for freeform items
+        tracksExpiration,
         error: "",
       };
     }),
@@ -151,13 +178,24 @@ function ReceiveOrderForm({
     setSubmitting(true);
     setError(null);
     try {
-      const receiveLines: RestockReceiveLine[] = validated.map((l) => ({
-        itemId: l.itemId,
-        qtyThisReceive: Number(l.qtyThisReceive),
-        ...(l.expirationDate ? { expirationDate: l.expirationDate } : {}),
-        ...(l.unitCost.trim() ? { unitCost: parseCurrency(l.unitCost) } : {}),
-        ...(l.isFreeform ? { addToInventory: l.addToInventory } : {}),
-      }));
+      // Drop qty=0 lines — they're "received nothing of this item," a no-op
+      // on the backend. If the user entered 0 across the board, close the form
+      // without calling the API (handled earlier in handleConfirmClick).
+      const receiveLines: RestockReceiveLine[] = validated
+        .filter((l) => Number(l.qtyThisReceive) > 0)
+        .map((l) => ({
+          itemId: l.itemId,
+          qtyThisReceive: Number(l.qtyThisReceive),
+          ...(l.expirationDate ? { expirationDate: l.expirationDate } : {}),
+          ...(l.unitCost.trim() ? { unitCost: parseCurrency(l.unitCost) } : {}),
+          ...(l.isFreeform ? { addToInventory: l.addToInventory } : {}),
+        }));
+      if (receiveLines.length === 0) {
+        // Nothing to send — backend requires at least one line.
+        setError("Enter at least one received quantity above 0.");
+        setPendingShortLines(null);
+        return;
+      }
       await receiveRestockOrder(order.id, { lines: receiveLines, closeOrder });
       onReceived();
     } catch (err) {
@@ -172,15 +210,18 @@ function ReceiveOrderForm({
     let hasError = false;
     const validated = lines.map((l) => {
       const qty = Number(l.qtyThisReceive);
-      if (!Number.isFinite(qty) || qty <= 0) {
+      // 0 is valid — means "received none of this item." Negatives are not.
+      if (!Number.isFinite(qty) || qty < 0) {
         hasError = true;
-        return { ...l, error: "Enter a valid qty" };
+        return { ...l, error: "Quantity can't be negative" };
       }
-      if (hasExpirationColumn && !l.isFreeform && !l.expirationDate) {
+      // Expiration is only required when actually receiving (qty > 0) AND the
+      // item tracks expiration. Permanent items + qty=0 lines skip the check.
+      if (qty > 0 && !l.isFreeform && l.tracksExpiration && !l.expirationDate) {
         hasError = true;
         return { ...l, error: "Expiration date required" };
       }
-      if (l.isFreeform && l.addToInventory && hasExpirationColumn && !l.expirationDate) {
+      if (qty > 0 && l.isFreeform && l.addToInventory && hasExpirationColumn && !l.expirationDate) {
         hasError = true;
         return { ...l, error: "Expiration date required" };
       }
@@ -193,6 +234,14 @@ function ReceiveOrderForm({
     });
     setLines(validated);
     if (hasError) return;
+
+    // Everything entered as 0? Nothing to receive — bail with a clear error
+    // rather than hitting the backend's "at least one line" guard.
+    const hasAnyNonZero = validated.some((l) => Number(l.qtyThisReceive) > 0);
+    if (!hasAnyNonZero) {
+      setError("Enter at least one received quantity above 0.");
+      return;
+    }
 
     // If any line will leave outstanding qty after this receive, prompt the user.
     const shortLines = validated.filter((l) => Number(l.qtyThisReceive) < l.qtyRemaining);
@@ -258,7 +307,7 @@ function ReceiveOrderForm({
               <input
                 className="field"
                 type="number"
-                min="1"
+                min="0"
                 max={line.qtyRemaining}
                 value={line.qtyThisReceive}
                 onChange={(e) => updateLine(line.itemId, { qtyThisReceive: e.target.value, error: "" })}
@@ -266,12 +315,16 @@ function ReceiveOrderForm({
             </div>
             {hasExpirationColumn && (
               <div className="order-receive-cell" data-label="Expiration">
-                <input
-                  className={`field${line.error && !line.expirationDate ? " field--error" : ""}`}
-                  type="date"
-                  value={line.expirationDate}
-                  onChange={(e) => updateLine(line.itemId, { expirationDate: e.target.value, error: "" })}
-                />
+                {line.tracksExpiration || (line.isFreeform && line.addToInventory) ? (
+                  <input
+                    className={`field${line.error && !line.expirationDate ? " field--error" : ""}`}
+                    type="date"
+                    value={line.expirationDate}
+                    onChange={(e) => updateLine(line.itemId, { expirationDate: e.target.value, error: "" })}
+                  />
+                ) : (
+                  <span className="order-receive-cell-na">—</span>
+                )}
               </div>
             )}
             <div className="order-receive-cell" data-label="Unit Cost">
@@ -361,10 +414,12 @@ function ReceiveOrderForm({
 function OrderCard({
   order,
   hasExpirationColumn,
+  inventoryRows,
   onRefresh,
 }: {
   order: RestockOrder;
   hasExpirationColumn: boolean;
+  inventoryRows: InventoryRow[];
   // closedOrder is passed when the order was just received or closed,
   // so the parent can clear orderedAt for its items and refresh inventory.
   onRefresh: (closedOrder?: RestockOrder) => void;
@@ -401,6 +456,7 @@ function OrderCard({
       <ReceiveOrderForm
         order={order}
         hasExpirationColumn={hasExpirationColumn}
+        inventoryRows={inventoryRows}
         onReceived={() => { setShowReceive(false); onRefresh(order); }}
         onCancel={() => setShowReceive(false)}
       />
@@ -837,7 +893,6 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
           ...(item.rowId ? { itemId: item.rowId } : {}),
           itemName: item.name,
           qtyOrdered: item.qty,
-          ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
           ...(item.reorderLink ? { reorderLink: item.reorderLink } : {}),
           ...(item.location ? { location: item.location } : {}),
         })),
@@ -996,6 +1051,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                   key={order.id}
                   order={order}
                   hasExpirationColumn={hasExpirationColumn}
+                  inventoryRows={inventoryRows}
                   onRefresh={handleOrderChanged}
                 />
               ))}
@@ -1071,6 +1127,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                     key={order.id}
                     order={order}
                     hasExpirationColumn={hasExpirationColumn}
+                    inventoryRows={inventoryRows}
                     onRefresh={handleOrderChanged}
                   />
                 ))

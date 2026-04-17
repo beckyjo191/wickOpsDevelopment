@@ -294,9 +294,12 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   // Aggregation buckets. All group by parentItemId (fallback to itemId) so
   // multi-lot items roll up as one logical SKU in every view.
   const usageByDay = new Map<string, number>();
-  const usageByItem = new Map<string, { itemName: string; qtyUsed: number }>();
+  // itemId carries the drill-in target. For a multi-lot item we record the
+  // first itemId seen with that parentItemId — enough for v1 item-history
+  // which queries by a single itemId. Parent-level history is a phase 2b task.
+  const usageByItem = new Map<string, { itemName: string; itemId: string; qtyUsed: number }>();
   const vendorSpend = new Map<string, { spend: number; orderIds: Set<string>; restockCount: number }>();
-  const itemSpend = new Map<string, { itemName: string; spend: number; qtyReceived: number }>();
+  const itemSpend = new Map<string, { itemName: string; itemId: string; spend: number; qtyReceived: number }>();
   const lossByReason = new Map<string, { qty: number; value: number }>();
   /** itemKey → most recent unitCost seen so far (within period). Drives loss valuation. */
   const lastUnitCost = new Map<string, number>();
@@ -305,8 +308,6 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   let totalSpend = 0;
   let totalLossQty = 0;
   let totalLossValue = 0;
-  let restockQtyAll = 0;
-  let donationQty = 0;
 
   for (const evt of allEvents) {
     const action = String(evt.action ?? "");
@@ -328,9 +329,10 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
       if (!Number.isFinite(qty) || qty <= 0) continue;
       totalQtyUsed += qty;
       usageByDay.set(day, (usageByDay.get(day) ?? 0) + qty);
-      const bucket = usageByItem.get(itemKey) ?? { itemName, qtyUsed: 0 };
+      const bucket = usageByItem.get(itemKey) ?? { itemName, itemId: itemId || itemKey, qtyUsed: 0 };
       bucket.qtyUsed += qty;
       if (!bucket.itemName && itemName) bucket.itemName = itemName;
+      if (!bucket.itemId && itemId) bucket.itemId = itemId;
       usageByItem.set(itemKey, bucket);
       continue;
     }
@@ -350,12 +352,8 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
       const source = typeof details.source === "string" ? details.source : "";
       const isDonation = source === "donation";
 
-      restockQtyAll += qty;
-      if (isDonation) donationQty += qty;
-
-      // Remember the latest unit cost even for donations — it's useful for
-      // loss valuation later (we still value a lost donated item at its
-      // implied market price if we know it).
+      // Remember the latest unit cost (even for donations) so loss valuation
+      // can still price an implied market cost if we know it.
       if (Number.isFinite(unitCost) && unitCost > 0) {
         lastUnitCost.set(itemKey, unitCost);
       }
@@ -376,10 +374,11 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
         vendorSpend.set(vendor, v);
       }
 
-      const bucket = itemSpend.get(itemKey) ?? { itemName, spend: 0, qtyReceived: 0 };
+      const bucket = itemSpend.get(itemKey) ?? { itemName, itemId: itemId || itemKey, spend: 0, qtyReceived: 0 };
       bucket.spend += spend;
       bucket.qtyReceived += qty;
       if (!bucket.itemName && itemName) bucket.itemName = itemName;
+      if (!bucket.itemId && itemId) bucket.itemId = itemId;
       itemSpend.set(itemKey, bucket);
       continue;
     }
@@ -413,20 +412,27 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     .slice(0, 10);
 
   const bySpendItem = [...itemSpend.values()]
-    .map((v) => ({ itemName: v.itemName || "Unnamed item", spend: v.spend, qtyReceived: v.qtyReceived }))
+    .map((v) => ({
+      itemId: v.itemId,
+      itemName: v.itemName || "Unnamed item",
+      spend: v.spend,
+      qtyReceived: v.qtyReceived,
+    }))
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 10);
 
   const byUsageItem = [...usageByItem.values()]
-    .map((v) => ({ itemName: v.itemName || "Unnamed item", qtyUsed: v.qtyUsed }))
+    .map((v) => ({
+      itemId: v.itemId,
+      itemName: v.itemName || "Unnamed item",
+      qtyUsed: v.qtyUsed,
+    }))
     .sort((a, b) => b.qtyUsed - a.qtyUsed)
     .slice(0, 10);
 
   const lossByReasonArr = [...lossByReason.entries()]
     .map(([reason, v]) => ({ reason, qty: v.qty, value: v.value }))
     .sort((a, b) => b.qty - a.qty);
-
-  const donationPct = restockQtyAll > 0 ? (donationQty / restockQtyAll) * 100 : 0;
 
   return json(200, {
     period,
@@ -436,7 +442,6 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
       spend: totalSpend,
       lossQty: totalLossQty,
       lossValue: totalLossValue,
-      donationPct,
     },
     usageOverTime,
     byVendor,

@@ -27,6 +27,10 @@ interface UseInventoryFiltersParams {
   newRowAnchorIdRef: React.RefObject<string | null>;
   /** Whether the new row was added above or below the anchor */
   newRowPositionRef: React.RefObject<"above" | "below">;
+  /** Pre-edit index of the row currently being edited. When set (and
+   *  newRowAnchorIdRef is null), the filters hook pins the editing row at
+   *  this index so it doesn't jump around as its sort key changes. */
+  editingOriginalIndexRef: React.RefObject<number | null>;
   /** Bumped when editing ends to force filteredRows to re-sort */
   sortEpoch: number;
 }
@@ -119,6 +123,7 @@ export function useInventoryFilters({
   recentlyEditedRowIdRef,
   newRowAnchorIdRef,
   newRowPositionRef,
+  editingOriginalIndexRef,
   sortEpoch,
 }: UseInventoryFiltersParams) {
   // ── Tab state ──
@@ -374,17 +379,32 @@ export function useInventoryFilters({
         });
       });
 
-    // If a new row has an anchor, pull it out before sorting so it doesn't
-    // get pushed to the end (blank values sort last). After sorting we
+    // If a *newly added* row has an anchor, pull it out before sorting so it
+    // doesn't get pushed to the end (blank values sort last). After sorting we
     // reinsert it next to its anchor row.
+    //
+    // For an *edit on an existing row*, we pull the row out too and pin it at
+    // its pre-edit filteredRows index (editingOriginalIndexRef) so it doesn't
+    // jump around as its sort key (e.g. item name) changes per keystroke. The
+    // row re-sorts normally after blur (endCellEditSession clears the ref).
     const anchorId = newRowAnchorIdRef.current;
     const editingId = editingRowIdRef.current;
+    const editingOriginalIdx = editingOriginalIndexRef.current;
     let newRowEntry: (typeof filtered)[number] | null = null;
     let toSort = filtered;
-    if (editingId) {
+    let editEntry: (typeof filtered)[number] | null = null;
+    if (editingId && anchorId) {
+      // Newly added row — uses the existing anchor-based reinsertion path.
       const idx = filtered.findIndex(({ row }) => row.id === editingId);
       if (idx >= 0) {
         newRowEntry = filtered[idx];
+        toSort = filtered.filter(({ row }) => row.id !== editingId);
+      }
+    } else if (editingId && editingOriginalIdx !== null) {
+      // Existing row being edited — pin to its pre-edit index.
+      const idx = filtered.findIndex(({ row }) => row.id === editingId);
+      if (idx >= 0) {
+        editEntry = filtered[idx];
         toSort = filtered.filter(({ row }) => row.id !== editingId);
       }
     }
@@ -424,21 +444,27 @@ export function useInventoryFilters({
       }
     }
 
-    // Reinsert new row next to its anchor, or at the top if no anchor
-    if (newRowEntry) {
+    // Reinsert the newly-added row next to its anchor. (Only possible when
+    // both `newRowEntry` and `anchorId` are set — the extraction above is
+    // gated on that, so this branch is the only reinsertion path.)
+    if (newRowEntry && anchorId) {
       sorted = [...sorted];
-      if (anchorId) {
-        const anchorIdx = sorted.findIndex(({ row }) => row.id === anchorId);
-        if (anchorIdx >= 0) {
-          const insertAt = newRowPositionRef.current === "above" ? anchorIdx : anchorIdx + 1;
-          sorted.splice(insertAt, 0, newRowEntry);
-        } else {
-          sorted.push(newRowEntry);
-        }
+      const anchorIdx = sorted.findIndex(({ row }) => row.id === anchorId);
+      if (anchorIdx >= 0) {
+        const insertAt = newRowPositionRef.current === "above" ? anchorIdx : anchorIdx + 1;
+        sorted.splice(insertAt, 0, newRowEntry);
       } else {
-        // No anchor — place at top so user sees it immediately
-        sorted.unshift(newRowEntry);
+        sorted.push(newRowEntry);
       }
+    }
+
+    // Reinsert the currently-edited existing row at its pre-edit index so
+    // it stays put while the user is typing. Clamped to the sorted array
+    // bounds in case other rows were added/removed.
+    if (editEntry && editingOriginalIdx !== null) {
+      sorted = [...sorted];
+      const insertAt = Math.max(0, Math.min(editingOriginalIdx, sorted.length));
+      sorted.splice(insertAt, 0, editEntry);
     }
 
     return sorted;

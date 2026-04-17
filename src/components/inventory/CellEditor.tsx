@@ -1,3 +1,4 @@
+import { isCurrencyColumnKey, parseCurrency } from "../../lib/currency";
 import type { InventoryColumn, InventoryRow } from "./inventoryTypes";
 
 export type CellEditorProps = {
@@ -97,34 +98,70 @@ export function CellEditor({
 
   // -- Link column --
   if (column.type === "link") {
-    if (variant === "mobile") {
-      return (
-        <input
-          type="url"
-          className={inputClass}
-          value={String(value ?? "")}
-          placeholder="Paste link"
-          onFocus={() => {
-            beginCellEditSession?.(row.id, column.key);
-          }}
-          onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
-          onBlur={(e) => {
-            const normalized = normalizeLinkValue(e.target.value);
-            if (normalized !== e.target.value) {
-              onCellChange(row.id, column, normalized);
-            }
-            endCellEditSession?.();
-          }}
-        />
-      );
-    }
-
-    // Desktop link
     const rawLink = String(value ?? "");
     const normalizedLink = normalizeLinkValue(rawLink);
     const hasLink = normalizedLink.length > 0;
     const editing = isEditingLink || !hasLink;
 
+    if (variant === "mobile") {
+      // Mirror the desktop UX: when there's a link and we're not in edit mode,
+      // show the item name as a tappable "edit" target + an open-arrow anchor
+      // that actually follows the URL. Keeps parity with the table view and
+      // makes it obvious the link is clickable.
+      if (editing) {
+        return (
+          <input
+            type="url"
+            className={inputClass}
+            value={rawLink}
+            placeholder="Paste link"
+            autoFocus={!!isEditingLink}
+            onFocus={() => {
+              beginCellEditSession?.(row.id, column.key);
+              onLinkEditStart?.(row.id, column.key);
+            }}
+            onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
+            onBlur={(e) => {
+              const normalized = normalizeLinkValue(e.target.value);
+              if (normalized !== e.target.value) {
+                onCellChange(row.id, column, normalized);
+              }
+              onLinkEditEnd?.();
+              endCellEditSession?.();
+            }}
+          />
+        );
+      }
+
+      const linkLabel = String(row.values.itemName ?? "").trim() || normalizedLink;
+      return (
+        <div className="inventory-link-field-editable inventory-card-link-editable">
+          <span
+            className="inventory-link-field-text"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSetSelectedRowId?.(row.id);
+              onLinkEditStart?.(row.id, column.key);
+            }}
+            title="Tap to edit link"
+          >
+            {linkLabel}
+          </span>
+          <a
+            className="inventory-link-field-open"
+            href={normalizedLink}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            title="Open link"
+          >
+            &#x2197;
+          </a>
+        </div>
+      );
+    }
+
+    // Desktop link (unchanged — same rawLink/normalizedLink/editing vars).
     if (editing) {
       return (
         <input
@@ -229,12 +266,31 @@ export function CellEditor({
 
   // -- Number column --
   if (column.type === "number") {
+    const isCurrency = isCurrencyColumnKey(column.key);
+    // Currency columns accept decimals ($0.89) and allow "$" / "," on paste.
+    // Qty/min columns stay integer-only for mobile keyboard affordance.
+    const inputMode: "numeric" | "decimal" = isCurrency ? "decimal" : "numeric";
+    const pattern = isCurrency ? undefined : "[0-9]*";
+
+    // On blur, normalize a currency cell so ".89" → "0.89", "$4,239" → "4239".
+    // We store the numeric string (not "$0.89") so analytics / save events can
+    // still `Number()` the value cleanly.
+    const normalizeOnBlur = (raw: string) => {
+      if (!isCurrency) return;
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      const parsed = parseCurrency(trimmed);
+      if (Number.isFinite(parsed) && String(parsed) !== trimmed) {
+        onCellChange(row.id, column, String(parsed));
+      }
+    };
+
     if (variant === "mobile") {
       return (
         <input
           type="text"
-          inputMode="numeric"
-          pattern="[0-9]*"
+          inputMode={inputMode}
+          {...(pattern ? { pattern } : {})}
           className={inputClass}
           value={String(value ?? "")}
           onFocus={(e) => {
@@ -242,16 +298,19 @@ export function CellEditor({
             beginCellEditSession?.(row.id, column.key);
           }}
           onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
-          onBlur={() => endCellEditSession?.()}
+          onBlur={(e) => {
+            normalizeOnBlur(e.currentTarget.value);
+            endCellEditSession?.();
+          }}
         />
       );
     }
-    // Desktop: number uses text input with numeric mode
+    // Desktop: number uses text input with numeric/decimal mode
     return (
       <input
         type="text"
-        inputMode="numeric"
-        pattern="[0-9]*"
+        inputMode={inputMode}
+        {...(pattern ? { pattern } : {})}
         value={String(value ?? "")}
         onFocus={(event) => {
           event.currentTarget.select();
@@ -261,7 +320,10 @@ export function CellEditor({
           beginCellEditSession?.(row.id, column.key);
         }}
         onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
-        onBlur={() => endCellEditSession?.()}
+        onBlur={(event) => {
+          normalizeOnBlur(event.currentTarget.value);
+          endCellEditSession?.();
+        }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             (event.currentTarget as HTMLInputElement).blur();

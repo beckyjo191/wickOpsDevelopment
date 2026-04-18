@@ -609,44 +609,52 @@ function RawLineRow({
 
   return (
     <div className="checklist-item checklist-item--form checklist-item--raw">
-      <div className="checklist-raw-dot" />
-      <div className="checklist-raw-fields">
+      <div className="checklist-cell checklist-cell--checkbox">
+        <div className="checklist-raw-dot" />
+      </div>
+      <div className="checklist-cell">
+        <div className="checklist-raw-fields">
+          <input
+            className="field checklist-raw-name-field"
+            placeholder="Item name"
+            value={raw.name}
+            onChange={(e) => onUpdate(raw.id, { name: e.target.value })}
+          />
+          <input
+            className="field checklist-raw-link-field"
+            placeholder="Vendor link (optional)"
+            value={linkDraft}
+            onChange={(e) => setLinkDraft(e.target.value)}
+            onBlur={commitLink}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitLink();
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+          />
+        </div>
+      </div>
+      <div className="checklist-cell">
         <input
-          className="field checklist-raw-name-field"
-          placeholder="Item name"
-          value={raw.name}
-          onChange={(e) => onUpdate(raw.id, { name: e.target.value })}
-        />
-        <input
-          className="field checklist-raw-link-field"
-          placeholder="Vendor link (optional)"
-          value={linkDraft}
-          onChange={(e) => setLinkDraft(e.target.value)}
-          onBlur={commitLink}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              commitLink();
-              (e.target as HTMLInputElement).blur();
-            }
-          }}
+          className="field checklist-qty-field"
+          type="number"
+          min="1"
+          placeholder="Qty"
+          value={raw.qty}
+          onChange={(e) => onUpdate(raw.id, { qty: e.target.value })}
         />
       </div>
-      <input
-        className="field checklist-qty-field"
-        type="number"
-        min="1"
-        placeholder="Qty"
-        value={raw.qty}
-        onChange={(e) => onUpdate(raw.id, { qty: e.target.value })}
-      />
-      <button
-        type="button"
-        className="checklist-raw-remove"
-        onClick={() => onRemove(raw.id)}
-        aria-label="Remove"
-      >
-        <X size={13} />
-      </button>
+      <div className="checklist-cell checklist-cell--remove">
+        <button
+          type="button"
+          className="checklist-raw-remove"
+          onClick={() => onRemove(raw.id)}
+          aria-label="Remove"
+        >
+          <X size={13} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -768,9 +776,9 @@ function VendorChecklistCard({
 
       <div className="checklist-items checklist-items--inline">
         <div className="checklist-items-header">
-          <span />
-          <span>Item</span>
-          <span>Qty</span>
+          <div className="checklist-cell checklist-cell--checkbox" />
+          <div className="checklist-cell">Item</div>
+          <div className="checklist-cell">Qty</div>
         </div>
 
         {lines.map((line) => {
@@ -778,66 +786,72 @@ function VendorChecklistCard({
           const isExtra = itemData?.isExtra === true;
           return (
             <div key={line.rowId} className={`checklist-item checklist-item--form${line.checked ? " checked" : ""}${isExtra ? " checklist-item--extra" : ""}`}>
-              <button
-                type="button"
-                className={`checklist-checkbox${line.checked ? " checked" : ""}`}
-                onClick={() => toggleLine(line.rowId)}
-                aria-label={line.checked ? `Uncheck ${line.name}` : `Check ${line.name}`}
-              >
-                {line.checked && <Check size={14} />}
-              </button>
-              <div className="checklist-item-info">
-                <a
-                  className="checklist-item-name"
-                  href={normalizeLinkValue(line.link)}
-                  target={`wickops-vendor-${group.domain}`}
-                  rel="noopener noreferrer"
-                  onClick={() => markLineChecked(line.rowId)}
-                  title={`Open ${line.name} on ${group.domain}`}
+              <div className="checklist-cell checklist-cell--checkbox">
+                <button
+                  type="button"
+                  className={`checklist-checkbox${line.checked ? " checked" : ""}`}
+                  onClick={() => toggleLine(line.rowId)}
+                  aria-label={line.checked ? `Uncheck ${line.name}` : `Check ${line.name}`}
                 >
-                  {line.name}
-                  <ExternalLink size={12} />
-                </a>
-                {itemData && (
-                  <span className="checklist-item-detail">
-                    {isExtra ? (
-                      onRemoveExtra ? (
-                        <button
-                          type="button"
-                          className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
-                          onClick={() => onRemoveExtra(line.rowId)}
-                          title="Remove from reorder list"
-                          aria-label={`Remove ${line.name} from reorder`}
-                        >
-                          Added
-                          <X size={11} />
-                        </button>
-                      ) : (
-                        <span className="reorder-item-status reorder-status-extra">
-                          Added
-                        </span>
-                      )
-                    ) : (
-                      <span className="reorder-item-status reorder-status-lowStock">
-                        Low: {itemData.activeQty}/{itemData.minQuantity}
-                      </span>
-                    )}
-                    {itemData.unitCost !== null && (
-                      <span className="reorder-item-unitcost">
-                        {formatCurrency(itemData.unitCost)}/unit
-                      </span>
-                    )}
-                  </span>
-                )}
+                  {line.checked && <Check size={14} />}
+                </button>
               </div>
-              <input
-                className="field checklist-qty-field"
-                type="number"
-                min="1"
-                placeholder="Qty"
-                value={line.qty}
-                onChange={(e) => updateLine(line.rowId, { qty: e.target.value })}
-              />
+              <div className="checklist-cell">
+                <div className="checklist-item-info">
+                  <a
+                    className="checklist-item-name"
+                    href={normalizeLinkValue(line.link)}
+                    target={`wickops-vendor-${group.domain}`}
+                    rel="noopener noreferrer"
+                    onClick={() => markLineChecked(line.rowId)}
+                    title={`Open ${line.name} on ${group.domain}`}
+                  >
+                    {line.name}
+                    <ExternalLink size={12} />
+                  </a>
+                  {itemData && (
+                    <span className="checklist-item-detail">
+                      {isExtra ? (
+                        onRemoveExtra ? (
+                          <button
+                            type="button"
+                            className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
+                            onClick={() => onRemoveExtra(line.rowId)}
+                            title="Remove from reorder list"
+                            aria-label={`Remove ${line.name} from reorder`}
+                          >
+                            Added
+                            <X size={11} />
+                          </button>
+                        ) : (
+                          <span className="reorder-item-status reorder-status-extra">
+                            Added
+                          </span>
+                        )
+                      ) : (
+                        <span className="reorder-item-status reorder-status-lowStock">
+                          Low: {itemData.activeQty}/{itemData.minQuantity}
+                        </span>
+                      )}
+                      {itemData.unitCost !== null && (
+                        <span className="reorder-item-unitcost">
+                          {formatCurrency(itemData.unitCost)}/unit
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="checklist-cell">
+                <input
+                  className="field checklist-qty-field"
+                  type="number"
+                  min="1"
+                  placeholder="Qty"
+                  value={line.qty}
+                  onChange={(e) => updateLine(line.rowId, { qty: e.target.value })}
+                />
+              </div>
             </div>
           );
         })}
@@ -939,65 +953,76 @@ function NoLinkCard({
         Add a vendor link below so you can reorder this item next time.
       </p>
       <div className="reorder-nolink-list">
+        <div className="reorder-nolink-header">
+          <div className="checklist-cell">Item</div>
+          <div className="checklist-cell">Vendor link</div>
+          <div className="checklist-cell" />
+        </div>
         {items.map((item) => {
           const value = linkInputs[item.row.id] ?? "";
           const saving = savingId === item.row.id;
           return (
             <div key={item.row.id} className={`reorder-nolink-row${item.isExtra ? " reorder-nolink-row--extra" : ""}`}>
-              <div className="reorder-nolink-name">
-                <span className="reorder-item-name">{item.itemName}</span>
-                <span className="reorder-item-badges">
-                  {item.isExtra ? (
-                    onRemoveExtra ? (
-                      <button
-                        type="button"
-                        className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
-                        onClick={() => onRemoveExtra(item.row.id)}
-                        title="Remove from reorder list"
-                        aria-label={`Remove ${item.itemName} from reorder`}
-                      >
-                        Added
-                        <X size={11} />
-                      </button>
+              <div className="checklist-cell">
+                <div className="reorder-nolink-name">
+                  <span className="reorder-item-name">{item.itemName}</span>
+                  <span className="reorder-item-badges">
+                    {item.isExtra ? (
+                      onRemoveExtra ? (
+                        <button
+                          type="button"
+                          className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
+                          onClick={() => onRemoveExtra(item.row.id)}
+                          title="Remove from reorder list"
+                          aria-label={`Remove ${item.itemName} from reorder`}
+                        >
+                          Added
+                          <X size={11} />
+                        </button>
+                      ) : (
+                        <span className="reorder-item-status reorder-status-extra">
+                          Added
+                        </span>
+                      )
                     ) : (
-                      <span className="reorder-item-status reorder-status-extra">
-                        Added
+                      <span className="reorder-item-status reorder-status-lowStock">
+                        Low: {item.activeQty}/{item.minQuantity}
                       </span>
-                    )
-                  ) : (
-                    <span className="reorder-item-status reorder-status-lowStock">
-                      Low: {item.activeQty}/{item.minQuantity}
-                    </span>
-                  )}
-                  {item.unitCost !== null && (
-                    <span className="reorder-item-unitcost">
-                      {formatCurrency(item.unitCost)}/unit
-                    </span>
-                  )}
-                </span>
+                    )}
+                    {item.unitCost !== null && (
+                      <span className="reorder-item-unitcost">
+                        {formatCurrency(item.unitCost)}/unit
+                      </span>
+                    )}
+                  </span>
+                </div>
               </div>
-              <input
-                className="field reorder-nolink-input"
-                placeholder="https://vendor.com/product..."
-                value={value}
-                onChange={(e) =>
-                  setLinkInputs((prev) => ({ ...prev, [item.row.id]: e.target.value }))
-                }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSave(item);
-                }}
-                disabled={!onSaveReorderLink || saving}
-              />
-              <button
-                type="button"
-                className="button button-primary button-sm"
-                onClick={() => handleSave(item)}
-                disabled={!value.trim() || !onSaveReorderLink || saving}
-                title="Save link"
-              >
-                <Save size={13} />
-                Save
-              </button>
+              <div className="checklist-cell">
+                <input
+                  className="field reorder-nolink-input"
+                  placeholder="https://vendor.com/product..."
+                  value={value}
+                  onChange={(e) =>
+                    setLinkInputs((prev) => ({ ...prev, [item.row.id]: e.target.value }))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleSave(item);
+                  }}
+                  disabled={!onSaveReorderLink || saving}
+                />
+              </div>
+              <div className="checklist-cell">
+                <button
+                  type="button"
+                  className="button button-primary button-sm"
+                  onClick={() => handleSave(item)}
+                  disabled={!value.trim() || !onSaveReorderLink || saving}
+                  title="Save link"
+                >
+                  <Save size={13} />
+                  Save
+                </button>
+              </div>
             </div>
           );
         })}
@@ -1434,18 +1459,20 @@ export function ReorderTab({
     <div className="reorder-tab">
       <div className="reorder-header">
         <div className="reorder-header-left">
-          <h3 className="reorder-title">
-            Reorder
-            {totalReorderItems > 0 && (
-              <span className="reorder-count-badge">{totalReorderItems}</span>
+          <div className="reorder-header-titlerow">
+            <h3 className="reorder-title">
+              Reorder
+              {totalReorderItems > 0 && (
+                <span className="reorder-count-badge">{totalReorderItems}</span>
+              )}
+            </h3>
+            {!isEmpty && (
+              <span className="reorder-subtitle">
+                {allGroups.length} vendor{allGroups.length !== 1 ? "s" : ""}
+                {noLinkItemsWithExtras.length > 0 && ` · ${noLinkItemsWithExtras.length} missing link${noLinkItemsWithExtras.length !== 1 ? "s" : ""}`}
+              </span>
             )}
-          </h3>
-          {!isEmpty && (
-            <span className="reorder-subtitle">
-              {allGroups.length} vendor{allGroups.length !== 1 ? "s" : ""}
-              {noLinkItemsWithExtras.length > 0 && ` · ${noLinkItemsWithExtras.length} missing link${noLinkItemsWithExtras.length !== 1 ? "s" : ""}`}
-            </span>
-          )}
+          </div>
           {!isEmpty && (estimatedTotal > 0 || missingPriceCount > 0) && (
             <span className="reorder-estimate">
               Estimated:{" "}
@@ -1458,36 +1485,41 @@ export function ReorderTab({
             </span>
           )}
         </div>
-        {!isEmpty && (
-          <div className="reorder-list-filter">
-            <input
-              className="field reorder-list-filter-input"
-              type="search"
-              placeholder="Filter reorder list…"
-              value={listFilter}
-              onChange={(e) => setListFilter(e.target.value)}
-              aria-label="Filter reorder list"
-            />
-            {listFilter && (
+        {(!isEmpty || (!showOrderBuilder && !showAddForm)) && (
+          <div className="reorder-header-right">
+            {!isEmpty && (
+              <div className="reorder-list-filter inventory-search-wrap">
+                <input
+                  className="inventory-search-input"
+                  type="search"
+                  placeholder="Search items..."
+                  value={listFilter}
+                  onChange={(e) => setListFilter(e.target.value)}
+                  aria-label="Search reorder list"
+                />
+                {listFilter && (
+                  <button
+                    type="button"
+                    className="inventory-search-clear"
+                    onClick={() => setListFilter("")}
+                    aria-label="Clear search"
+                    title="Clear search"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            )}
+            {!showOrderBuilder && !showAddForm && (
               <button
                 type="button"
-                className="reorder-list-filter-clear"
-                onClick={() => setListFilter("")}
-                aria-label="Clear filter"
+                className="button button-secondary button-sm reorder-add-item-btn"
+                onClick={() => setShowOrderBuilder(true)}
               >
-                <X size={13} />
+                <Plus size={13} /> Add Items
               </button>
             )}
           </div>
-        )}
-        {!showOrderBuilder && !showAddForm && (
-          <button
-            type="button"
-            className="button button-secondary reorder-add-item-btn"
-            onClick={() => setShowOrderBuilder(true)}
-          >
-            <Plus size={15} /> Add Items
-          </button>
         )}
       </div>
 

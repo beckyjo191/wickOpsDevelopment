@@ -15,7 +15,6 @@ import {
   ChevronRight,
   CheckSquare,
   Clock,
-  ExternalLink,
   Loader2,
   Package,
   Search,

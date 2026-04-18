@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 
 type InventorySubView = "dashboard" | "inventory" | "orders" | "activity";
@@ -7,6 +8,9 @@ interface InventorySubNavProps {
   accessibleModules: AppModuleKey[];
   canEditInventory: boolean;
   onNavigate: (view: InventorySubView) => void;
+  /** Optional content rendered at the far right of the nav row — e.g. a
+   *  per-view help button. */
+  rightSlot?: ReactNode;
 }
 
 export function InventorySubNav({
@@ -14,6 +18,7 @@ export function InventorySubNav({
   accessibleModules,
   canEditInventory,
   onNavigate,
+  rightSlot,
 }: InventorySubNavProps) {
   const showInventory = accessibleModules.includes("inventory");
   const showOrders = showInventory && canEditInventory;
@@ -73,6 +78,7 @@ export function InventorySubNav({
           Activity
         </button>
       )}
+      {rightSlot && <div className="inventory-subnav-right">{rightSlot}</div>}
     </nav>
   );
 }

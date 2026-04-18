@@ -30,7 +30,7 @@
   gap: 0.9rem;
   padding: 0.65rem 0.9rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-translucent);
   box-shadow: var(--shadow-soft);
 }
@@ -82,7 +82,7 @@
   font-size: 0.88rem;
   font-weight: 600;
   padding: 0.4rem 0.75rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
 }
@@ -164,7 +164,7 @@
   flex-wrap: wrap;
   padding: 0.6rem 0.85rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 
@@ -204,7 +204,7 @@
   width: min(880px, 100%);
   background: linear-gradient(165deg, var(--surface), var(--surface-raised));
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 1.5rem;
   animation: card-enter 250ms ease-out;
@@ -212,7 +212,7 @@
 
 .app-card--inventory {
   width: min(1120px, 100%);
-  border-radius: 0;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: none;
   border-color: var(--border-strong);
@@ -245,7 +245,7 @@
   height: 16px;
   border: 2px solid var(--border);
   border-top-color: var(--primary);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   animation: app-spinner-rotate 800ms linear infinite;
 }
 
@@ -297,7 +297,7 @@
   color: var(--text-heading);
   border: 1px solid var(--border);
   background: var(--surface-soft);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 0.5rem 0.6rem;
 }
 
@@ -309,7 +309,7 @@
   color: var(--text-heading);
   border: 1px solid var(--border);
   background: var(--surface-soft);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 0.45rem 0.6rem;
 }
 
@@ -317,7 +317,7 @@
   display: inline-flex;
   align-items: center;
   padding: 0.4rem 0.7rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--border);
   background: var(--surface-soft);
   color: var(--text-heading);
@@ -381,7 +381,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.6rem 0.85rem;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface-alt);
   color: var(--text-heading);
@@ -404,7 +404,7 @@
 
 .location-pill-add-input {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.3rem 0.5rem;
   font-size: 0.82rem;
   background: var(--surface);
@@ -416,7 +416,7 @@
   border: none;
   background: var(--primary);
   color: #fff;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.3rem 0.6rem;
   font-size: 0.78rem;
   font-weight: 600;
@@ -511,7 +511,7 @@
   max-height: 220px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-raised);
   padding: 0.35rem;
@@ -526,7 +526,7 @@
   justify-content: center;
   background: var(--primary);
   color: #fff;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.7rem;
   font-weight: 700;
   min-width: 1.15rem;
@@ -538,7 +538,7 @@
 .inventory-move-option {
   text-align: left;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-heading);
   padding: 0.45rem 0.6rem;
@@ -561,7 +561,7 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.65rem 1rem;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-soft);
   color: var(--text-soft);
   font-size: 0.85rem;
@@ -587,7 +587,7 @@
   align-items: center;
   gap: 0.75rem;
   padding: 0.65rem 1rem;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface-alt);
   cursor: pointer;
@@ -663,7 +663,7 @@
 .select {
   width: 100%;
   height: 42px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
@@ -681,7 +681,7 @@
 .button {
   height: 40px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0 0.95rem;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -734,7 +734,7 @@
 }
 
 .status-panel {
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface-alt);
   padding: 0.85rem 1rem;
@@ -750,7 +750,7 @@
 
 .metric-card {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-alt);
   padding: 0.8rem 0.85rem;
 }
@@ -770,7 +770,7 @@
 
 .empty-state {
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-alt);
   padding: 1rem;
   color: var(--text-muted);
@@ -880,7 +880,7 @@ details[open] > .settings-section-title::after {
   gap: 0.35rem;
   padding: 0.35rem 0.5rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text-heading);
   font-size: 0.86rem;
@@ -950,7 +950,7 @@ details[open] > .settings-section-title::after {
   align-items: center;
   gap: 0.55rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   padding: 0.5rem 0.65rem;
 }
@@ -982,7 +982,7 @@ details[open] > .settings-section-title::after {
   color: var(--text-soft);
   cursor: grab;
   padding: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   touch-action: none;
 }
 
@@ -1026,7 +1026,7 @@ details[open] > .settings-section-title::after {
   font-size: 0.78rem;
   padding: 0.2rem 0.35rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-soft);
   cursor: pointer;
@@ -1083,7 +1083,7 @@ details[open] > .settings-section-title::after {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-soft);
   color: var(--text-heading);
   font-size: 0.78rem;
@@ -1175,7 +1175,7 @@ details[open] > .settings-section-title::after {
   background: var(--surface-soft);
   border: 1px solid var(--border);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .module-card-toggle {
@@ -1208,7 +1208,7 @@ details[open] > .settings-section-title::after {
   width: 30px;
   height: 30px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
   color: var(--primary);
   display: inline-flex;
@@ -1249,7 +1249,7 @@ details[open] > .settings-section-title::after {
   right: 0;
   top: calc(100% + 0.25rem);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-heading);
   font-size: 0.72rem;
@@ -1428,7 +1428,7 @@ details[open] > .settings-section-title::after {
   align-items: center;
   gap: 0.5rem;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0.35rem 0.4rem;
   color: var(--text-heading);
   font-size: 0.82rem;
@@ -1453,7 +1453,7 @@ details[open] > .settings-section-title::after {
 .inventory-import-textarea {
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   padding: 0.55rem;
   font-size: 0.82rem;
@@ -1473,12 +1473,20 @@ details[open] > .settings-section-title::after {
 
 .inventory-subnav {
   display: flex;
+  align-items: center;
   gap: 0;
   border-bottom: 1px solid var(--border);
   margin-bottom: 0;
   width: min(1120px, 100%);
   margin-left: auto;
   margin-right: auto;
+}
+
+.inventory-subnav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding: 0 0.5rem;
 }
 
 .inventory-subnav-item {
@@ -1514,7 +1522,7 @@ details[open] > .settings-section-title::after {
   background: var(--surface-alt);
   color: var(--text-soft);
   padding: 0.1rem 0.4rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-left: 0.4rem;
   vertical-align: middle;
   text-transform: uppercase;
@@ -1536,7 +1544,7 @@ details[open] > .settings-section-title::after {
   width: 100%;
   padding: 0 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text);
   font-size: 0.88rem;
@@ -1645,7 +1653,7 @@ details[open] > .settings-section-title::after {
 
 .inventory-tab-btn {
   padding: 0.46rem 0.72rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface-alt);
   color: var(--text-heading);
@@ -1666,7 +1674,7 @@ details[open] > .settings-section-title::after {
 
 .inventory-tab-select {
   padding: 0.46rem 0.6rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface-alt);
   color: var(--text-heading);
@@ -1681,7 +1689,7 @@ details[open] > .settings-section-title::after {
   justify-content: center;
   background: var(--primary);
   color: #fff;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.68rem;
   font-weight: 700;
   min-width: 1.2rem;
@@ -1700,7 +1708,7 @@ details[open] > .settings-section-title::after {
 
 .inventory-pending-summary {
   border: 1px solid var(--table-grid);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.75rem 1rem;
   background: var(--surface-alt);
   margin-bottom: 0.25rem;
@@ -1725,7 +1733,7 @@ details[open] > .settings-section-title::after {
 .inventory-pending-card {
   border: 1px solid var(--table-grid);
   border-left: 3px solid var(--primary);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.75rem 1rem;
   background: var(--surface-soft);
 }
@@ -1789,7 +1797,7 @@ details[open] > .settings-section-title::after {
   width: 5.5rem;
   padding: 0.2rem 0.4rem;
   border: 1px solid var(--table-grid);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
   font-size: 0.85rem;
@@ -1814,7 +1822,7 @@ details[open] > .settings-section-title::after {
   max-width: 100%;
   width: 100%;
   height: 32px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-heading);
@@ -1830,7 +1838,7 @@ details[open] > .settings-section-title::after {
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-soft);
   font-size: 0.92rem;
@@ -1852,7 +1860,7 @@ details[open] > .settings-section-title::after {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface-alt);
   color: var(--text-heading);
@@ -1931,7 +1939,7 @@ details[open] > .settings-section-title::after {
   align-items: center;
   padding: 0 0.62rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text-heading);
   font-size: 0.8rem;
@@ -1968,7 +1976,7 @@ details[open] > .settings-section-title::after {
   right: 0;
   min-width: 190px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-raised);
   padding: 0.3rem;
@@ -1984,7 +1992,7 @@ details[open] > .settings-section-title::after {
 
 .inventory-import-option {
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-heading);
   font-size: 0.8rem;
@@ -2006,7 +2014,7 @@ details[open] > .settings-section-title::after {
   align-items: center;
   padding: 0 0.62rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text-heading);
   font-size: 0.8rem;
@@ -2032,7 +2040,7 @@ details[open] > .settings-section-title::after {
   max-height: 260px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-raised);
   padding: 0.35rem;
@@ -2047,7 +2055,7 @@ details[open] > .settings-section-title::after {
   align-items: center;
   gap: 0.45rem;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0.28rem 0.35rem;
   color: var(--text-heading);
   font-size: 0.79rem;
@@ -2098,7 +2106,7 @@ details[open] > .settings-section-title::after {
   margin-top: 0.6rem;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
   color: var(--text-secondary);
 }
@@ -2109,7 +2117,7 @@ details[open] > .settings-section-title::after {
   align-items: center;
   gap: 0.5rem;
   padding: 0.65rem 0.75rem;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 0.85rem;
   margin-bottom: 0.75rem;
   animation: usage-banner-in 0.25s ease-out;
@@ -2213,7 +2221,7 @@ details[open] > .settings-section-title::after {
   padding: 0.5rem 0.65rem;
   background: var(--danger-surface);
   border: 1px solid var(--danger-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 
 .usage-input--error {
@@ -2260,7 +2268,7 @@ details[open] > .settings-section-title::after {
   width: 100%;
   min-width: 0;
   height: 44px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-heading);
@@ -2285,7 +2293,7 @@ details[open] > .settings-section-title::after {
   width: 36px;
   height: 44px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   color: var(--text-soft);
   font-size: 1.1rem;
@@ -2310,7 +2318,7 @@ details[open] > .settings-section-title::after {
 .usage-entry {
   padding: 0.65rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-alt);
   transition: border-color 0.15s;
 }
@@ -2341,7 +2349,7 @@ details[open] > .settings-section-title::after {
   width: 36px;
   height: 44px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: none;
   color: var(--text-soft);
   font-size: 1.1rem;
@@ -2369,7 +2377,7 @@ details[open] > .settings-section-title::after {
 .usage-autocomplete-input {
   width: 100%;
   height: 44px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-heading);
@@ -2396,7 +2404,7 @@ details[open] > .settings-section-title::after {
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-soft);
   font-size: 1rem;
@@ -2431,7 +2439,7 @@ details[open] > .settings-section-title::after {
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-soft);
   list-style: none;
   margin: 0;
@@ -2475,7 +2483,7 @@ details[open] > .settings-section-title::after {
   display: flex;
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--surface);
   height: 44px;
@@ -2579,7 +2587,7 @@ details[open] > .settings-section-title::after {
   flex: 1;
   min-width: 0;
   height: 38px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-heading);
@@ -2598,7 +2606,7 @@ details[open] > .settings-section-title::after {
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--text-soft);
   font-size: 0.9rem;
@@ -2621,7 +2629,7 @@ details[open] > .settings-section-title::after {
   margin-top: 0.5rem;
   padding: 0.55rem;
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: none;
   color: var(--primary);
   font-size: 0.85rem;
@@ -2714,7 +2722,7 @@ details[open] > .settings-section-title::after {
 .usage-review-tab-badge {
   background: var(--primary);
   color: #fff;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.7rem;
   font-weight: 600;
   padding: 0 0.4rem;
@@ -2746,7 +2754,7 @@ details[open] > .settings-section-title::after {
 
 .usage-review-card {
   border: 1px solid var(--table-grid);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.85rem 1rem;
   background: var(--surface-soft);
 }
@@ -2791,7 +2799,7 @@ details[open] > .settings-section-title::after {
   font-size: 0.72rem;
   font-weight: 600;
   padding: 0.15rem 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   flex-shrink: 0;
@@ -2843,7 +2851,7 @@ details[open] > .settings-section-title::after {
   color: var(--text-soft);
   background: var(--surface-alt);
   padding: 0.05rem 0.35rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .usage-review-entry-notes {
@@ -2907,7 +2915,7 @@ details[open] > .settings-section-title::after {
   padding: 0.55rem 0.75rem;
   background: color-mix(in srgb, var(--primary) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 0.85rem;
   margin-bottom: 1rem;
 }
@@ -3007,7 +3015,7 @@ details[open] > .settings-section-title::after {
 .inventory-table th,
 .inventory-table td {
   text-align: left;
-  padding: 0.44rem 0.52rem;
+  padding: 0.55rem 0.6rem;
   border-bottom: 1px solid var(--table-grid);
   border-right: 1px solid var(--table-grid-strong);
   max-width: none;
@@ -3133,7 +3141,7 @@ details[open] > .settings-section-title::after {
   max-height: 220px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-raised);
   padding: 0.35rem;
@@ -3145,7 +3153,7 @@ details[open] > .settings-section-title::after {
 .inventory-location-item {
   text-align: left;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-heading);
   padding: 0.38rem 0.48rem;
@@ -3225,7 +3233,7 @@ details[open] > .settings-section-title::after {
   box-sizing: border-box;
   padding: 0.32rem 0.4rem;
   font-size: 0.8rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-heading);
@@ -3240,7 +3248,7 @@ details[open] > .settings-section-title::after {
   box-sizing: border-box;
   padding: 0.32rem 0.4rem;
   font-size: 0.8rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-heading);
@@ -3298,7 +3306,7 @@ details[open] > .settings-section-title::after {
   box-sizing: border-box;
   padding: 0.32rem 0.4rem;
   font-size: 0.8rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--link);
@@ -3335,7 +3343,7 @@ details[open] > .settings-section-title::after {
   box-sizing: border-box;
   padding: 0.32rem 0.4rem;
   font-size: 0.8rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
 }
@@ -3386,7 +3394,7 @@ details[open] > .settings-section-title::after {
 .inventory-date-add {
   height: 30px;
   border: 1px dashed var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-alt);
   color: var(--text-soft);
   font-size: 0.78rem;
@@ -3416,7 +3424,7 @@ details[open] > .settings-section-title::after {
   width: 24px;
   min-width: 24px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-alt);
   color: var(--text-soft);
   font-size: 0.92rem;
@@ -3500,7 +3508,7 @@ details[open] > .settings-section-title::after {
   height: 2rem;
   padding: 0 0.375rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
   font-size: 0.85rem;
@@ -3540,7 +3548,7 @@ details[open] > .settings-section-title::after {
 .inventory-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   cursor: pointer;
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
@@ -3595,7 +3603,7 @@ details[open] > .settings-section-title::after {
   font-size: 0.78rem;
   font-weight: 600;
   padding: 0.15rem 0.45rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-soft);
   color: var(--text-muted);
 }
@@ -3695,7 +3703,7 @@ details[open] > .settings-section-title::after {
   padding: 0.5rem 0.6rem;
   font-size: 0.9rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text-heading);
   font-family: inherit;
@@ -3751,12 +3759,12 @@ textarea.inventory-card-input {
   }
 
   .app-card {
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     padding: 1rem;
   }
 
   .app-card--inventory {
-    border-radius: 0;
+    border-radius: var(--radius-lg);
     padding: 0.65rem;
   }
 
@@ -4064,7 +4072,7 @@ textarea.inventory-card-input {
   padding: 4px;
   background: var(--surface-alt);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   width: fit-content;
   margin: 1.25rem auto 0;
 }
@@ -4075,7 +4083,7 @@ textarea.inventory-card-input {
   gap: 6px;
   padding: 6px 18px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-soft);
   font-size: 0.9rem;
@@ -4098,7 +4106,7 @@ textarea.inventory-card-input {
   font-size: 0.72rem;
   font-weight: 600;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--primary);
   color: var(--surface);
   letter-spacing: 0.02em;
@@ -4126,7 +4134,7 @@ textarea.inventory-card-input {
   gap: 0.5rem;
   padding: 1.4rem 1.25rem 1.25rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-alt);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -4157,7 +4165,7 @@ textarea.inventory-card-input {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 3px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--primary);
   color: var(--surface);
   white-space: nowrap;
@@ -4354,7 +4362,7 @@ textarea.inventory-card-input {
   padding: 16px 18px;
   background: var(--surface-alt);
   border: 2px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   text-align: left;
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
@@ -4400,7 +4408,7 @@ textarea.inventory-card-input {
 .onboarding-preview {
   background: var(--surface-alt);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 16px 20px;
 }
 
@@ -4430,7 +4438,7 @@ textarea.inventory-card-input {
   padding: 4px 10px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 9999px;
+  border-radius: var(--radius-pill);
   font-size: 0.78rem;
   color: var(--text);
 }
@@ -4446,7 +4454,7 @@ textarea.inventory-card-input {
   color: var(--text-muted);
   background: var(--surface-alt);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .onboarding-error {
@@ -4454,7 +4462,7 @@ textarea.inventory-card-input {
   padding: 10px 14px;
   background: var(--danger-surface);
   border: 1px solid var(--danger-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--danger);
   font-size: 0.85rem;
 }
@@ -4543,40 +4551,24 @@ textarea.inventory-card-input {
   flex-wrap: wrap;
 }
 
-/* Filter input that scopes the reorder list to items matching the query.
- * Sits between the title block and the "Add Items" button so it doesn't
- * consume its own row on wider screens. */
+/* Filter input that scopes the reorder list. Reuses .inventory-search-wrap /
+ * .inventory-search-input so the search styling matches the inventory tab. */
 .reorder-list-filter {
-  position: relative;
-  flex: 0 1 240px;
+  width: 100%;
+}
+
+.reorder-header-right {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  flex: 0 1 200px;
+  min-width: 180px;
   margin-left: auto;
 }
 
-.reorder-list-filter-input {
-  width: 100%;
-  padding-right: 1.75rem;
-}
-
-.reorder-list-filter-clear {
-  position: absolute;
-  right: 0.35rem;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.reorder-list-filter-clear:hover {
-  background: var(--surface-hover, var(--surface-alt));
-  color: var(--text);
+.reorder-header-right .reorder-add-item-btn {
+  align-self: flex-end;
 }
 
 .reorder-filter-empty {
@@ -4586,22 +4578,33 @@ textarea.inventory-card-input {
   font-size: 0.9rem;
   background: var(--surface-soft);
   border: 1px dashed var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 .reorder-header-left {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.reorder-header-titlerow {
+  display: flex;
   align-items: baseline;
-  gap: 0.75rem;
+  gap: 0.6rem;
+  flex-wrap: wrap;
 }
 
 .reorder-title {
-  font-size: 1.15rem;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-heading);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   margin: 0;
 }
 
@@ -4629,7 +4632,7 @@ textarea.inventory-card-input {
   color: var(--text);
   padding: 0.3rem 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface-alt);
   font-variant-numeric: tabular-nums;
 }
@@ -4709,7 +4712,7 @@ textarea.inventory-card-input {
   flex-direction: column;
   gap: 0.25rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.25rem;
   background: var(--surface);
 }
@@ -4730,7 +4733,7 @@ textarea.inventory-card-input {
   padding: 0.5rem 0.65rem;
   background: none;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-family: inherit;
   text-align: left;
@@ -4795,7 +4798,7 @@ textarea.inventory-card-input {
    * the one in Log Usage / Fast Restock. */
   width: 100%;
   height: 44px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-heading);
@@ -4822,7 +4825,7 @@ textarea.inventory-card-input {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -4844,7 +4847,7 @@ textarea.inventory-card-input {
   list-style: none;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
 }
 
@@ -4892,7 +4895,7 @@ textarea.inventory-card-input {
   padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
   font-size: 0.82rem;
   color: var(--text-muted);
@@ -4906,7 +4909,7 @@ textarea.inventory-card-input {
   gap: 0.2rem;
   margin-left: 0.4rem;
   padding: 0.05rem 0.35rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--surface-soft);
   color: var(--text-muted);
   font-size: 0.7rem;
@@ -4921,7 +4924,7 @@ textarea.inventory-card-input {
   padding: 0.75rem;
   margin-bottom: 0.5rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-soft);
 }
 
@@ -5004,8 +5007,8 @@ textarea.inventory-card-input {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--table-grid);
 }
 
 .reorder-vendor-info {
@@ -5015,14 +5018,15 @@ textarea.inventory-card-input {
 }
 
 .reorder-vendor-name {
-  font-size: 0.95rem;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-heading);
+  letter-spacing: 0.01em;
   margin: 0;
 }
 
 .reorder-vendor-count {
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--text-soft);
 }
 
@@ -5054,7 +5058,7 @@ textarea.inventory-card-input {
   font-weight: 500;
   white-space: nowrap;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .reorder-status-expired {
@@ -5115,7 +5119,7 @@ textarea.inventory-card-input {
   align-items: center;
   gap: 0.35rem;
   padding: 0.46rem 0.6rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--surface-alt);
   color: var(--text-heading);
@@ -5150,7 +5154,7 @@ textarea.inventory-card-input {
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
   padding: 4px 0;
 }
@@ -5238,7 +5242,7 @@ textarea.inventory-card-input {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-muted);
   transition: color 0.12s, background 0.12s;
@@ -5262,7 +5266,7 @@ textarea.inventory-card-input {
   min-width: 170px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   padding: 4px 0;
   margin-top: 2px;
@@ -5293,7 +5297,7 @@ textarea.inventory-card-input {
   padding: 8px 12px;
   background: var(--danger-surface);
   border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin: 0 0 8px 0;
   gap: 12px;
 }
@@ -5331,7 +5335,7 @@ textarea.inventory-card-input {
 .inventory-retire-btn {
   font-size: 0.75rem;
   padding: 3px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--danger);
   background: transparent;
   color: var(--danger);
@@ -5362,7 +5366,7 @@ textarea.inventory-card-input {
   padding: 0.5rem 0.75rem;
   font-size: 0.78rem;
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -5504,25 +5508,47 @@ textarea.inventory-card-input {
 }
 
 .reorder-nolink-hint {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--text-soft);
-  padding: 0.5rem 1rem 0;
+  padding: 0.4rem 0.75rem;
   margin: 0;
+  border-bottom: 1px solid var(--table-grid);
 }
 
 .reorder-nolink-list {
-  display: flex;
-  flex-direction: column;
-  padding: 0.25rem 0 0.5rem;
+  padding: 0;
 }
 
+.reorder-nolink-header,
 .reorder-nolink-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--border-soft, var(--border));
+  gap: 0;
+  padding: 0;
+  align-items: stretch;
+}
+
+.reorder-nolink-header {
+  background: var(--table-header);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-heading);
+  letter-spacing: 0.01em;
+  border-bottom: 1px solid var(--table-grid);
+}
+
+.reorder-nolink-row {
+  background: var(--surface);
+  border-bottom: 1px solid var(--table-grid);
+  transition: background 0.15s;
+}
+
+.reorder-nolink-list .reorder-nolink-row:nth-child(even) {
+  background: var(--table-row-even);
+}
+
+.reorder-nolink-list .reorder-nolink-row:hover {
+  background: var(--table-row-hover);
 }
 
 .reorder-nolink-row:last-child {
@@ -5539,12 +5565,17 @@ textarea.inventory-card-input {
 .reorder-nolink-input {
   width: 100% !important;
   min-width: 0 !important;
-  padding: 0.3rem 0.5rem !important;
-  font-size: 0.85rem !important;
+  padding: 0.32rem 0.4rem !important;
+  font-size: 0.8rem !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--text-heading) !important;
   box-sizing: border-box;
 }
 
 @media (max-width: 600px) {
+  .reorder-nolink-header,
   .reorder-nolink-row {
     grid-template-columns: 1fr;
     gap: 0.4rem;
@@ -5638,7 +5669,7 @@ textarea.inventory-card-input {
   margin-bottom: 0.75rem;
   padding: 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-alt);
 }
 
@@ -5709,26 +5740,63 @@ textarea.inventory-card-input {
 /* ── Inline Reorder Checklist (inside vendor cards) ──────────────── */
 
 .checklist-items {
-  padding: 0.25rem 0;
+  padding: 0;
+  border-top: 1px solid var(--table-grid);
 }
 
 .checklist-item {
   display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.6rem 1.25rem;
-  transition: opacity 0.2s;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--table-grid);
+  transition: background 0.15s, opacity 0.2s;
+}
+
+.checklist-items > .checklist-item:nth-child(even) {
+  background: var(--table-row-even);
+}
+
+.checklist-items > .checklist-item:hover {
+  background: var(--table-row-hover);
+}
+
+.checklist-item:last-child {
+  border-bottom: none;
 }
 
 .checklist-item.checked {
   opacity: 0.5;
 }
 
+/* Reorder checklist cell — mirrors the inventory table's td chrome
+ * (right border, padding, vertical centering) so the checklist reads as a
+ * proper table row instead of a flex list. */
+.checklist-cell {
+  padding: 0.55rem 0.6rem;
+  border-right: 1px solid var(--table-grid-strong);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checklist-cell:last-child {
+  border-right: none;
+}
+
+.checklist-cell--checkbox,
+.checklist-cell--remove {
+  justify-content: center;
+  padding: 0.4rem 0.35rem;
+}
+
 .checklist-checkbox {
   flex-shrink: 0;
   width: 22px;
   height: 22px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 2px solid var(--border, #d1d5db);
   background: var(--surface, #fff);
   cursor: pointer;
@@ -5782,41 +5850,50 @@ textarea.inventory-card-input {
 
 .checklist-items-header {
   display: grid;
-  grid-template-columns: 22px 1fr 72px;
-  gap: 0.5rem;
-  padding: 0.375rem 1.25rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--text-muted, #999);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--border);
+  grid-template-columns: 38px 1fr 88px;
+  gap: 0;
+  padding: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-heading);
+  letter-spacing: 0.01em;
+  background: var(--table-header);
+  border-bottom: 1px solid var(--table-grid);
 }
 
 .checklist-item--form {
   display: grid;
-  grid-template-columns: 22px 1fr 72px;
-  gap: 0.5rem;
-  align-items: start;
+  grid-template-columns: 38px 1fr 88px;
+  gap: 0;
+  padding: 0;
+  align-items: stretch;
 }
 
 .checklist-item--raw {
-  grid-template-columns: 16px 1fr 72px 24px;
+  grid-template-columns: 38px 1fr 88px 38px;
 }
 
 .checklist-qty-field {
   width: 100% !important;
   min-width: 0 !important;
-  padding: 0.25rem 0.375rem !important;
-  font-size: 0.82rem !important;
+  padding: 0.32rem 0.4rem !important;
+  font-size: 0.8rem !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--text-heading) !important;
   box-sizing: border-box;
 }
 
 .checklist-raw-name-field {
   width: 100% !important;
   min-width: 0 !important;
-  padding: 0.25rem 0.375rem !important;
-  font-size: 0.82rem !important;
+  padding: 0.32rem 0.4rem !important;
+  font-size: 0.8rem !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--text-heading) !important;
   box-sizing: border-box;
 }
 
@@ -5830,10 +5907,13 @@ textarea.inventory-card-input {
 .checklist-raw-link-field {
   width: 100% !important;
   min-width: 0 !important;
-  padding: 0.2rem 0.375rem !important;
-  font-size: 0.72rem !important;
+  padding: 0.28rem 0.4rem !important;
+  font-size: 0.74rem !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--text-soft) !important;
   box-sizing: border-box;
-  color: var(--text-soft);
 }
 
 .checklist-raw-dot {
@@ -5841,7 +5921,6 @@ textarea.inventory-card-input {
   height: 8px;
   border-radius: 50%;
   background: var(--primary, #2472B1);
-  margin-top: 7px;
   flex-shrink: 0;
 }
 
@@ -5851,11 +5930,10 @@ textarea.inventory-card-input {
   cursor: pointer;
   color: var(--text-muted);
   padding: 3px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 1px;
 }
 .checklist-raw-remove:hover {
   color: var(--danger, #dc2626);
@@ -5996,25 +6074,6 @@ textarea.inventory-card-input {
   border-bottom-color: var(--primary);
 }
 
-.orders-page-header {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 1.25rem;
-  padding-bottom: 0.5rem;
-}
-
-.orders-page-title {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 600;
-  color: var(--text-heading);
-}
-
 /* ── Orders help button + modal ─────────────────────────────────────── */
 
 .orders-help-btn {
@@ -6120,7 +6179,7 @@ textarea.inventory-card-input {
   margin: 0.75rem 0 !important;
   padding: 0.5rem 0.75rem;
   background: var(--surface-alt);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 0.88rem;
   color: var(--text-heading);
   text-align: center;
@@ -6185,7 +6244,7 @@ textarea.inventory-card-input {
   font-size: 0.7rem;
   font-weight: 700;
   padding: 0.15rem 0.45rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -6302,7 +6361,7 @@ textarea.inventory-card-input {
   margin-top: 0.75rem;
   padding: 0.85rem 1rem;
   border: 1px solid var(--danger-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--danger-surface);
   display: flex;
   flex-direction: column;
@@ -6514,7 +6573,7 @@ textarea.inventory-card-input {
   z-index: 20;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
   max-height: 220px;
   overflow-y: auto;
@@ -6656,7 +6715,7 @@ textarea.inventory-card-input {
   margin-top: 0.75rem;
   padding: 0.85rem 1rem;
   border: 1px solid var(--danger-border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--danger-surface);
   display: flex;
   flex-direction: column;
@@ -6718,7 +6777,7 @@ textarea.inventory-card-input {
   padding: 0.15rem 0.35rem;
   font-size: 0.8rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
   text-align: center;
@@ -6745,7 +6804,7 @@ textarea.inventory-card-input {
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   padding: 0.125rem 0.375rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
 }
 
@@ -6766,7 +6825,7 @@ textarea.inventory-card-input {
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   padding: 0.1rem 0.3rem;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-left: 0.375rem;
 }
 
@@ -6809,7 +6868,7 @@ textarea.inventory-card-input {
     gap: 0.5rem;
     padding: 0.75rem;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: var(--surface-alt);
   }
 
@@ -6868,7 +6927,7 @@ textarea.inventory-card-input {
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   transition: background 0.15s, color 0.15s;
 }
 
@@ -6906,7 +6965,7 @@ textarea.inventory-card-input {
   z-index: 50;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 0.5rem;
   display: flex;
   flex-direction: column;
@@ -6922,7 +6981,7 @@ textarea.inventory-card-input {
   padding: 0.25rem 0.5rem;
   font-size: 0.8125rem;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .audit-filter-option:hover {
@@ -7082,7 +7141,7 @@ textarea.inventory-card-input {
   width: 100%;
   padding: 0.4rem 2rem 0.4rem 2rem;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text);
   font-size: 0.8125rem;
@@ -7236,7 +7295,7 @@ textarea.inventory-card-input {
   padding-left: 1.25rem;
   border-left: 2px solid var(--border);
   background: var(--surface-soft);
-  border-radius: 0 0 4px 4px;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 .audit-event-group-children .audit-event-row {
@@ -7303,7 +7362,7 @@ textarea.inventory-card-input {
   padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 .audit-analytics-summary {
@@ -7328,7 +7387,7 @@ textarea.inventory-card-input {
   padding: 1rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 .audit-stat-card--feature {
@@ -7457,14 +7516,14 @@ textarea.inventory-card-input {
   padding: 1.5rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   margin-top: 1rem;
 }
 
 .audit-chart-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 1rem;
 }
 
@@ -7500,14 +7559,14 @@ textarea.inventory-card-input {
   flex: 1;
   height: 20px;
   background: var(--surface-alt);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
 .audit-bar-fill {
   height: 100%;
   background: var(--primary);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: width 0.3s ease;
 }
 
@@ -7608,7 +7667,7 @@ textarea.inventory-card-input {
   align-items: center;
   gap: 0.3rem;
   padding: 0.3rem 0.65rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
@@ -7642,7 +7701,7 @@ textarea.inventory-card-input {
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--surface-alt);
   color: var(--text);
   font-size: 0.68rem;
@@ -7659,7 +7718,7 @@ textarea.inventory-card-input {
   align-items: center;
   gap: 0.35rem;
   padding: 0.35rem 0.7rem;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);

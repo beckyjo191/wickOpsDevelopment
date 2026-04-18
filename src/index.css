@@ -77,6 +77,12 @@
   --lp-tag-bg: #EFF6FF;
   --lp-tag-border: #BFDBFE;
   --lp-tag-text: #1D4ED8;
+
+  /* Radius scale — applied app-wide. Theme-independent. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
 }
 
 * {

@@ -10,7 +10,7 @@ import { InventoryUsagePage } from "./components/InventoryUsagePage";
 import { OnboardingPage } from "./components/OnboardingPage";
 import { InventorySubNav } from "./components/InventorySubNav";
 import { AuditLogPage } from "./components/AuditLogPage";
-import { OrdersPage } from "./components/OrdersPage";
+import { OrdersPage, OrdersHelp } from "./components/OrdersPage";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -606,6 +606,7 @@ export default function App() {
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
         onNavigate={(v) => void navigateTo(v as AppView)}
+        rightSlot={view === "orders" ? <OrdersHelp /> : undefined}
       />
       {content}
     </section>

@@ -7,7 +7,6 @@ import {
   HelpCircle,
   Loader2,
   PackageCheck,
-  RotateCcw,
   X,
 } from "lucide-react";
 import {
@@ -726,7 +725,7 @@ function OrderCard({
 
 // ── Orders Help ────────────────────────────────────────────────────────────
 
-function OrdersHelp() {
+export function OrdersHelp() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -1094,13 +1093,6 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
 
   return (
     <section className="app-page orders-page">
-      <div className="orders-page-header">
-        <h2 className="orders-page-title">
-          <RotateCcw size={16} /> Orders
-        </h2>
-        <OrdersHelp />
-      </div>
-
       <div className="orders-content">
         {error && <p className="orders-error">{error}</p>}
 

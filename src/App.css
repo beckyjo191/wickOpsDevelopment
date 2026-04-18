@@ -7461,6 +7461,32 @@ textarea.inventory-card-input {
   gap: 0.3rem;
 }
 
+/* Item-history variant: same chrome, 4 columns (no item-name col since the
+ * page already shows which item we're viewing). Rows expand inline to a diff
+ * panel so there's nowhere deeper to navigate. */
+.audit-flat-row--history {
+  grid-template-columns: 4rem 7rem minmax(0, 1fr) auto;
+}
+
+.audit-flat-row--history.audit-flat-row:hover:not(:disabled) {
+  background: var(--table-row-hover);
+}
+
+.audit-flat-disclosure {
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--table-grid);
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.audit-flat-feed > .audit-flat-disclosure:last-child {
+  border-bottom: none;
+}
+
 @media (max-width: 600px) {
   .audit-flat-row {
     grid-template-columns: 4rem 1fr;
@@ -7469,6 +7495,13 @@ textarea.inventory-card-input {
       "action detail"
       "user user";
     row-gap: 0;
+  }
+  .audit-flat-row--history {
+    grid-template-columns: 4rem 1fr;
+    grid-template-areas:
+      "time action"
+      "detail detail"
+      "user user";
   }
   .audit-flat-time { grid-area: time; }
   .audit-flat-itemname { grid-area: itemname; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import {
   approveUsageSubmission,
   deleteUsageSubmission,
@@ -881,22 +881,46 @@ function groupEventsByDay(events: AuditEvent[]): Array<{ label: string; events: 
 // deep-links to the item history page where the diff list + Open in Inventory
 // already live.
 
+/** Truncates a list of field names so the row stays scannable: shows the
+ *  first two, then `+N more` for the rest. Avoids both extremes (long unwieldy
+ *  list vs. abstract "N fields" with no clue what changed). */
+function joinFieldNames(names: string[]): string {
+  if (names.length === 0) return "";
+  if (names.length <= 2) return names.join(", ");
+  return `${names.slice(0, 2).join(", ")} +${names.length - 2} more`;
+}
+
 /** Compact row-detail for the flat feed. For generic ITEM_EDIT events we
- *  intentionally drop the values (no `Reorder Link: — → https://...` dumps in
- *  the row) — the user can click into the item page to see the full diff.
- *  Quantity-related edits keep their useful inline summary. */
+ *  drop values (no raw URLs in the row) and emit field names instead — the
+ *  user clicks the row for the full diff. Quantity-related edits keep their
+ *  useful inline summary. */
 function buildFlatRowDetail(event: AuditEvent): string {
   const derivedAction = deriveAction(event);
   if (event.action === "ITEM_EDIT" && derivedAction === "ITEM_EDIT") {
     const changes = getVisibleEditChanges(event);
-    if (changes.length === 0) return "";
-    if (changes.length === 1) return humanizeFieldName(changes[0].field);
-    if (changes.length <= 3) {
-      return changes.map((c) => humanizeFieldName(c.field)).join(", ");
-    }
-    return `${changes.length} fields`;
+    return joinFieldNames(changes.map((c) => humanizeFieldName(c.field)));
   }
   return buildEventDetail(event);
+}
+
+/** Aggregated row-detail across multiple events for the same (day, item).
+ *  When all events are ITEM_EDITs, we collect the unique changed field names.
+ *  Mixed-action buckets fall back to a generic "N changes". */
+function buildFlatAggregateDetail(events: AuditEvent[]): string {
+  const allEdits = events.every((e) => e.action === "ITEM_EDIT" && deriveAction(e) === "ITEM_EDIT");
+  if (allEdits) {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const e of events) {
+      for (const c of getVisibleEditChanges(e)) {
+        if (seen.has(c.field)) continue;
+        seen.add(c.field);
+        names.push(humanizeFieldName(c.field));
+      }
+    }
+    if (names.length > 0) return joinFieldNames(names);
+  }
+  return `${events.length} change${events.length !== 1 ? "s" : ""}`;
 }
 
 type FlatActivityRow =
@@ -980,7 +1004,7 @@ function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
           ? userArr[0]
           : `${userArr.length} users`;
       const detail = bucket.events.length > 1
-        ? `${bucket.events.length} change${bucket.events.length !== 1 ? "s" : ""}`
+        ? buildFlatAggregateDetail(bucket.events)
         : buildFlatRowDetail(bucket.events[0]);
       flat.push({
         kind: "row",
@@ -997,6 +1021,99 @@ function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
     }
   }
   return flat;
+}
+
+/** Per-event flat list for the item-history view. Same chrome as the main
+ *  feed, but each row represents a single audit event for the focused item;
+ *  clicking an editable row toggles an inline diff panel. */
+function FlatItemHistory({ events }: { events: AuditEvent[] }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  type Row =
+    | { kind: "day-divider"; key: string; label: string }
+    | { kind: "event"; key: string; event: AuditEvent };
+
+  const rows: Row[] = [];
+  let currentDayLabel: string | null = null;
+  for (const e of events) {
+    const label = dayGroupLabel(e.timestamp);
+    if (label !== currentDayLabel) {
+      rows.push({ kind: "day-divider", key: `day:${label}`, label });
+      currentDayLabel = label;
+    }
+    rows.push({ kind: "event", key: e.eventId, event: e });
+  }
+
+  return (
+    <div className="audit-flat-feed audit-flat-feed--history">
+      {rows.map((row) => {
+        if (row.kind === "day-divider") {
+          return (
+            <div key={row.key} className="audit-flat-day-divider">
+              {row.label}
+            </div>
+          );
+        }
+        const e = row.event;
+        const derived = deriveAction(e);
+        const actionLabel = ACTION_LABELS[derived] ?? e.action;
+        const actionColor = ACTION_COLORS[derived] ?? "var(--text-muted)";
+        const time = new Date(e.timestamp).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const detail = buildFlatRowDetail(e);
+        const user = e.userName || e.userEmail || "—";
+        const editChanges = e.action === "ITEM_EDIT" ? getVisibleEditChanges(e) : [];
+        const expandable = editChanges.length > 0;
+        const isOpen = !!expanded[row.key];
+        return (
+          <Fragment key={row.key}>
+            <button
+              type="button"
+              className="audit-flat-row audit-flat-row--history"
+              onClick={() =>
+                expandable &&
+                setExpanded((prev) => ({ ...prev, [row.key]: !prev[row.key] }))
+              }
+              disabled={!expandable}
+              aria-expanded={expandable ? isOpen : undefined}
+              title={expandable ? (isOpen ? "Hide changes" : "Show changes") : undefined}
+            >
+              <span className="audit-flat-cell audit-flat-time">{time}</span>
+              <span
+                className="audit-flat-cell audit-flat-action"
+                style={{ color: actionColor }}
+              >
+                {actionLabel}
+              </span>
+              <span className="audit-flat-cell audit-flat-detail">
+                {expandable ? `${isOpen ? "▾" : "▸"} ${detail || "View changes"}` : (detail || "—")}
+              </span>
+              <span className="audit-flat-cell audit-flat-user">
+                <User size={11} />
+                {user}
+              </span>
+            </button>
+            {expandable && isOpen ? (
+              <ul className="audit-flat-disclosure audit-event-changes-list">
+                {editChanges.map((c, idx) => (
+                  <li key={idx} className="audit-event-changes-row">
+                    <span className="audit-event-changes-field">
+                      {humanizeFieldName(c.field)}
+                    </span>
+                    <span className="audit-event-changes-arrow">
+                      {formatFieldValue(c.field, c.from)} → {formatFieldValue(c.field, c.to)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Fragment>
+        );
+      })}
+    </div>
+  );
 }
 
 function FlatActivityFeed({
@@ -1417,7 +1534,6 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
       })
     : noiseFreeEvents;
 
-  const historyGroups = groupEventsByDay(visibleHistoryEvents);
 
   return (
     <section className="app-page audit-page">
@@ -1595,16 +1711,11 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
             </div>
           )}
 
-          {historyGroups.map((group) => (
-            <DayReport
-              key={group.label}
-              label={group.label}
-              events={group.events}
-              defaultCollapsed={group.label !== "Today"}
-            />
-          ))}
+          {visibleHistoryEvents.length > 0 && (
+            <FlatItemHistory events={visibleHistoryEvents} />
+          )}
 
-          {!historyLoading && historyCursor && (
+          {!historyLoading && historyCursor && historyEvents.length >= LOAD_MORE_THRESHOLD && (
             <button
               type="button"
               className="button button-ghost audit-load-more"

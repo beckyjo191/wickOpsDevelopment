@@ -7121,6 +7121,53 @@ textarea.inventory-card-input {
   grid-auto-rows: min-content;
 }
 
+/* Expanded multi-field diff list. The <ul> is the 5th child of an
+ * audit-event-row grid, so it must span all columns and reset list styling
+ * — without grid-column: 1/-1 it gets stuffed into the 3.5rem time column
+ * and long URLs wrap one word per line. */
+.audit-event-changes-list {
+  grid-column: 1 / -1;
+  margin: 0.4rem 0 0.1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.audit-event-changes-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 160px) 1fr;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-size: 0.8125rem;
+  min-width: 0;
+}
+
+.audit-event-changes-field {
+  font-weight: 600;
+  color: var(--text-heading);
+  white-space: nowrap;
+}
+
+.audit-event-changes-arrow {
+  color: var(--text-muted);
+  font-family: inherit;
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .audit-event-changes-row {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+}
+
 /* Search box replacing the old filter button. */
 .audit-search-container {
   position: relative;

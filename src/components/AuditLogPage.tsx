@@ -512,19 +512,20 @@ function groupDayEvents(events: AuditEvent[]): DisplayRow[] {
     }
     const bucket = itemBuckets.get(slot.groupId);
     if (!bucket) continue;
-    if (bucket.rows.length === 1) {
-      flat.push({ kind: "event", event: bucket.rows[0] });
-    } else {
-      flat.push({
-        kind: "item-group",
-        groupId: bucket.groupId,
-        action: bucket.action,
-        itemId: bucket.itemId,
-        itemName: bucket.itemName,
-        events: bucket.rows,
-        representative: bucket.representative,
-      });
-    }
+    // Always emit an item-group — even singletons — so every item gets
+    // exactly one row per day with a click-to-disclose for the changes
+    // and a "View full history →" link in the expanded panel. Mixing
+    // single-event AuditEventRows with multi-event ItemGroupRows in the
+    // same day made the feed feel inconsistent.
+    flat.push({
+      kind: "item-group",
+      groupId: bucket.groupId,
+      action: bucket.action,
+      itemId: bucket.itemId,
+      itemName: bucket.itemName,
+      events: bucket.rows,
+      representative: bucket.representative,
+    });
   }
   return flat;
 }
@@ -1159,7 +1160,10 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
     setError(null);
     try {
       const res = await fetchAuditFeed({
-        limit: 50,
+        // Larger pages so day-level summaries (Yesterday: "1 restocked ·
+        // 1 added · 135 updated") reflect the day's real totals instead of
+        // whatever fraction happened to fit in the first 50 events.
+        limit: 200,
         ...(append && cursor ? { cursor } : {}),
       });
       setEvents((prev) => append ? [...prev, ...(res.events ?? [])] : (res.events ?? []));
@@ -1170,6 +1174,11 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
       setLoading(false);
     }
   }, []);
+
+  // Don't surface "Load more" until the user has a meaningful amount of
+  // content — otherwise a near-empty feed shows a CTA below an almost-empty
+  // page, which reads as broken.
+  const LOAD_MORE_THRESHOLD = 20;
 
   useEffect(() => {
     if (tab === "feed") loadFeed(false);
@@ -1368,7 +1377,7 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
             </div>
           )}
 
-          {!loading && nextCursor && events.length > 0 && (
+          {!loading && nextCursor && events.length >= LOAD_MORE_THRESHOLD && (
             <button
               type="button"
               className="button button-ghost audit-load-more"

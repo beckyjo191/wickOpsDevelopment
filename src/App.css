@@ -7356,6 +7356,134 @@ textarea.inventory-card-input {
   padding: 1.5rem;
 }
 
+/* ── Flat activity feed (Option B) ─────────────────────────────────────── */
+/* One row per (day, item). Inventory-table chrome (alt rows, dividers,
+ * sticky-feeling header strips) so it reads as a single dense table rather
+ * than nested cards. */
+
+.audit-flat-feed {
+  border: 1px solid var(--table-grid);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.audit-flat-day-divider {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--table-header);
+  border-bottom: 1px solid var(--table-grid);
+}
+
+.audit-flat-day-divider:not(:first-child) {
+  border-top: 1px solid var(--table-grid);
+}
+
+.audit-flat-row {
+  display: grid;
+  grid-template-columns: 4rem 7rem minmax(0, 2fr) minmax(0, 3fr) auto;
+  align-items: stretch;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: none;
+  border-bottom: 1px solid var(--table-grid);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.audit-flat-feed > .audit-flat-row:nth-of-type(even) {
+  background: var(--table-row-even);
+}
+
+.audit-flat-row:hover:not(:disabled) {
+  background: var(--table-row-hover);
+}
+
+.audit-flat-row:disabled {
+  cursor: default;
+}
+
+.audit-flat-row:last-child {
+  border-bottom: none;
+}
+
+.audit-flat-cell {
+  padding: 0.55rem 0.6rem;
+  border-right: 1px solid var(--table-grid-strong);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: flex;
+  align-items: center;
+}
+
+.audit-flat-cell:last-child {
+  border-right: none;
+}
+
+.audit-flat-time {
+  color: var(--text-muted);
+  font-size: 0.78125rem;
+  white-space: nowrap;
+}
+
+.audit-flat-action {
+  font-size: 0.78125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.audit-flat-itemname {
+  color: var(--primary);
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.audit-flat-row:disabled .audit-flat-itemname {
+  color: var(--text);
+}
+
+.audit-flat-detail {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+}
+
+.audit-flat-user {
+  color: var(--text-muted);
+  font-size: 0.78125rem;
+  white-space: nowrap;
+  gap: 0.3rem;
+}
+
+@media (max-width: 600px) {
+  .audit-flat-row {
+    grid-template-columns: 4rem 1fr;
+    grid-template-areas:
+      "time itemname"
+      "action detail"
+      "user user";
+    row-gap: 0;
+  }
+  .audit-flat-time { grid-area: time; }
+  .audit-flat-itemname { grid-area: itemname; }
+  .audit-flat-action { grid-area: action; }
+  .audit-flat-detail { grid-area: detail; }
+  .audit-flat-user {
+    grid-area: user;
+    border-top: 1px dashed var(--table-grid);
+    padding-top: 0.4rem;
+  }
+  .audit-flat-cell {
+    border-right: none;
+  }
+}
+
 .audit-load-more {
   align-self: center;
 }

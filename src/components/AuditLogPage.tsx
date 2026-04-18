@@ -875,6 +875,164 @@ function groupEventsByDay(events: AuditEvent[]): Array<{ label: string; events: 
   return groups;
 }
 
+// ── Flat activity feed (Option B) ─────────────────────────────────────────────
+// One row per (day, item). Itemless events (CSV imports, template applies) get
+// their own row keyed by event id. No nested disclosure — clicking a row
+// deep-links to the item history page where the diff list + Open in Inventory
+// already live.
+
+type FlatActivityRow =
+  | { kind: "day-divider"; key: string; label: string }
+  | {
+      kind: "row";
+      key: string;
+      lastTimestamp: string;
+      actionLabel: string;
+      actionColor: string;
+      itemId: string | null;
+      itemName: string;
+      detail: string;
+      userLabel: string;
+      eventCount: number;
+    };
+
+function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
+  type RowBucket = {
+    events: AuditEvent[];
+    lastTimestamp: string;
+    actions: Set<string>;
+    users: Set<string>;
+    itemId: string | null;
+    itemName: string;
+  };
+  type DayBucket = {
+    label: string;
+    keyOrder: string[];
+    rows: Map<string, RowBucket>;
+  };
+
+  const days: DayBucket[] = [];
+  let currentDay: DayBucket | null = null;
+
+  for (const e of events) {
+    const label = dayGroupLabel(e.timestamp);
+    if (!currentDay || currentDay.label !== label) {
+      currentDay = { label, keyOrder: [], rows: new Map() };
+      days.push(currentDay);
+    }
+    const itemId = e.itemId ? String(e.itemId) : null;
+    const rowKey = itemId ?? `event:${e.eventId}`;
+    let bucket = currentDay.rows.get(rowKey);
+    if (!bucket) {
+      bucket = {
+        events: [],
+        lastTimestamp: e.timestamp,
+        actions: new Set(),
+        users: new Set(),
+        itemId,
+        itemName: String(e.itemName ?? "").trim(),
+      };
+      currentDay.rows.set(rowKey, bucket);
+      currentDay.keyOrder.push(rowKey);
+    }
+    bucket.events.push(e);
+    if (e.timestamp > bucket.lastTimestamp) bucket.lastTimestamp = e.timestamp;
+    bucket.actions.add(deriveAction(e));
+    const u = e.userName || e.userEmail;
+    if (u) bucket.users.add(u);
+    if (!bucket.itemName && e.itemName) bucket.itemName = String(e.itemName).trim();
+  }
+
+  const flat: FlatActivityRow[] = [];
+  for (const day of days) {
+    flat.push({ kind: "day-divider", key: `day:${day.label}`, label: day.label });
+    for (const rowKey of day.keyOrder) {
+      const bucket = day.rows.get(rowKey)!;
+      const actionList = Array.from(bucket.actions);
+      const actionLabel = actionList.length === 1
+        ? (ACTION_LABELS[actionList[0]] ?? actionList[0])
+        : "Multiple";
+      const actionColor = actionList.length === 1
+        ? (ACTION_COLORS[actionList[0]] ?? "var(--text-muted)")
+        : "var(--text-muted)";
+      const userArr = Array.from(bucket.users);
+      const userLabel = userArr.length === 0
+        ? "—"
+        : userArr.length === 1
+          ? userArr[0]
+          : `${userArr.length} users`;
+      const detail = bucket.events.length > 1
+        ? `${bucket.events.length} change${bucket.events.length !== 1 ? "s" : ""}`
+        : buildEventDetail(bucket.events[0]);
+      flat.push({
+        kind: "row",
+        key: `${day.label}::${rowKey}`,
+        lastTimestamp: bucket.lastTimestamp,
+        actionLabel,
+        actionColor,
+        itemId: bucket.itemId,
+        itemName: bucket.itemName || "—",
+        detail,
+        userLabel,
+        eventCount: bucket.events.length,
+      });
+    }
+  }
+  return flat;
+}
+
+function FlatActivityFeed({
+  events,
+  onViewItemHistory,
+}: {
+  events: AuditEvent[];
+  onViewItemHistory: (itemId: string, name: string) => void;
+}) {
+  const rows = aggregateFlatActivityRows(events);
+  return (
+    <div className="audit-flat-feed">
+      {rows.map((row) => {
+        if (row.kind === "day-divider") {
+          return (
+            <div key={row.key} className="audit-flat-day-divider">
+              {row.label}
+            </div>
+          );
+        }
+        const time = new Date(row.lastTimestamp).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        const navigable = !!row.itemId && row.itemName !== "—";
+        return (
+          <button
+            key={row.key}
+            type="button"
+            className="audit-flat-row"
+            onClick={() => navigable && onViewItemHistory(row.itemId!, row.itemName)}
+            disabled={!navigable}
+            title={navigable ? `View history for ${row.itemName}` : undefined}
+          >
+            <span className="audit-flat-cell audit-flat-time">{time}</span>
+            <span
+              className="audit-flat-cell audit-flat-action"
+              style={{ color: row.actionColor }}
+            >
+              {row.actionLabel}
+            </span>
+            <span className="audit-flat-cell audit-flat-itemname">{row.itemName}</span>
+            <span className="audit-flat-cell audit-flat-detail">{row.detail}</span>
+            <span className="audit-flat-cell audit-flat-user">
+              <User size={11} />
+              {row.userLabel}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Analytics sub-components ──────────────────────────────────────────────────
 
 /** Formats a number as USD. Keeps decimals for values under $100, rounds above. */
@@ -1241,7 +1399,6 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
       })
     : noiseFreeEvents;
 
-  const feedGroups = groupEventsByDay(visibleEvents);
   const historyGroups = groupEventsByDay(visibleHistoryEvents);
 
   return (
@@ -1359,17 +1516,12 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
             </div>
           )}
 
-          {feedGroups.map((group) => (
-            <DayReport
-              key={group.label}
-              label={group.label}
-              events={group.events}
+          {visibleEvents.length > 0 && (
+            <FlatActivityFeed
+              events={visibleEvents}
               onViewItemHistory={viewItemHistory}
-              // Today stays open; older days collapse so the list doesn't
-              // scroll past a mountain of yesterday's activity to find today.
-              defaultCollapsed={group.label !== "Today"}
             />
-          ))}
+          )}
 
           {loading && (
             <div className="audit-loading">

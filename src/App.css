@@ -7368,29 +7368,64 @@ textarea.inventory-card-input {
   background: var(--surface);
 }
 
+/* Day section header — clickable, also acts as the section divider. When the
+ * day is collapsed the summary on the right shows N changes / M users so the
+ * user can scan history without expanding everything. */
 .audit-flat-day-divider {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.75rem;
+  display: grid;
+  grid-template-columns: 1.25rem 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  font-size: 0.78125rem;
   font-weight: 700;
   color: var(--text-heading);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   background: var(--table-header);
+  border: none;
   border-bottom: 1px solid var(--table-grid);
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.audit-flat-day-toggle:hover {
+  background: var(--surface-active);
 }
 
 .audit-flat-day-divider:not(:first-child) {
   border-top: 1px solid var(--table-grid);
 }
 
+.audit-flat-day-chevron {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-align: center;
+}
+
+.audit-flat-day-summary {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* One row per (day, item) in the feed; one row per event in the item history.
+ * Drop the action column entirely — color encoding lives in a left accent rail
+ * (--row-accent set inline per-row) and the action context is part of the
+ * summary sentence ("Restocked +5", "Updated Min Quantity (3)", etc.). */
 .audit-flat-row {
   display: grid;
-  grid-template-columns: 4rem 7rem minmax(0, 2fr) minmax(0, 3fr) auto;
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
   align-items: stretch;
   width: 100%;
   text-align: left;
   background: var(--surface);
   border: none;
+  border-left: 3px solid var(--row-accent, var(--text-muted));
   border-bottom: 1px solid var(--table-grid);
   padding: 0;
   font: inherit;
@@ -7406,7 +7441,8 @@ textarea.inventory-card-input {
   background: var(--table-row-hover);
 }
 
-.audit-flat-row:disabled {
+.audit-flat-row:disabled,
+.audit-flat-row--static {
   cursor: default;
 }
 
@@ -7416,15 +7452,11 @@ textarea.inventory-card-input {
 
 .audit-flat-cell {
   padding: 0.55rem 0.6rem;
-  border-right: 1px solid var(--table-grid-strong);
   min-width: 0;
   overflow-wrap: anywhere;
   display: flex;
   align-items: center;
-}
-
-.audit-flat-cell:last-child {
-  border-right: none;
+  gap: 0.3rem;
 }
 
 .audit-flat-time {
@@ -7433,87 +7465,59 @@ textarea.inventory-card-input {
   white-space: nowrap;
 }
 
-.audit-flat-action {
-  font-size: 0.78125rem;
-  font-weight: 600;
-  white-space: nowrap;
+.audit-flat-content {
+  display: block;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .audit-flat-itemname {
   color: var(--primary);
-  font-weight: 500;
-  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 .audit-flat-row:disabled .audit-flat-itemname {
   color: var(--text);
 }
 
-.audit-flat-detail {
+.audit-flat-summary {
   color: var(--text-muted);
+}
+
+.audit-flat-summary--solo {
   font-size: 0.8125rem;
+  color: var(--text);
 }
 
 .audit-flat-user {
   color: var(--text-muted);
   font-size: 0.78125rem;
   white-space: nowrap;
-  gap: 0.3rem;
 }
 
-/* Item-history variant: same chrome, 4 columns (no item-name col since the
- * page already shows which item we're viewing). Rows expand inline to a diff
- * panel so there's nowhere deeper to navigate. */
 .audit-flat-row--history {
-  grid-template-columns: 4rem 7rem minmax(0, 1fr) auto;
-}
-
-.audit-flat-row--history.audit-flat-row:hover:not(:disabled) {
-  background: var(--table-row-hover);
-}
-
-.audit-flat-disclosure {
-  background: var(--surface-alt);
-  border-bottom: 1px solid var(--table-grid);
-  margin: 0;
-  padding: 0.5rem 0.75rem;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.audit-flat-feed > .audit-flat-disclosure:last-child {
-  border-bottom: none;
+  grid-template-columns: 4rem minmax(0, 1fr) auto;
 }
 
 @media (max-width: 600px) {
-  .audit-flat-row {
-    grid-template-columns: 4rem 1fr;
+  .audit-flat-row,
+  .audit-flat-row--history {
+    grid-template-columns: 1fr;
     grid-template-areas:
-      "time itemname"
-      "action detail"
-      "user user";
+      "time"
+      "content"
+      "user";
     row-gap: 0;
   }
-  .audit-flat-row--history {
-    grid-template-columns: 4rem 1fr;
-    grid-template-areas:
-      "time action"
-      "detail detail"
-      "user user";
-  }
   .audit-flat-time { grid-area: time; }
-  .audit-flat-itemname { grid-area: itemname; }
-  .audit-flat-action { grid-area: action; }
-  .audit-flat-detail { grid-area: detail; }
+  .audit-flat-content { grid-area: content; }
+  .audit-flat-summary--solo { grid-area: content; }
   .audit-flat-user {
     grid-area: user;
     border-top: 1px dashed var(--table-grid);
     padding-top: 0.4rem;
-  }
-  .audit-flat-cell {
-    border-right: none;
   }
 }
 

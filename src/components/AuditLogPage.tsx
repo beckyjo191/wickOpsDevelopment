@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   approveUsageSubmission,
   deleteUsageSubmission,
@@ -211,74 +211,6 @@ function dayGroupLabel(iso: string): string {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
-function buildEventDetail(event: AuditEvent): string {
-  const derivedAction = deriveAction(event);
-  const details = event.details ?? {};
-  const parts: string[] = [];
-
-  if (event.action === "ITEM_EDIT") {
-    const rawChanges = Array.isArray(details.changes)
-      ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
-      : [];
-    // Strip system-field stamps so they never render as "Parent Item Id: — → …"
-    const changes = rawChanges.filter((c) => !SYSTEM_FIELDS.has(c.field));
-
-    if (derivedAction === "ITEM_RESTOCK") {
-      const qtyChange = changes.find((c) => c.field === "quantity");
-      if (qtyChange) {
-        const delta = Number(qtyChange.to ?? 0) - Number(qtyChange.from ?? 0);
-        if (delta > 0) parts.push(`+${delta} received`);
-      }
-    } else if (derivedAction === "ITEM_QTY_ADJUST") {
-      const qtyChange = changes.find((c) => c.field === "quantity");
-      if (qtyChange) {
-        parts.push(`Qty: ${formatFieldValue("quantity", qtyChange.from)} → ${formatFieldValue("quantity", qtyChange.to)}`);
-      }
-    } else {
-      const visible = changes.filter((c) => c.field !== "position");
-      for (const c of visible) {
-        parts.push(`${humanizeFieldName(c.field)}: ${formatFieldValue(c.field, c.from)} → ${formatFieldValue(c.field, c.to)}`);
-      }
-    }
-  } else if (event.action === "ITEM_CREATE") {
-    const snap = (details.initialValues ?? details.snapshot ?? {}) as Record<string, unknown>;
-    if (snap.quantity !== undefined && snap.quantity !== null) parts.push(`Qty: ${snap.quantity}`);
-    if (snap.minQuantity !== undefined && snap.minQuantity !== null) parts.push(`Min: ${snap.minQuantity}`);
-    if (snap.expirationDate) parts.push(`Exp: ${formatFieldValue("expirationDate", snap.expirationDate)}`);
-  } else if (event.action === "ITEM_DELETE") {
-    const snap = (details.deletedValues ?? details.snapshot ?? {}) as Record<string, unknown>;
-    if (snap.quantity !== undefined && snap.quantity !== null) parts.push(`Qty: ${snap.quantity}`);
-  } else if (event.action === "USAGE_SUBMIT") {
-    if (details.quantityUsed !== undefined) parts.push(`Used: ${String(details.quantityUsed)}`);
-    if (details.notes) parts.push(`"${String(details.notes)}"`);
-  } else if (event.action === "USAGE_APPROVE") {
-    parts.push(`Qty: ${String(details.quantityBefore ?? "?")} → ${String(details.quantityAfter ?? "?")} (used ${String(details.quantityUsed ?? "?")})`);
-    if (details.submittedByEmail) parts.push(`by ${String(details.submittedByEmail)}`);
-  } else if (event.action === "USAGE_REJECT" && details.reason) {
-    parts.push(`"${String(details.reason)}"`);
-  } else if (event.action === "CSV_IMPORT") {
-    parts.push(`${String(details.rowsCreated ?? 0)} created, ${String(details.rowsUpdated ?? 0)} updated`);
-  } else if (event.action === "ITEM_RETIRE") {
-    const reason = typeof details.reason === "string" ? String(details.reason) : "";
-    if (reason) parts.push(`Reason: ${reason}`);
-    if (details.qty !== undefined) parts.push(`Qty: ${String(details.qty)}`);
-  } else if (event.action === "RESTOCK_ORDER_CREATE") {
-    if (details.qtyOrdered !== undefined) parts.push(`Ordered: ${String(details.qtyOrdered)}`);
-    if (details.vendor) parts.push(`Vendor: ${String(details.vendor)}`);
-  } else if (event.action === "RESTOCK_RECEIVED") {
-    if (details.qtyReceived !== undefined) parts.push(`Received: ${String(details.qtyReceived)}`);
-    if (details.vendor) parts.push(`Vendor: ${String(details.vendor)}`);
-  } else if (event.action === "RESTOCK_ADDED") {
-    if (details.qtyDelta !== undefined) parts.push(`+${String(details.qtyDelta)}`);
-    if (details.vendor) parts.push(`Vendor: ${String(details.vendor)}`);
-    if (details.source && details.source !== "supplier") parts.push(String(details.source));
-  } else if (event.action === "RESTOCK_ORDER_CLOSED") {
-    if (details.closedManually) parts.push("Closed manually");
-  }
-
-  return parts.join(" · ");
-}
-
 function getVisibleEditChanges(event: AuditEvent): Array<{ field: string; from: unknown; to: unknown }> {
   if (event.action !== "ITEM_EDIT") return [];
   const details = event.details ?? {};
@@ -289,71 +221,195 @@ function getVisibleEditChanges(event: AuditEvent): Array<{ field: string; from: 
 }
 
 
-// ── Flat activity feed (Option B) ─────────────────────────────────────────────
-// One row per (day, item). Itemless events (CSV imports, template applies) get
-// their own row keyed by event id. No nested disclosure — clicking a row
-// deep-links to the item history page where the diff list + Open in Inventory
-// already live.
+// ── Flat activity feed ────────────────────────────────────────────────────────
+// Single zoom level — each row is a self-contained sentence. No expansion
+// disclosure; long values (URLs) collapse to their domain with the full value
+// available via tooltip. Days are collapsible — today open, older collapsed.
 
-/** Truncates a list of field names so the row stays scannable: shows the
- *  first two, then `+N more` for the rest. Avoids both extremes (long unwieldy
- *  list vs. abstract "N fields" with no clue what changed). */
-function joinFieldNames(names: string[]): string {
-  if (names.length === 0) return "";
-  if (names.length <= 2) return names.join(", ");
-  return `${names.slice(0, 2).join(", ")} +${names.length - 2} more`;
-}
-
-/** Compact row-detail for the flat feed. For generic ITEM_EDIT events we
- *  drop values (no raw URLs in the row) and emit field names instead — the
- *  user clicks the row for the full diff. Quantity-related edits keep their
- *  useful inline summary. */
-function buildFlatRowDetail(event: AuditEvent): string {
-  const derivedAction = deriveAction(event);
-  if (event.action === "ITEM_EDIT" && derivedAction === "ITEM_EDIT") {
-    const changes = getVisibleEditChanges(event);
-    return joinFieldNames(changes.map((c) => humanizeFieldName(c.field)));
-  }
-  return buildEventDetail(event);
-}
-
-/** Aggregated row-detail across multiple events for the same (day, item).
- *  When all events are ITEM_EDITs, we collect the unique changed field names.
- *  Mixed-action buckets fall back to a generic "N changes". */
-function buildFlatAggregateDetail(events: AuditEvent[]): string {
-  const allEdits = events.every((e) => e.action === "ITEM_EDIT" && deriveAction(e) === "ITEM_EDIT");
-  if (allEdits) {
-    const seen = new Set<string>();
-    const names: string[] = [];
-    for (const e of events) {
-      for (const c of getVisibleEditChanges(e)) {
-        if (seen.has(c.field)) continue;
-        seen.add(c.field);
-        names.push(humanizeFieldName(c.field));
-      }
+/** Compact value formatter for inline display in row summaries.
+ *  - URLs collapse to their hostname (full URL on hover via title attr)
+ *  - Long strings truncate to 28 chars + ellipsis
+ *  - Dates/numbers passed through formatFieldValue for consistent date rendering
+ */
+function formatValueCompact(field: string, value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const str = String(value).trim();
+  if (/^https?:\/\//i.test(str)) {
+    try {
+      return new URL(str).hostname.replace(/^www\./, "");
+    } catch {
+      return str.length > 28 ? str.slice(0, 26) + "…" : str;
     }
-    if (names.length > 0) return joinFieldNames(names);
   }
-  return `${events.length} change${events.length !== 1 ? "s" : ""}`;
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return formatFieldValue(field, str);
+  if (str.length > 28) return str.slice(0, 26) + "…";
+  return str;
 }
 
-type FlatActivityRow =
-  | { kind: "day-divider"; key: string; label: string }
-  | {
-      kind: "row";
-      key: string;
-      lastTimestamp: string;
-      actionLabel: string;
-      actionColor: string;
-      itemId: string | null;
-      itemName: string;
-      detail: string;
-      userLabel: string;
-      eventCount: number;
-    };
+/** Self-contained sentence describing an event. Includes the action context
+ *  AND inline values, so no separate "action" column or disclosure is needed.
+ *  The day grouping + item name (in the main feed) supply the rest of the
+ *  context. */
+function buildRichRowSummary(event: AuditEvent): string {
+  const derived = deriveAction(event);
+  const details = event.details ?? {};
 
-function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
-  type RowBucket = {
+  if (derived === "ITEM_RESTOCK") {
+    const q = getVisibleEditChanges(event).find((c) => c.field === "quantity");
+    if (q) {
+      const delta = Number(q.to ?? 0) - Number(q.from ?? 0);
+      if (delta > 0) return `Restocked +${delta}`;
+    }
+    return "Restocked";
+  }
+  if (derived === "ITEM_QTY_ADJUST") {
+    const q = getVisibleEditChanges(event).find((c) => c.field === "quantity");
+    if (q) return `Qty ${formatFieldValue("quantity", q.from)} → ${formatFieldValue("quantity", q.to)}`;
+    return "Adjusted qty";
+  }
+  if (derived === "ITEM_EDIT") {
+    const changes = getVisibleEditChanges(event);
+    if (changes.length === 0) return "Updated";
+    const parts = changes.map((c) => `${humanizeFieldName(c.field)} (${formatValueCompact(c.field, c.to)})`);
+    if (parts.length <= 3) return `Updated ${parts.join(", ")}`;
+    return `Updated ${parts.slice(0, 2).join(", ")} +${parts.length - 2} more`;
+  }
+  if (derived === "ITEM_CREATE") {
+    const snap = (details.initialValues ?? details.snapshot ?? {}) as Record<string, unknown>;
+    const parts: string[] = [];
+    if (snap.quantity !== undefined && snap.quantity !== null) parts.push(`Qty ${snap.quantity}`);
+    if (snap.minQuantity !== undefined && snap.minQuantity !== null) parts.push(`Min ${snap.minQuantity}`);
+    return parts.length > 0 ? `Added (${parts.join(", ")})` : "Added";
+  }
+  if (derived === "ITEM_RETIRE") {
+    const reason = typeof details.reason === "string" ? details.reason : "";
+    return reason ? `Retired (${reason})` : "Retired";
+  }
+  if (derived === "ITEM_DELETE") return "Deleted";
+  if (derived === "ITEM_MOVE") return "Reordered";
+  if (derived === "RESTOCK_ORDER_CREATE") {
+    const qty = details.qtyOrdered;
+    const vendor = typeof details.vendor === "string" ? details.vendor : "";
+    if (qty !== undefined && vendor) return `Ordered ${qty} from ${vendor}`;
+    if (qty !== undefined) return `Ordered ${qty}`;
+    return "Order placed";
+  }
+  if (derived === "RESTOCK_RECEIVED") {
+    const qty = details.qtyReceived;
+    return qty !== undefined ? `Received ${qty}` : "Order received";
+  }
+  if (derived === "RESTOCK_ORDER_CLOSED") return "Order closed";
+  if (derived === "RESTOCK_ADDED") {
+    const delta = details.qtyDelta;
+    const vendor = typeof details.vendor === "string" ? details.vendor : "";
+    if (delta !== undefined && vendor) return `Fast restock +${delta} from ${vendor}`;
+    if (delta !== undefined) return `Fast restock +${delta}`;
+    return "Fast restock";
+  }
+  if (derived === "USAGE_SUBMIT") {
+    const used = details.quantityUsed;
+    return used !== undefined ? `Logged usage of ${used}` : "Usage logged";
+  }
+  if (derived === "USAGE_APPROVE") {
+    const used = details.quantityUsed;
+    if (used !== undefined) return `Approved usage of ${used}`;
+    return "Usage approved";
+  }
+  if (derived === "USAGE_REJECT") {
+    const reason = typeof details.reason === "string" ? details.reason : "";
+    return reason ? `Rejected usage (${reason})` : "Usage rejected";
+  }
+  if (derived === "CSV_IMPORT") {
+    const c = details.rowsCreated ?? 0;
+    const u = details.rowsUpdated ?? 0;
+    return `CSV import: ${c} created, ${u} updated`;
+  }
+  if (derived === "TEMPLATE_APPLY") return "Template applied";
+  if (derived === "COLUMN_CREATE") return "Column added";
+  if (derived === "COLUMN_DELETE") return "Column deleted";
+  if (derived === "COLUMN_UPDATE") return "Column updated";
+  return ACTION_LABELS[derived] ?? derived;
+}
+
+/** Returns a URL for the event if it has one (currently just ITEM_EDIT
+ *  events that touch the reorderLink field). Used to build the title attr
+ *  so users can hover the row to see the full URL behind a `boundtree.com`. */
+function eventTitleAttr(event: AuditEvent): string | undefined {
+  if (event.action !== "ITEM_EDIT") return undefined;
+  const linkChange = getVisibleEditChanges(event).find((c) => c.field === "reorderLink");
+  if (!linkChange) return undefined;
+  const v = String(linkChange.to ?? "").trim();
+  return v || undefined;
+}
+
+type DayBucket<T> = { label: string; rows: T[]; users: Set<string> };
+
+function groupByDay<T>(items: Array<T & { timestamp: string; user: string }>): Array<DayBucket<T>> {
+  const days: Array<DayBucket<T>> = [];
+  for (const item of items) {
+    const label = dayGroupLabel(item.timestamp);
+    let day = days[days.length - 1];
+    if (!day || day.label !== label) {
+      day = { label, rows: [], users: new Set() };
+      days.push(day);
+    }
+    day.rows.push(item);
+    if (item.user) day.users.add(item.user);
+  }
+  return days;
+}
+
+/** Collapsible day section. Today's section opens by default, older days
+ *  collapse — when collapsed the header shows a "N changes, M users" summary
+ *  so the user can scan history without expanding. */
+function DaySection({
+  label,
+  rowCount,
+  userCount,
+  defaultOpen,
+  children,
+}: {
+  label: string;
+  rowCount: number;
+  userCount: number;
+  defaultOpen: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <>
+      <button
+        type="button"
+        className="audit-flat-day-divider audit-flat-day-toggle"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <span className="audit-flat-day-chevron">{open ? "▾" : "▸"}</span>
+        <span className="audit-flat-day-label">{label}</span>
+        <span className="audit-flat-day-summary">
+          {rowCount} change{rowCount !== 1 ? "s" : ""}
+          {userCount > 0 ? ` · ${userCount} user${userCount !== 1 ? "s" : ""}` : ""}
+        </span>
+      </button>
+      {open ? children : null}
+    </>
+  );
+}
+
+/** Per-(day, item) row data for the main activity feed. */
+type ActivityRowData = {
+  key: string;
+  timestamp: string;
+  itemId: string | null;
+  itemName: string;
+  summary: string;
+  accentColor: string;
+  user: string;
+  titleAttr?: string;
+};
+
+function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
+  type Bucket = {
     events: AuditEvent[];
     lastTimestamp: string;
     actions: Set<string>;
@@ -361,24 +417,18 @@ function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
     itemId: string | null;
     itemName: string;
   };
-  type DayBucket = {
-    label: string;
-    keyOrder: string[];
-    rows: Map<string, RowBucket>;
-  };
-
-  const days: DayBucket[] = [];
-  let currentDay: DayBucket | null = null;
-
+  type DayAcc = { label: string; keyOrder: string[]; buckets: Map<string, Bucket> };
+  const dayAccs: DayAcc[] = [];
+  let currentDay: DayAcc | null = null;
   for (const e of events) {
     const label = dayGroupLabel(e.timestamp);
     if (!currentDay || currentDay.label !== label) {
-      currentDay = { label, keyOrder: [], rows: new Map() };
-      days.push(currentDay);
+      currentDay = { label, keyOrder: [], buckets: new Map() };
+      dayAccs.push(currentDay);
     }
     const itemId = e.itemId ? String(e.itemId) : null;
     const rowKey = itemId ?? `event:${e.eventId}`;
-    let bucket = currentDay.rows.get(rowKey);
+    let bucket = currentDay.buckets.get(rowKey);
     if (!bucket) {
       bucket = {
         events: [],
@@ -388,7 +438,7 @@ function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
         itemId,
         itemName: String(e.itemName ?? "").trim(),
       };
-      currentDay.rows.set(rowKey, bucket);
+      currentDay.buckets.set(rowKey, bucket);
       currentDay.keyOrder.push(rowKey);
     }
     bucket.events.push(e);
@@ -399,16 +449,22 @@ function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
     if (!bucket.itemName && e.itemName) bucket.itemName = String(e.itemName).trim();
   }
 
-  const flat: FlatActivityRow[] = [];
-  for (const day of days) {
-    flat.push({ kind: "day-divider", key: `day:${day.label}`, label: day.label });
-    for (const rowKey of day.keyOrder) {
-      const bucket = day.rows.get(rowKey)!;
+  const days: Array<DayBucket<ActivityRowData>> = [];
+  for (const d of dayAccs) {
+    const day: DayBucket<ActivityRowData> = { label: d.label, rows: [], users: new Set() };
+    for (const rowKey of d.keyOrder) {
+      const bucket = d.buckets.get(rowKey)!;
+      const summary = bucket.events.length === 1
+        ? buildRichRowSummary(bucket.events[0])
+        : (() => {
+            const summaries = bucket.events.map(buildRichRowSummary);
+            const first = summaries[0];
+            const more = summaries.length - 1;
+            return more > 0 ? `${first} · +${more} more change${more !== 1 ? "s" : ""}` : first;
+          })();
+      const titleAttr = bucket.events.length === 1 ? eventTitleAttr(bucket.events[0]) : undefined;
       const actionList = Array.from(bucket.actions);
-      const actionLabel = actionList.length === 1
-        ? (ACTION_LABELS[actionList[0]] ?? actionList[0])
-        : "Multiple";
-      const actionColor = actionList.length === 1
+      const accentColor = actionList.length === 1
         ? (ACTION_COLORS[actionList[0]] ?? "var(--text-muted)")
         : "var(--text-muted)";
       const userArr = Array.from(bucket.users);
@@ -417,117 +473,21 @@ function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
         : userArr.length === 1
           ? userArr[0]
           : `${userArr.length} users`;
-      const detail = bucket.events.length > 1
-        ? buildFlatAggregateDetail(bucket.events)
-        : buildFlatRowDetail(bucket.events[0]);
-      flat.push({
-        kind: "row",
-        key: `${day.label}::${rowKey}`,
-        lastTimestamp: bucket.lastTimestamp,
-        actionLabel,
-        actionColor,
+      day.rows.push({
+        key: `${d.label}::${rowKey}`,
+        timestamp: bucket.lastTimestamp,
         itemId: bucket.itemId,
         itemName: bucket.itemName || "—",
-        detail,
-        userLabel,
-        eventCount: bucket.events.length,
+        summary,
+        accentColor,
+        user: userLabel,
+        titleAttr,
       });
+      for (const u of bucket.users) day.users.add(u);
     }
+    days.push(day);
   }
-  return flat;
-}
-
-/** Per-event flat list for the item-history view. Same chrome as the main
- *  feed, but each row represents a single audit event for the focused item;
- *  clicking an editable row toggles an inline diff panel. */
-function FlatItemHistory({ events }: { events: AuditEvent[] }) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-
-  type Row =
-    | { kind: "day-divider"; key: string; label: string }
-    | { kind: "event"; key: string; event: AuditEvent };
-
-  const rows: Row[] = [];
-  let currentDayLabel: string | null = null;
-  for (const e of events) {
-    const label = dayGroupLabel(e.timestamp);
-    if (label !== currentDayLabel) {
-      rows.push({ kind: "day-divider", key: `day:${label}`, label });
-      currentDayLabel = label;
-    }
-    rows.push({ kind: "event", key: e.eventId, event: e });
-  }
-
-  return (
-    <div className="audit-flat-feed audit-flat-feed--history">
-      {rows.map((row) => {
-        if (row.kind === "day-divider") {
-          return (
-            <div key={row.key} className="audit-flat-day-divider">
-              {row.label}
-            </div>
-          );
-        }
-        const e = row.event;
-        const derived = deriveAction(e);
-        const actionLabel = ACTION_LABELS[derived] ?? e.action;
-        const actionColor = ACTION_COLORS[derived] ?? "var(--text-muted)";
-        const time = new Date(e.timestamp).toLocaleTimeString(undefined, {
-          hour: "numeric",
-          minute: "2-digit",
-        });
-        const detail = buildFlatRowDetail(e);
-        const user = e.userName || e.userEmail || "—";
-        const editChanges = e.action === "ITEM_EDIT" ? getVisibleEditChanges(e) : [];
-        const expandable = editChanges.length > 0;
-        const isOpen = !!expanded[row.key];
-        return (
-          <Fragment key={row.key}>
-            <button
-              type="button"
-              className="audit-flat-row audit-flat-row--history"
-              onClick={() =>
-                expandable &&
-                setExpanded((prev) => ({ ...prev, [row.key]: !prev[row.key] }))
-              }
-              disabled={!expandable}
-              aria-expanded={expandable ? isOpen : undefined}
-              title={expandable ? (isOpen ? "Hide changes" : "Show changes") : undefined}
-            >
-              <span className="audit-flat-cell audit-flat-time">{time}</span>
-              <span
-                className="audit-flat-cell audit-flat-action"
-                style={{ color: actionColor }}
-              >
-                {actionLabel}
-              </span>
-              <span className="audit-flat-cell audit-flat-detail">
-                {expandable ? `${isOpen ? "▾" : "▸"} ${detail || "View changes"}` : (detail || "—")}
-              </span>
-              <span className="audit-flat-cell audit-flat-user">
-                <User size={11} />
-                {user}
-              </span>
-            </button>
-            {expandable && isOpen ? (
-              <ul className="audit-flat-disclosure audit-event-changes-list">
-                {editChanges.map((c, idx) => (
-                  <li key={idx} className="audit-event-changes-row">
-                    <span className="audit-event-changes-field">
-                      {humanizeFieldName(c.field)}
-                    </span>
-                    <span className="audit-event-changes-arrow">
-                      {formatFieldValue(c.field, c.from)} → {formatFieldValue(c.field, c.to)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </Fragment>
-        );
-      })}
-    </div>
-  );
+  return days;
 }
 
 function FlatActivityFeed({
@@ -537,47 +497,111 @@ function FlatActivityFeed({
   events: AuditEvent[];
   onViewItemHistory: (itemId: string, name: string) => void;
 }) {
-  const rows = aggregateFlatActivityRows(events);
+  const days = aggregateActivityRows(events);
   return (
     <div className="audit-flat-feed">
-      {rows.map((row) => {
-        if (row.kind === "day-divider") {
-          return (
-            <div key={row.key} className="audit-flat-day-divider">
-              {row.label}
-            </div>
-          );
-        }
-        const time = new Date(row.lastTimestamp).toLocaleTimeString(undefined, {
-          hour: "numeric",
-          minute: "2-digit",
-        });
-        const navigable = !!row.itemId && row.itemName !== "—";
-        return (
-          <button
-            key={row.key}
-            type="button"
-            className="audit-flat-row"
-            onClick={() => navigable && onViewItemHistory(row.itemId!, row.itemName)}
-            disabled={!navigable}
-            title={navigable ? `View history for ${row.itemName}` : undefined}
-          >
-            <span className="audit-flat-cell audit-flat-time">{time}</span>
-            <span
-              className="audit-flat-cell audit-flat-action"
-              style={{ color: row.actionColor }}
-            >
-              {row.actionLabel}
-            </span>
-            <span className="audit-flat-cell audit-flat-itemname">{row.itemName}</span>
-            <span className="audit-flat-cell audit-flat-detail">{row.detail}</span>
-            <span className="audit-flat-cell audit-flat-user">
-              <User size={11} />
-              {row.userLabel}
-            </span>
-          </button>
-        );
-      })}
+      {days.map((day) => (
+        <DaySection
+          key={day.label}
+          label={day.label}
+          rowCount={day.rows.length}
+          userCount={day.users.size}
+          defaultOpen={day.label === "Today" || day.label === "Yesterday"}
+        >
+          {day.rows.map((row) => {
+            const time = new Date(row.timestamp).toLocaleTimeString(undefined, {
+              hour: "numeric",
+              minute: "2-digit",
+            });
+            const navigable = !!row.itemId && row.itemName !== "—";
+            return (
+              <button
+                key={row.key}
+                type="button"
+                className="audit-flat-row"
+                style={{ ["--row-accent" as string]: row.accentColor }}
+                onClick={() => navigable && onViewItemHistory(row.itemId!, row.itemName)}
+                disabled={!navigable}
+                title={row.titleAttr ?? (navigable ? `View history for ${row.itemName}` : undefined)}
+              >
+                <span className="audit-flat-cell audit-flat-time">{time}</span>
+                <span className="audit-flat-cell audit-flat-content">
+                  <span className="audit-flat-itemname">{row.itemName}</span>
+                  <span className="audit-flat-summary"> — {row.summary}</span>
+                </span>
+                <span className="audit-flat-cell audit-flat-user">
+                  <User size={11} />
+                  {row.user}
+                </span>
+              </button>
+            );
+          })}
+        </DaySection>
+      ))}
+    </div>
+  );
+}
+
+/** Item history flat list — single item, so no item name column. Each event
+ *  is one inline-summary row; no expansion, no disclosure. Day collapsibility
+ *  matches the main feed. */
+function FlatItemHistory({ events }: { events: AuditEvent[] }) {
+  type HistoryRowData = {
+    key: string;
+    timestamp: string;
+    summary: string;
+    accentColor: string;
+    user: string;
+    titleAttr?: string;
+  };
+  const items: Array<HistoryRowData & { timestamp: string; user: string }> = events.map((e) => {
+    const derived = deriveAction(e);
+    return {
+      key: e.eventId,
+      timestamp: e.timestamp,
+      summary: buildRichRowSummary(e),
+      accentColor: ACTION_COLORS[derived] ?? "var(--text-muted)",
+      user: e.userName || e.userEmail || "—",
+      titleAttr: eventTitleAttr(e),
+    };
+  });
+  const days = groupByDay(items);
+
+  return (
+    <div className="audit-flat-feed audit-flat-feed--history">
+      {days.map((day) => (
+        <DaySection
+          key={day.label}
+          label={day.label}
+          rowCount={day.rows.length}
+          userCount={day.users.size}
+          defaultOpen={day.label === "Today" || day.label === "Yesterday"}
+        >
+          {day.rows.map((row) => {
+            const time = new Date(row.timestamp).toLocaleTimeString(undefined, {
+              hour: "numeric",
+              minute: "2-digit",
+            });
+            return (
+              <div
+                key={row.key}
+                className="audit-flat-row audit-flat-row--history audit-flat-row--static"
+                style={{ ["--row-accent" as string]: row.accentColor }}
+                title={row.titleAttr}
+              >
+                <span className="audit-flat-cell audit-flat-time">{time}</span>
+                <span className="audit-flat-cell audit-flat-summary audit-flat-summary--solo">
+                  {row.summary}
+                </span>
+                <span className="audit-flat-cell audit-flat-user">
+                  <User size={11} />
+                  {row.user}
+                </span>
+              </div>
+            );
+          })}
+        </DaySection>
+      ))}
     </div>
   );
 }

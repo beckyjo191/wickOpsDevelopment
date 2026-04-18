@@ -20,11 +20,39 @@ import { json } from "../http";
 import { buildAuditEvent, writeAuditEvents } from "../audit";
 import { listAllItems } from "../items";
 
+/** Effective per-unit cost from an item's valuesJson. Prefers packCost /
+ *  packSize when both are set (handles items priced per-box at the vendor),
+ *  falls back to the stored unitCost, returns 0 when neither is available.
+ *  Mirrors the same derivation used by the reorder list and audit analytics. */
+const effectiveUnitCost = (values: Record<string, unknown>): number => {
+  const packCost = Number(values.packCost ?? 0);
+  const packSize = Number(values.packSize ?? 0);
+  if (Number.isFinite(packCost) && Number.isFinite(packSize) && packSize > 0 && packCost > 0) {
+    return packCost / packSize;
+  }
+  const unitCost = Number(values.unitCost ?? 0);
+  if (Number.isFinite(unitCost) && unitCost > 0) return unitCost;
+  return 0;
+};
+
+type AppliedUsageDetail = {
+  itemId: string;
+  itemName: string;
+  quantityUsed: number;
+  quantityBefore: number;
+  quantityAfter: number;
+  /** Per-unit cost at the moment of approval. Stamped into the USAGE_APPROVE
+   *  audit event so analytics can value historical usage at then-current
+   *  pricing rather than a moving "current" item cost. */
+  unitCost: number;
+  snapshot: Record<string, unknown>;
+};
+
 export const applyUsageEntries = async (
   storage: InventoryStorage,
   access: AccessContext,
   pendingEntries: PendingEntry[],
-): Promise<{ error?: string; appliedDetails?: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number; snapshot: Record<string, unknown> }> }> => {
+): Promise<{ error?: string; appliedDetails?: AppliedUsageDetail[] }> => {
   const items = await listAllItems(storage, access.organizationId);
   const byId = new Map(items.map((item) => [String(item.id), item]));
 
@@ -52,7 +80,7 @@ export const applyUsageEntries = async (
   }
 
   // All validated — apply deductions
-  const appliedDetails: Array<{ itemId: string; itemName: string; quantityUsed: number; quantityBefore: number; quantityAfter: number; snapshot: Record<string, unknown> }> = [];
+  const appliedDetails: AppliedUsageDetail[] = [];
   for (const entry of pendingEntries) {
     const item = byId.get(entry.itemId)!;
     let values: Record<string, string | number | boolean | null> = {};
@@ -63,6 +91,7 @@ export const applyUsageEntries = async (
     }
     const quantityBefore = Number(values.quantity ?? 0);
     const nextQuantity = quantityBefore - entry.quantityUsed;
+    const unitCost = effectiveUnitCost(values as Record<string, unknown>);
     const nextValues = { ...values, quantity: nextQuantity };
     try {
       await ddb.send(
@@ -89,6 +118,7 @@ export const applyUsageEntries = async (
         quantityUsed: entry.quantityUsed,
         quantityBefore,
         quantityAfter: nextQuantity,
+        unitCost,
         snapshot: snap,
       });
     } catch (err: any) {
@@ -310,6 +340,9 @@ export const handleApproveSubmission = async (ctx: RouteContext) => {
       quantityUsed: detail.quantityUsed,
       quantityBefore: detail.quantityBefore,
       quantityAfter: detail.quantityAfter,
+      // Then-current per-unit cost. Lets analytics value historical usage at
+      // the price we paid at the time, not whatever the item costs today.
+      ...(detail.unitCost > 0 ? { unitCost: detail.unitCost } : {}),
       snapshot: detail.snapshot,
     }));
   }

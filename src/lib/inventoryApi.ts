@@ -1059,7 +1059,15 @@ export type AuditAnalytics = {
     /** Sum of lossQty × last-known-unitCost per item at the moment of retirement. */
     lossValue: number;
   };
-  usageOverTime: Array<{ date: string; totalUsed: number }>;
+  /** Calendar-anchored usage cost (qtyUsed × current item unit cost). Always
+   *  computed across the full year regardless of the period selector so the
+   *  user can compare today vs week vs YTD at a glance. */
+  usageSpend: {
+    today: number;
+    week: number;
+    ytd: number;
+  };
+  usageOverTime: Array<{ date: string; totalUsed: number; totalSpend: number }>;
   byVendor: Array<{ vendor: string; spend: number; orderCount: number }>;
   bySpendItem: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }>;
   byUsageItem: Array<{ itemId: string; itemName: string; qtyUsed: number }>;

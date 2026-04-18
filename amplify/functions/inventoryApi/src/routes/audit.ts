@@ -5,6 +5,7 @@ import type { RouteContext } from "../types";
 import { ddb } from "../clients";
 import { json, parseNextToken, encodeNextToken } from "../http";
 import { AUDIT_BY_TIMESTAMP_INDEX, AUDIT_BY_USER_INDEX } from "../config";
+import { listAllItems } from "../items";
 
 // Machine-managed valuesJson keys. ITEM_EDIT events whose only changes are in
 // this set are pure noise — the one-time parentItemId backfill, retire-row
@@ -272,11 +273,26 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
 
   const period = query.period ?? "30d";
   const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
-  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const periodSinceMs = Date.now() - days * 86400000;
+  const periodSince = new Date(periodSinceMs);
 
-  // Fetch all audit events in the period (oldest → newest so the last-known
-  // unit cost map can accumulate chronologically before ITEM_RETIRE events
-  // consume it for loss valuation).
+  // Day / 7-day / YTD windows for the usage-spend cards. Always anchored to
+  // calendar boundaries (start of today, start of week, Jan 1) — these are
+  // independent of the period selector so the user always sees consistent
+  // "what did we burn this year" totals.
+  const now = new Date();
+  const dayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const weekStartMs = dayStartMs - 6 * 86400000;
+  const yearStartMs = new Date(now.getFullYear(), 0, 1).getTime();
+
+  // Scan window has to reach the older of (period start, year start) so the
+  // YTD usage-spend card has the full year's USAGE_APPROVE events to value.
+  const scanSinceMs = Math.min(periodSinceMs, yearStartMs);
+  const scanSince = new Date(scanSinceMs).toISOString();
+
+  // Fetch all audit events in the scan window (oldest → newest so the
+  // last-known unit cost map can accumulate chronologically before ITEM_RETIRE
+  // events consume it for loss valuation).
   let allEvents: Record<string, unknown>[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
@@ -285,7 +301,7 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
         TableName: storage.auditTable,
         IndexName: AUDIT_BY_TIMESTAMP_INDEX,
         KeyConditionExpression: "orgId = :orgId AND #ts >= :since",
-        ExpressionAttributeValues: { ":orgId": access.organizationId, ":since": since },
+        ExpressionAttributeValues: { ":orgId": access.organizationId, ":since": scanSince },
         ExpressionAttributeNames: { "#ts": "timestamp" },
         ScanIndexForward: true,
         Limit: 1000,
@@ -296,9 +312,39 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     lastKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (lastKey && allEvents.length < 10000);
 
+  // Build itemKey → current unit cost map from the items table. Used to value
+  // USAGE_APPROVE events (which don't carry their own cost). Approximation:
+  // values use the most recent cost on the item, not the cost at the time of
+  // usage. Reasonable for items with stable pricing; if temporal accuracy ever
+  // matters we can stamp unitCost into USAGE_APPROVE event details and prefer
+  // that.
+  const itemUnitCost = new Map<string, number>();
+  try {
+    const allItems = await listAllItems(storage, access.organizationId);
+    for (const item of allItems) {
+      let values: Record<string, unknown> = {};
+      try {
+        values = JSON.parse(String((item as { valuesJson?: string }).valuesJson ?? "{}"));
+      } catch { /* ignore */ }
+      const cost = Number(values.unitCost ?? 0);
+      if (!Number.isFinite(cost) || cost <= 0) continue;
+      const parentId = typeof values.parentItemId === "string" && values.parentItemId.trim()
+        ? String(values.parentItemId).trim()
+        : item.id;
+      // Prefer the highest unitCost across lots — defensible default when one
+      // lot was bought cheaply long ago and a recent restock came in pricier.
+      const existing = itemUnitCost.get(parentId) ?? 0;
+      if (cost > existing) itemUnitCost.set(parentId, cost);
+      // Also key by raw item id so events with no parentItemId still resolve.
+      const idExisting = itemUnitCost.get(item.id) ?? 0;
+      if (cost > idExisting) itemUnitCost.set(item.id, cost);
+    }
+  } catch { /* if items table read fails, usage spend silently degrades to 0 */ }
+
   // Aggregation buckets. All group by parentItemId (fallback to itemId) so
   // multi-lot items roll up as one logical SKU in every view.
   const usageByDay = new Map<string, number>();
+  const spendByDay = new Map<string, number>();
   // itemId carries the drill-in target. For a multi-lot item we record the
   // first itemId seen with that parentItemId — enough for v1 item-history
   // which queries by a single itemId. Parent-level history is a phase 2b task.
@@ -314,11 +360,19 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   let totalLossQty = 0;
   let totalLossValue = 0;
 
+  // Usage-based spend buckets — calendar-anchored, computed across the full
+  // scan window (which always includes YTD, see scanSince above).
+  let usageSpendToday = 0;
+  let usageSpendWeek = 0;
+  let usageSpendYTD = 0;
+
   for (const evt of allEvents) {
     const action = String(evt.action ?? "");
     const day = String(evt.timestamp ?? "").slice(0, 10);
     const itemId = String(evt.itemId ?? "");
     const itemName = String(evt.itemName ?? "");
+    const evtTimeMs = Date.parse(String(evt.timestamp ?? "")) || 0;
+    const inPeriod = evtTimeMs >= periodSinceMs;
 
     let details: Record<string, unknown> = {};
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
@@ -332,8 +386,27 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     if (action === "USAGE_APPROVE") {
       const qty = Number(details.quantityUsed ?? 0);
       if (!Number.isFinite(qty) || qty <= 0) continue;
+
+      // Prefer the unit cost stamped onto the event when usage was approved
+      // (added in the usage handler) so historical events stay valued at
+      // their then-current price. Fall back to the current item unit cost
+      // for older events (pre-stamping rollout) so they don't drop to $0.
+      const stampedCost = Number(details.unitCost ?? 0);
+      const cost = Number.isFinite(stampedCost) && stampedCost > 0
+        ? stampedCost
+        : (itemUnitCost.get(itemKey) ?? itemUnitCost.get(itemId) ?? 0);
+      if (cost > 0) {
+        const spend = qty * cost;
+        if (evtTimeMs >= yearStartMs) usageSpendYTD += spend;
+        if (evtTimeMs >= weekStartMs) usageSpendWeek += spend;
+        if (evtTimeMs >= dayStartMs) usageSpendToday += spend;
+      }
+
+      // Period-bound aggregations only count events within the selected period.
+      if (!inPeriod) continue;
       totalQtyUsed += qty;
       usageByDay.set(day, (usageByDay.get(day) ?? 0) + qty);
+      if (cost > 0) spendByDay.set(day, (spendByDay.get(day) ?? 0) + qty * cost);
       const bucket = usageByItem.get(itemKey) ?? { itemName, itemId: itemId || itemKey, qtyUsed: 0 };
       bucket.qtyUsed += qty;
       if (!bucket.itemName && itemName) bucket.itemName = itemName;
@@ -341,6 +414,11 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
       usageByItem.set(itemKey, bucket);
       continue;
     }
+
+    // Non-usage actions don't drive usage-spend; they only affect the
+    // period-bound aggregations below. Skip pre-period events to avoid
+    // polluting period totals just because we widened the scan for YTD.
+    if (!inPeriod) continue;
 
     if (action === "RESTOCK_RECEIVED" || action === "RESTOCK_ADDED") {
       // RESTOCK_ORDER_CREATE is intentionally skipped — it represents intent
@@ -405,7 +483,11 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
 
   const usageOverTime = [...usageByDay.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, totalUsed]) => ({ date, totalUsed }));
+    .map(([date, totalUsed]) => ({
+      date,
+      totalUsed,
+      totalSpend: spendByDay.get(date) ?? 0,
+    }));
 
   const byVendor = [...vendorSpend.entries()]
     .map(([vendor, v]) => ({
@@ -447,6 +529,11 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
       spend: totalSpend,
       lossQty: totalLossQty,
       lossValue: totalLossValue,
+    },
+    usageSpend: {
+      today: usageSpendToday,
+      week: usageSpendWeek,
+      ytd: usageSpendYTD,
     },
     usageOverTime,
     byVendor,

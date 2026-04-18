@@ -541,6 +541,193 @@ function FlatActivityFeed({
   );
 }
 
+/** Walks an item's audit events chronologically to reconstruct its effective
+ *  unit cost over time. Three sources contribute:
+ *   - ITEM_EDIT changes to unitCost / packCost / packSize (manual edits)
+ *   - ITEM_CREATE initial values (initial pricing snapshot)
+ *   - RESTOCK_RECEIVED / RESTOCK_ADDED / USAGE_APPROVE event details (the
+ *     stamped per-unit cost at that operation)
+ *  Effective cost prefers packCost / packSize when both are set, else falls
+ *  back to unitCost — same derivation used in usage approval and analytics.
+ *  Consecutive same-cost points are deduped so a flat line doesn't sprout
+ *  redundant vertices. */
+type CostTimelinePoint = {
+  timestamp: string;
+  unitCost: number;
+  source: "edit" | "create" | "restock-received" | "restock-added" | "usage-approve";
+};
+
+function extractCostTimeline(events: AuditEvent[]): CostTimelinePoint[] {
+  let curUnitCost = 0;
+  let curPackCost = 0;
+  let curPackSize = 0;
+
+  const sorted = [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  const points: CostTimelinePoint[] = [];
+
+  const recordPoint = (timestamp: string, source: CostTimelinePoint["source"]) => {
+    const effective = curPackCost > 0 && curPackSize > 0
+      ? curPackCost / curPackSize
+      : curUnitCost;
+    if (effective <= 0) return;
+    const last = points[points.length - 1];
+    if (last && Math.abs(last.unitCost - effective) < 0.0001) return;
+    points.push({ timestamp, unitCost: effective, source });
+  };
+
+  for (const e of sorted) {
+    const details = e.details ?? {};
+    if (e.action === "ITEM_CREATE") {
+      const snap = (details.initialValues ?? details.snapshot ?? {}) as Record<string, unknown>;
+      const u = Number(snap.unitCost ?? 0);
+      const pc = Number(snap.packCost ?? 0);
+      const ps = Number(snap.packSize ?? 0);
+      if (Number.isFinite(u) && u > 0) curUnitCost = u;
+      if (Number.isFinite(pc) && pc > 0) curPackCost = pc;
+      if (Number.isFinite(ps) && ps > 0) curPackSize = ps;
+      recordPoint(e.timestamp, "create");
+      continue;
+    }
+    if (e.action === "ITEM_EDIT") {
+      const changes = Array.isArray(details.changes)
+        ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
+        : [];
+      let touched = false;
+      for (const c of changes) {
+        if (c.field === "unitCost") {
+          const n = Number(c.to ?? 0);
+          curUnitCost = Number.isFinite(n) && n >= 0 ? n : 0;
+          touched = true;
+        } else if (c.field === "packCost") {
+          const n = Number(c.to ?? 0);
+          curPackCost = Number.isFinite(n) && n >= 0 ? n : 0;
+          touched = true;
+        } else if (c.field === "packSize") {
+          const n = Number(c.to ?? 0);
+          curPackSize = Number.isFinite(n) && n >= 0 ? n : 0;
+          touched = true;
+        }
+      }
+      if (touched) recordPoint(e.timestamp, "edit");
+      continue;
+    }
+    if (e.action === "RESTOCK_RECEIVED" || e.action === "RESTOCK_ADDED" || e.action === "USAGE_APPROVE") {
+      const stamped = Number(details.unitCost ?? 0);
+      if (Number.isFinite(stamped) && stamped > 0) {
+        curUnitCost = stamped;
+        // Restock cost takes precedence over a stale packCost/packSize ratio.
+        curPackCost = 0;
+        curPackSize = 0;
+        recordPoint(
+          e.timestamp,
+          e.action === "RESTOCK_RECEIVED" ? "restock-received"
+            : e.action === "RESTOCK_ADDED" ? "restock-added"
+              : "usage-approve",
+        );
+      }
+    }
+  }
+
+  return points;
+}
+
+/** Per-item unit cost trend. Renders a tiny SVG line chart with min/max/
+ *  current callouts. Useful for "did paper towels cost more than they did
+ *  six months ago?" Empty state when the item has no recorded prices yet. */
+function CostOverTimeChart({ events }: { events: AuditEvent[] }) {
+  const points = extractCostTimeline(events);
+
+  if (points.length === 0) {
+    return (
+      <div className="audit-cost-trend audit-cost-trend--empty">
+        <p className="audit-empty">
+          No cost history yet. Set a Unit Cost (or Pack Cost + Pack Size) on
+          this item, or receive an order with a price, and trend data will
+          appear here.
+        </p>
+      </div>
+    );
+  }
+
+  const costs = points.map((p) => p.unitCost);
+  const minCost = Math.min(...costs);
+  const maxCost = Math.max(...costs);
+  const current = costs[costs.length - 1];
+  const first = costs[0];
+  const deltaPct = first > 0 ? ((current - first) / first) * 100 : 0;
+  const span = maxCost - minCost;
+
+  const W = 100;
+  const H = 40;
+  const xFor = (i: number) => points.length === 1 ? W / 2 : (i / (points.length - 1)) * W;
+  const yFor = (cost: number) => span === 0 ? H / 2 : H - ((cost - minCost) / span) * H;
+  const pathD = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${xFor(i)} ${yFor(p.unitCost)}`)
+    .join(" ");
+
+  const sourceLabel: Record<CostTimelinePoint["source"], string> = {
+    "create": "Initial price",
+    "edit": "Manual edit",
+    "restock-received": "Order received",
+    "restock-added": "Fast restock",
+    "usage-approve": "Usage approved",
+  };
+
+  return (
+    <div className="audit-cost-trend">
+      <div className="audit-cost-trend-stats">
+        <div className="audit-cost-trend-stat">
+          <span className="audit-cost-trend-stat-label">Current</span>
+          <span className="audit-cost-trend-stat-value">{formatCurrency(current)}</span>
+        </div>
+        <div className="audit-cost-trend-stat">
+          <span className="audit-cost-trend-stat-label">Lowest</span>
+          <span className="audit-cost-trend-stat-value">{formatCurrency(minCost)}</span>
+        </div>
+        <div className="audit-cost-trend-stat">
+          <span className="audit-cost-trend-stat-label">Highest</span>
+          <span className="audit-cost-trend-stat-value">{formatCurrency(maxCost)}</span>
+        </div>
+        {points.length > 1 ? (
+          <div className="audit-cost-trend-stat">
+            <span className="audit-cost-trend-stat-label">Change</span>
+            <span
+              className="audit-cost-trend-stat-value"
+              style={{ color: deltaPct > 0 ? "var(--danger)" : deltaPct < 0 ? "var(--success)" : "var(--text)" }}
+            >
+              {deltaPct > 0 ? "+" : ""}{deltaPct.toFixed(1)}%
+            </span>
+          </div>
+        ) : null}
+      </div>
+      <svg className="audit-cost-trend-chart" viewBox={`-2 -2 ${W + 4} ${H + 4}`} preserveAspectRatio="none">
+        {points.length > 1 ? (
+          <path d={pathD} fill="none" stroke="var(--primary)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        ) : null}
+        {points.map((p, i) => (
+          <circle key={i} cx={xFor(i)} cy={yFor(p.unitCost)} r="1.5" fill="var(--primary)" vectorEffect="non-scaling-stroke">
+            <title>
+              {new Date(p.timestamp).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+              : {formatCurrency(p.unitCost)} ({sourceLabel[p.source]})
+            </title>
+          </circle>
+        ))}
+      </svg>
+      <ol className="audit-cost-trend-points">
+        {points.slice().reverse().map((p, i) => (
+          <li key={`${p.timestamp}-${i}`} className="audit-cost-trend-point">
+            <span className="audit-cost-trend-point-date">
+              {new Date(p.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+            </span>
+            <span className="audit-cost-trend-point-cost">{formatCurrency(p.unitCost)}</span>
+            <span className="audit-cost-trend-point-source">{sourceLabel[p.source]}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 /** Item history flat list — single item, so no item name column. Each event
  *  is one inline-summary row; no expansion, no disclosure. Day collapsibility
  *  matches the main feed. */
@@ -670,30 +857,49 @@ function SimpleBarChart({ data, labelKey, valueKey, title, formatValue }: {
   );
 }
 
-function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: number }> }) {
+/** Daily usage cost — one bar per day. Bars scale to the max spend day; the
+ *  qty appears in the hover tooltip alongside the dollar value. The header
+ *  carries the period total + a count of days with activity so the chart
+ *  isn't useless at a glance — even if every bar is tiny, the header
+ *  summarizes the period in plain numbers. */
+function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: number; totalSpend: number }> }) {
   if (!data.length) return <p className="audit-empty">No usage data for this period.</p>;
-  const max = Math.max(...data.map((d) => d.totalUsed), 1);
-  const points = data.map((d, i) => ({
-    x: (i / Math.max(data.length - 1, 1)) * 100,
-    y: 100 - (d.totalUsed / max) * 100,
-    date: d.date,
-    val: d.totalUsed,
-  }));
-  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  const maxSpend = Math.max(...data.map((d) => d.totalSpend), 0);
+  const totalSpend = data.reduce((sum, d) => sum + d.totalSpend, 0);
+  const totalQty = data.reduce((sum, d) => sum + d.totalUsed, 0);
+  const activeDays = data.filter((d) => d.totalUsed > 0).length;
+  // Use spend if we have any priced usage; else fall back to qty so the chart
+  // still draws something for orgs that haven't filled in unit costs yet.
+  const useSpend = maxSpend > 0;
+  const max = useSpend ? maxSpend : Math.max(...data.map((d) => d.totalUsed), 1);
+
   return (
-    <div className="audit-chart-card audit-chart-card--line">
-      <h4 className="audit-chart-title">Usage Over Time</h4>
-      <svg className="audit-line-chart" viewBox="-5 -5 110 110" preserveAspectRatio="none">
-        <path d={pathD} fill="none" stroke="var(--primary)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-        {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="1.5" fill="var(--primary)">
-            <title>{formatDate(p.date)}: {p.val} used</title>
-          </circle>
-        ))}
-      </svg>
-      <div className="audit-line-chart-labels">
-        <span>{formatDate(data[0].date)}</span>
-        <span>{formatDate(data[data.length - 1].date)}</span>
+    <div className="audit-chart-card audit-chart-card--bars">
+      <div className="audit-chart-header">
+        <h4 className="audit-chart-title">Usage over time</h4>
+        <span className="audit-chart-summary">
+          {useSpend ? formatUsd(totalSpend) : `${formatQty(totalQty)} used`}
+          <span className="audit-chart-summary-sub">
+            {" "}· {activeDays} active day{activeDays !== 1 ? "s" : ""}
+          </span>
+        </span>
+      </div>
+      <div className="audit-bar-chart-rows">
+        {data.map((d) => {
+          const value = useSpend ? d.totalSpend : d.totalUsed;
+          const pct = max > 0 ? Math.max((value / max) * 100, value > 0 ? 2 : 0) : 0;
+          return (
+            <div key={d.date} className="audit-bar-chart-row" title={`${formatDate(d.date)}: ${formatUsd(d.totalSpend)} (${d.totalUsed} used)`}>
+              <span className="audit-bar-chart-row-label">{formatDate(d.date)}</span>
+              <div className="audit-bar-track">
+                <div className="audit-bar-fill" style={{ width: `${pct}%` }} />
+              </div>
+              <span className="audit-bar-chart-row-value">
+                {useSpend ? formatUsd(d.totalSpend) : formatQty(d.totalUsed)}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -707,6 +913,31 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
         <span className="audit-stat-label">{label}</span>
         {sub ? <span className="audit-stat-sub">{sub}</span> : null}
       </div>
+    </div>
+  );
+}
+
+/** Three-bucket usage cost card: today / last 7 days / YTD. Replaces the
+ *  generic "Spend" purchase-cost card; the user wants to see what's been
+ *  *consumed* (priced via current item unit cost), not what was bought. */
+function UsageSpendCard({ today, week, ytd }: { today: number; week: number; ytd: number }) {
+  return (
+    <div className="audit-stat-card audit-stat-card--multi">
+      <span className="audit-stat-label">Usage cost</span>
+      <dl className="audit-stat-bucket-list">
+        <div className="audit-stat-bucket">
+          <dt>Today</dt>
+          <dd>{formatUsd(today)}</dd>
+        </div>
+        <div className="audit-stat-bucket">
+          <dt>7 days</dt>
+          <dd>{formatUsd(week)}</dd>
+        </div>
+        <div className="audit-stat-bucket">
+          <dt>YTD</dt>
+          <dd>{formatUsd(ytd)}</dd>
+        </div>
+      </dl>
     </div>
   );
 }
@@ -777,9 +1008,13 @@ function AnalyticsDashboard({
   analytics: AuditAnalytics;
   onViewItemHistory?: (itemId: string, name: string) => void;
 }) {
-  const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
+  const { totals, usageSpend, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
   const hasData =
-    totals.qtyUsed > 0 || totals.spend > 0 || totals.lossQty > 0 || usageOverTime.length > 0;
+    totals.qtyUsed > 0
+    || totals.spend > 0
+    || totals.lossQty > 0
+    || usageOverTime.length > 0
+    || usageSpend.ytd > 0;
 
   if (!hasData) {
     return (
@@ -809,7 +1044,11 @@ function AnalyticsDashboard({
           onViewItemHistory={onViewItemHistory}
         />
         <div className="audit-analytics-summary-side">
-          <StatCard label="Spend" value={formatUsd(totals.spend)} />
+          <UsageSpendCard
+            today={usageSpend.today}
+            week={usageSpend.week}
+            ytd={usageSpend.ytd}
+          />
           <StatCard
             label="Loss"
             value={formatQty(totals.lossQty)}
@@ -875,6 +1114,7 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
   const [historyEvents, setHistoryEvents] = useState<AuditEvent[]>([]);
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historySubTab, setHistorySubTab] = useState<"events" | "cost">("events");
 
   const [analytics, setAnalytics] = useState<AuditAnalytics | null>(null);
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d" | "90d">("30d");
@@ -929,6 +1169,7 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
     setTab("item-history");
     setHistoryItemId(itemId);
     setHistoryItemName(itemName);
+    setHistorySubTab("events");
     setHistoryLoading(true);
     try {
       const res = await fetchItemHistory(itemId, { limit: 50 });
@@ -1137,6 +1378,27 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
             <Package size={18} /> {historyItemName}
           </h3>
 
+          <div className="audit-item-history-subtabs" role="tablist" aria-label="Item history view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={historySubTab === "events"}
+              className={`audit-item-history-subtab${historySubTab === "events" ? " active" : ""}`}
+              onClick={() => setHistorySubTab("events")}
+            >
+              Activity
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={historySubTab === "cost"}
+              className={`audit-item-history-subtab${historySubTab === "cost" ? " active" : ""}`}
+              onClick={() => setHistorySubTab("cost")}
+            >
+              Cost over time
+            </button>
+          </div>
+
           {historyLoading && historyEvents.length === 0 && (
             <div className="audit-loading"><Loader2 size={20} className="spin" /></div>
           )}
@@ -1148,11 +1410,18 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
             </div>
           )}
 
-          {visibleHistoryEvents.length > 0 && (
+          {historySubTab === "events" && visibleHistoryEvents.length > 0 && (
             <FlatItemHistory events={visibleHistoryEvents} />
           )}
 
-          {!historyLoading && historyCursor && historyEvents.length >= LOAD_MORE_THRESHOLD && (
+          {historySubTab === "cost" && historyEvents.length > 0 && (
+            <CostOverTimeChart events={historyEvents} />
+          )}
+
+          {historySubTab === "events"
+            && !historyLoading
+            && historyCursor
+            && historyEvents.length >= LOAD_MORE_THRESHOLD && (
             <button
               type="button"
               className="button button-ghost audit-load-more"

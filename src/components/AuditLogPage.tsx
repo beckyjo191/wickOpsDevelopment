@@ -881,6 +881,24 @@ function groupEventsByDay(events: AuditEvent[]): Array<{ label: string; events: 
 // deep-links to the item history page where the diff list + Open in Inventory
 // already live.
 
+/** Compact row-detail for the flat feed. For generic ITEM_EDIT events we
+ *  intentionally drop the values (no `Reorder Link: — → https://...` dumps in
+ *  the row) — the user can click into the item page to see the full diff.
+ *  Quantity-related edits keep their useful inline summary. */
+function buildFlatRowDetail(event: AuditEvent): string {
+  const derivedAction = deriveAction(event);
+  if (event.action === "ITEM_EDIT" && derivedAction === "ITEM_EDIT") {
+    const changes = getVisibleEditChanges(event);
+    if (changes.length === 0) return "";
+    if (changes.length === 1) return humanizeFieldName(changes[0].field);
+    if (changes.length <= 3) {
+      return changes.map((c) => humanizeFieldName(c.field)).join(", ");
+    }
+    return `${changes.length} fields`;
+  }
+  return buildEventDetail(event);
+}
+
 type FlatActivityRow =
   | { kind: "day-divider"; key: string; label: string }
   | {
@@ -963,7 +981,7 @@ function aggregateFlatActivityRows(events: AuditEvent[]): FlatActivityRow[] {
           : `${userArr.length} users`;
       const detail = bucket.events.length > 1
         ? `${bucket.events.length} change${bucket.events.length !== 1 ? "s" : ""}`
-        : buildEventDetail(bucket.events[0]);
+        : buildFlatRowDetail(bucket.events[0]);
       flat.push({
         kind: "row",
         key: `${day.label}::${rowKey}`,

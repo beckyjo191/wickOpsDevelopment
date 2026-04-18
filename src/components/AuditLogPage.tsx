@@ -271,8 +271,7 @@ function buildRichRowSummary(event: AuditEvent): string {
     const changes = getVisibleEditChanges(event);
     if (changes.length === 0) return "Updated";
     const parts = changes.map((c) => `${humanizeFieldName(c.field)} (${formatValueCompact(c.field, c.to)})`);
-    if (parts.length <= 3) return `Updated ${parts.join(", ")}`;
-    return `Updated ${parts.slice(0, 2).join(", ")} +${parts.length - 2} more`;
+    return `Updated ${parts.join(", ")}`;
   }
   if (derived === "ITEM_CREATE") {
     const snap = (details.initialValues ?? details.snapshot ?? {}) as Record<string, unknown>;
@@ -456,12 +455,7 @@ function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRo
       const bucket = d.buckets.get(rowKey)!;
       const summary = bucket.events.length === 1
         ? buildRichRowSummary(bucket.events[0])
-        : (() => {
-            const summaries = bucket.events.map(buildRichRowSummary);
-            const first = summaries[0];
-            const more = summaries.length - 1;
-            return more > 0 ? `${first} · +${more} more change${more !== 1 ? "s" : ""}` : first;
-          })();
+        : bucket.events.map(buildRichRowSummary).join(" · ");
       const titleAttr = bucket.events.length === 1 ? eventTitleAttr(bucket.events[0]) : undefined;
       const actionList = Array.from(bucket.actions);
       const accentColor = actionList.length === 1

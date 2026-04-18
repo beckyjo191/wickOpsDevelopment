@@ -7454,9 +7454,14 @@ textarea.inventory-card-input {
   padding: 0.55rem 0.6rem;
   min-width: 0;
   overflow-wrap: anywhere;
+  word-break: break-word;
   display: flex;
   align-items: center;
   gap: 0.3rem;
+}
+
+.audit-flat-row {
+  align-items: center;
 }
 
 .audit-flat-time {

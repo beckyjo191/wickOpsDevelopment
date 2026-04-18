@@ -23,6 +23,7 @@ import {
 import { usePendingSubmissions } from "./inventory/hooks/usePendingSubmissions";
 import { PendingSubmissionsTab } from "./inventory/PendingSubmissionsTab";
 import type { PendingEntry } from "./inventory/inventoryTypes";
+import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
 
 type AuditTab = "feed" | "analytics" | "item-history" | "pending";
 
@@ -234,6 +235,10 @@ function getVisibleEditChanges(event: AuditEvent): Array<{ field: string; from: 
 function formatValueCompact(field: string, value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   const str = String(value).trim();
+  if (isCurrencyColumnKey(field)) {
+    const n = Number(str);
+    if (Number.isFinite(n)) return formatCurrency(n);
+  }
   if (/^https?:\/\//i.test(str)) {
     try {
       return new URL(str).hostname.replace(/^www\./, "");

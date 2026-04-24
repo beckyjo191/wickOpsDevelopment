@@ -88,6 +88,21 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
       const freeformId = `freeform-${randomUUID()}`;
       const reorderLink = String(entry?.reorderLink ?? "").trim() || undefined;
       const location = String(entry?.location ?? "").trim() || undefined;
+      const minQuantity = entry?.minQuantity !== undefined && entry?.minQuantity !== null && entry?.minQuantity !== ""
+        ? Number(entry.minQuantity) : undefined;
+      if (minQuantity !== undefined && (!Number.isFinite(minQuantity) || minQuantity < 0)) {
+        return json(400, { error: `Entry ${i + 1}: minimum quantity must be a non-negative number.` });
+      }
+      const packSize = entry?.packSize !== undefined && entry?.packSize !== null && entry?.packSize !== ""
+        ? Number(entry.packSize) : undefined;
+      if (packSize !== undefined && (!Number.isFinite(packSize) || packSize <= 0)) {
+        return json(400, { error: `Entry ${i + 1}: pack size must be greater than 0.` });
+      }
+      const packCost = entry?.packCost !== undefined && entry?.packCost !== null && entry?.packCost !== ""
+        ? Number(entry.packCost) : undefined;
+      if (packCost !== undefined && (!Number.isFinite(packCost) || packCost < 0)) {
+        return json(400, { error: `Entry ${i + 1}: pack cost must be a non-negative number.` });
+      }
       orderItems.push({
         itemId: freeformId,
         itemName,
@@ -96,6 +111,9 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
         ...(unitCost !== undefined ? { unitCost } : {}),
         ...(reorderLink ? { reorderLink } : {}),
         ...(location ? { location } : {}),
+        ...(minQuantity !== undefined ? { minQuantity } : {}),
+        ...(packSize !== undefined ? { packSize } : {}),
+        ...(packCost !== undefined ? { packCost } : {}),
       });
     } else {
       const item = byId.get(itemId);
@@ -244,6 +262,14 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
         // column shows the most recent price paid. Authoritative history lives
         // in the RESTOCK_RECEIVED audit events.
         if (line.unitCost !== undefined) newValues.unitCost = line.unitCost;
+        // Persist the reorder threshold the user entered at add-item time so
+        // future reorder logic triggers correctly. Without this the new row
+        // would never surface as low stock regardless of quantity consumed.
+        if (orderItem.minQuantity !== undefined) newValues.minQuantity = orderItem.minQuantity;
+        // Pack size + pack cost enable box-mode receiving and unit-cost
+        // derivation on future restocks.
+        if (orderItem.packSize !== undefined) newValues.packSize = orderItem.packSize;
+        if (orderItem.packCost !== undefined) newValues.packCost = orderItem.packCost;
         await ddb.send(new PutCommand({
           TableName: storage.itemTable,
           Item: {

@@ -5916,6 +5916,18 @@ textarea.inventory-card-input {
   box-sizing: border-box;
 }
 
+.checklist-raw-price-field {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 0.28rem 0.4rem !important;
+  font-size: 0.74rem !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--text-soft) !important;
+  box-sizing: border-box;
+}
+
 .checklist-raw-dot {
   width: 8px;
   height: 8px;

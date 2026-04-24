@@ -1135,6 +1135,16 @@ export type RestockOrderItem = {
   // For freeform items: location captured at order time. Persisted to the new
   // inventory row on receive/cancel-materialization.
   location?: string;
+  // For freeform items: user-entered reorder threshold. Persisted to the new
+  // inventory row on receive (addToInventory) or cancel-materialization. When
+  // absent, cancel-materialization falls back to qtyOrdered.
+  minQuantity?: number;
+  // For freeform items: pack size (units per box). Persisted to the new
+  // inventory row on receive.
+  packSize?: number;
+  // For freeform items: pack cost (price per box). Persisted to the new
+  // inventory row on receive.
+  packCost?: number;
 };
 
 export type RestockReceiveLine = {
@@ -1185,6 +1195,9 @@ export const createRestockOrder = async (payload: {
     unitCost?: number;
     reorderLink?: string;
     location?: string;
+    minQuantity?: number;
+    packSize?: number;
+    packCost?: number;
   }>;
 }): Promise<{ orderId: string }> => {
   const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders`, {

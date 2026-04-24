@@ -139,6 +139,18 @@ export type RestockOrderItem = {
   // new inventory row on receive (addToInventory) or on cancel materialization
   // so location-filtered views can find it.
   location?: string;
+  // For freeform items: user-provided reorder threshold captured at order
+  // time. When the item is later added to inventory on receive (or materialized
+  // on cancel), this becomes the row's minQuantity so future reorder logic
+  // triggers correctly. Falls back to qtyOrdered when absent.
+  minQuantity?: number;
+  // For freeform items: pack size (units per box). Persisted to the new
+  // inventory row on receive so box-mode receiving / unit-cost derivation
+  // work next time.
+  packSize?: number;
+  // For freeform items: pack cost (price per box). Persisted to the new
+  // inventory row on receive.
+  packCost?: number;
 };
 
 export type RestockReceiveLine = {

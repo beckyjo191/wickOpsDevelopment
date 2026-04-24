@@ -21,7 +21,8 @@ import {
   type RestockOrderItem,
   type RestockReceiveLine,
 } from "../lib/inventoryApi";
-import { ReorderTab, type OrderItem } from "./ReorderTab";
+import { ReorderTab, type AddItemInput, type OrderItem } from "./ReorderTab";
+import { formatCurrency, parseCurrency } from "../lib/currency";
 
 
 interface OrdersPageProps {
@@ -46,17 +47,6 @@ function formatDateTime(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
-}
-
-function formatCurrency(amount: number): string {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(amount);
-}
-
-// Accepts user input like "$4,239.00", "4239", "4,239.5" and returns the
-// parsed number. Returns NaN for empty / unparseable strings — callers should
-// check `Number.isFinite` before using the result.
-function parseCurrency(input: string): number {
-  return Number(input.replace(/[$,\s]/g, ""));
 }
 
 function orderTotalCost(items: RestockOrderItem[]): number | null {
@@ -962,6 +952,10 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
           ...(item.rowId ? { itemId: item.rowId } : {}),
           itemName: item.name,
           qtyOrdered: item.qty,
+          ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
+          ...(item.minQuantity !== undefined ? { minQuantity: item.minQuantity } : {}),
+          ...(item.packSize !== undefined ? { packSize: item.packSize } : {}),
+          ...(item.packCost !== undefined ? { packCost: item.packCost } : {}),
           ...(item.reorderLink ? { reorderLink: item.reorderLink } : {}),
           ...(item.location ? { location: item.location } : {}),
         })),
@@ -984,6 +978,70 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
     inventoryRowsRef.current = updated;
     if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
   }, []);
+
+  // Persist a freshly-added reorder item as a real inventory row so it survives
+  // reload. Values the user entered (min qty, unit cost, pack size/cost, vendor
+  // link, location) flow straight onto the row, mirroring how an item added
+  // through the inventory table would look. Returned info lets ReorderTab
+  // auto-check the new row by key.
+  const handleAddItem = useCallback(async (input: AddItemInput) => {
+    const newId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const name = input.name.trim();
+    if (!name) throw new Error("Item name is required.");
+    const qtyNum = Number(input.qty) || 1;
+    const minQtyRaw = Number(input.minQty);
+    const minQuantity = Number.isFinite(minQtyRaw) && minQtyRaw > 0 ? minQtyRaw : qtyNum;
+    const locationValue = input.location?.trim() || selectedLocation || "";
+    const linkTrim = input.link.trim();
+    const normalizedLink = linkTrim
+      ? (/^https?:\/\//i.test(linkTrim) ? linkTrim : `https://${linkTrim}`)
+      : "";
+    const values: Record<string, string | number | boolean | null> = {
+      itemName: name,
+      quantity: 0,
+      minQuantity,
+      location: locationValue,
+      parentItemId: newId,
+    };
+    if (normalizedLink) values.reorderLink = normalizedLink;
+    if (input.unitCost.trim()) {
+      const uc = parseCurrency(input.unitCost);
+      if (Number.isFinite(uc) && uc >= 0) values.unitCost = uc;
+    }
+    if (input.packSize.trim()) {
+      const ps = Number(input.packSize);
+      if (Number.isFinite(ps) && ps > 0) values.packSize = ps;
+    }
+    if (input.packCost.trim()) {
+      const pc = parseCurrency(input.packCost);
+      if (Number.isFinite(pc) && pc >= 0) values.packCost = pc;
+    }
+    const current = inventoryRowsRef.current;
+    const newRow: InventoryRow = {
+      id: newId,
+      position: current.length,
+      values,
+      createdAt: now,
+    };
+    const updated = [...current, newRow];
+    setInventoryRows(updated);
+    inventoryRowsRef.current = updated;
+    try {
+      await saveInventoryItems([newRow], []);
+    } catch (err) {
+      // Roll back the optimistic insert so the user doesn't see a ghost row
+      // that vanishes on next bootstrap.
+      const reverted = updated.filter((r) => r.id !== newId);
+      setInventoryRows(reverted);
+      inventoryRowsRef.current = reverted;
+      setError(err instanceof Error
+        ? `Could not save item: ${err.message}`
+        : "Could not save item.");
+      throw err;
+    }
+    return { rowId: newId, itemName: name, location: locationValue };
+  }, [selectedLocation]);
 
   // Called after an OrderCard receives or closes an order. Clears orderedAt for the
   // order's items so they reappear in Needs Reorder if still low, then reloads
@@ -1010,11 +1068,17 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
             values: {
               itemName: oi.itemName,
               quantity: 0,
-              minQuantity: oi.qtyOrdered,
+              // Prefer the reorder threshold the user explicitly entered at
+              // Add-Item time. When absent, fall back to the ordered qty — the
+              // item was deemed "need this many" by the user at that moment.
+              minQuantity: oi.minQuantity ?? oi.qtyOrdered,
               // Seed location from the order item (captured at Add-Item time).
               // Fall back to the current location context, then "" (Unassigned).
               location: oi.location ?? selectedLocation ?? "",
               ...(oi.reorderLink ? { reorderLink: oi.reorderLink } : {}),
+              ...(oi.unitCost !== undefined ? { unitCost: oi.unitCost } : {}),
+              ...(oi.packSize !== undefined ? { packSize: oi.packSize } : {}),
+              ...(oi.packCost !== undefined ? { packCost: oi.packCost } : {}),
             },
             createdAt: now,
           }));
@@ -1127,6 +1191,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
               selectedLocation={selectedLocation ?? null}
               onMarkOrdered={handleMarkOrdered}
               onSaveReorderLink={handleSaveReorderLink}
+              onAddItem={handleAddItem}
             />
           )}
 

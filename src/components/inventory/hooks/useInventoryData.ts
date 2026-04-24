@@ -1305,9 +1305,10 @@ export function useInventoryData({
 
   // ── Retire rows ──
   // Retirement is a qty-to-zero event with a reason code (expired/damaged/lost/recalled).
-  // The row is NOT hidden from inventory — it stays as a skeleton so reorder logic
-  // still flags qty < min. The reason is captured in an ITEM_RETIRE audit event
-  // that drives loss analytics.
+  // The row is preserved in storage so retirement history survives for loss
+  // analytics and the Activity audit trail, but it's hidden from the inventory
+  // grid and the Reorder tab (see useInventoryFilters + ReorderTab). The reason
+  // is captured in an ITEM_RETIRE audit event that drives loss analytics.
   const onRetireRows = async (
     rowIds: string[],
     reason: "expired" | "damaged" | "lost" | "recalled" = "expired",

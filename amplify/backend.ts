@@ -137,6 +137,24 @@ invitesHttpApi.addRoutes({
   integration: sendInvitesIntegration,
   authorizer: invitesAuthorizer,
 });
+invitesHttpApi.addRoutes({
+  path: "/pending-invites",
+  methods: [HttpMethod.GET],
+  integration: sendInvitesIntegration,
+  authorizer: invitesAuthorizer,
+});
+invitesHttpApi.addRoutes({
+  path: "/resend-invite",
+  methods: [HttpMethod.POST],
+  integration: sendInvitesIntegration,
+  authorizer: invitesAuthorizer,
+});
+invitesHttpApi.addRoutes({
+  path: "/cancel-invite",
+  methods: [HttpMethod.POST, HttpMethod.DELETE],
+  integration: sendInvitesIntegration,
+  authorizer: invitesAuthorizer,
+});
 
 billingWebhookHttpApi.addRoutes({
   path: "/stripe-webhook",
@@ -287,7 +305,7 @@ const userPool = (backend.auth.resources as any)?.userPool;
 if (userPool) {
   backend.sendInvites.resources.lambda.addToRolePolicy(
     new PolicyStatement({
-      actions: ["cognito-idp:AdminCreateUser"],
+      actions: ["cognito-idp:AdminCreateUser", "cognito-idp:AdminDeleteUser"],
       resources: [userPool.userPoolArn],
     }),
   );

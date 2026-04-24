@@ -311,9 +311,10 @@ export function useInventoryFilters({
         String(minQuantityRaw).trim() !== "" &&
         Number.isFinite(minQuantity) &&
         minQuantity > 0;
-      // Retired rows are skeleton rows — they participate in reorder logic so the
-      // system treats "retired" the same as "depleted". Both need restocking.
-      const isLowStock = hasMin && Number.isFinite(quantity) && quantity < minQuantity;
+      // Retired rows are hidden from the inventory grid (see filteredRows), so
+      // they shouldn't inflate the Low Stock badge count either — the Reorder
+      // tab reads them directly for reorder surfacing.
+      const isLowStock = !isRetired && hasMin && Number.isFinite(quantity) && quantity < minQuantity;
       if (isLowStock) lowStock++;
     }
     return { expired, exp30, exp60, lowStock, retired };
@@ -361,18 +362,21 @@ export function useInventoryFilters({
         const rowLocation = String(row.values.location ?? "").trim();
         const rowCategory = String(row.values.category ?? "").trim();
 
-        // Retired rows stay as zero-qty skeleton rows so reorder logic still
-        // sees them (qty < min → flagged for reorder). They're only suppressed
-        // from expiration-based tabs where they'd be noise.
+        // Retired rows are preserved in storage so retirement history survives
+        // for loss analytics and the Activity page audit trail. They are NOT
+        // surfaced in the inventory grid or the Reorder tab (see ReorderTab.tsx
+        // which filters retiredAt explicitly). Leaving them in the main grid
+        // just creates noise.
         const isRetired = Boolean(row.values.retiredAt);
+        if (isRetired) return false;
 
         let passesTab = true;
         if (activeFilter === "lowStock") {
           passesTab = hasMinQuantity && Number.isFinite(quantity) && quantity < minQuantity;
         }
-        if (activeFilter === "expired") passesTab = !isRetired && daysUntil !== null && daysUntil < 0;
-        if (activeFilter === "exp30") passesTab = !isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
-        if (activeFilter === "exp60") passesTab = !isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
+        if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil < 0;
+        if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
+        if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
         if (!passesTab) return false;
 
         if (locationColumn && effectiveLocationFilter !== "All Locations") {

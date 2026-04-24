@@ -47,14 +47,21 @@ import {
 } from "../lib/inventoryApi";
 import { MODULE_BY_KEY } from "../lib/moduleRegistry";
 import type { ThemePreference } from "../lib/themePreference";
+import {
+  cancelInvite,
+  listPendingInvites,
+  resendInvite,
+  type PendingInvite,
+} from "../lib/invitesApi";
 import { GripVertical, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "locations" | "inventoryColumns" | "importData" | "exportData" | "help";
+type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "inventoryColumns" | "importData" | "exportData" | "help";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
   userModuleAccess: true,
+  pendingInvites: true,
   locations: true,
   inventoryColumns: false,
   importData: false,
@@ -133,6 +140,13 @@ export function SettingsPage({
   const [savingModuleAccessUserId, setSavingModuleAccessUserId] = useState<string | null>(null);
   const [revokingUserId, setRevokingUserId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string>("");
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [loadingPendingInvites, setLoadingPendingInvites] = useState(false);
+  const [pendingInvitesError, setPendingInvitesError] = useState<string>("");
+  const [resendingInviteEmail, setResendingInviteEmail] = useState<string | null>(null);
+  const [cancellingInviteEmail, setCancellingInviteEmail] = useState<string | null>(null);
+  const [pendingCancelInviteEmail, setPendingCancelInviteEmail] = useState<string | null>(null);
+  const [inviteActionStatus, setInviteActionStatus] = useState<string>("");
   const [portalLoading, setPortalLoading] = useState(false);
   const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "done" | "error">("idle");
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
@@ -217,6 +231,31 @@ export function SettingsPage({
   }, [canManageModuleAccess]);
 
   useEffect(() => {
+    if (!canManageModuleAccess) return;
+    let cancelled = false;
+
+    const load = async () => {
+      setLoadingPendingInvites(true);
+      setPendingInvitesError("");
+      try {
+        const invites = await listPendingInvites();
+        if (!cancelled) setPendingInvites(invites);
+      } catch (err: any) {
+        if (!cancelled) {
+          setPendingInvitesError(err?.message ?? "Failed to load pending invites");
+        }
+      } finally {
+        if (!cancelled) setLoadingPendingInvites(false);
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageModuleAccess]);
+
+  useEffect(() => {
     try {
       const raw = window.localStorage.getItem(disclosureStorageKey);
       if (!raw) {
@@ -231,6 +270,10 @@ export function SettingsPage({
           typeof parsed.userModuleAccess === "boolean"
             ? parsed.userModuleAccess
             : DEFAULT_DISCLOSURE_STATE.userModuleAccess,
+        pendingInvites:
+          typeof parsed.pendingInvites === "boolean"
+            ? parsed.pendingInvites
+            : DEFAULT_DISCLOSURE_STATE.pendingInvites,
         locations:
           typeof parsed.locations === "boolean"
             ? parsed.locations
@@ -543,6 +586,46 @@ export function SettingsPage({
     } finally {
       setSavingModuleAccessUserId(null);
     }
+  };
+
+  const onResendInvite = async (email: string) => {
+    setResendingInviteEmail(email);
+    setInviteActionStatus("");
+    setPendingInvitesError("");
+    try {
+      await resendInvite(email);
+      // Refresh list so the updated expiresAt shows up
+      const refreshed = await listPendingInvites();
+      setPendingInvites(refreshed);
+      setInviteActionStatus(`Invite email resent to ${email}.`);
+    } catch (err: any) {
+      setPendingInvitesError(err?.message ?? "Failed to resend invite");
+    } finally {
+      setResendingInviteEmail(null);
+    }
+  };
+
+  const onCancelInvite = async (email: string) => {
+    setCancellingInviteEmail(email);
+    setInviteActionStatus("");
+    setPendingInvitesError("");
+    try {
+      await cancelInvite(email);
+      setPendingInvites((prev) => prev.filter((inv) => inv.email !== email));
+      setInviteActionStatus(`Invite for ${email} cancelled.`);
+      setPendingCancelInviteEmail(null);
+    } catch (err: any) {
+      setPendingInvitesError(err?.message ?? "Failed to cancel invite");
+    } finally {
+      setCancellingInviteEmail(null);
+    }
+  };
+
+  const formatInviteDate = (iso: string): string => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   };
 
   const onRevokeUser = async (userId: string) => {
@@ -1020,6 +1103,119 @@ export function SettingsPage({
             </p>
           )}
         </details>
+
+        {canManageModuleAccess ? (
+          <details
+            className="settings-section"
+            open={disclosures.pendingInvites}
+            onToggle={(event) => onDisclosureToggle("pendingInvites", event.currentTarget.open)}
+          >
+            <summary className="settings-section-title">
+              Pending Invites
+              {pendingInvites.length > 0 ? ` (${pendingInvites.length})` : ""}
+            </summary>
+            <p className="settings-section-copy">
+              People you've invited who haven't signed in yet. Invites expire 14 days after sending.
+              Resend to send a fresh email; cancel to free the seat.
+            </p>
+            <div className="settings-columns-list">
+              {loadingPendingInvites ? <div>Loading pending invites...</div> : null}
+              {!loadingPendingInvites && pendingInvites.length === 0 ? (
+                <div className="settings-section-copy">No pending invites.</div>
+              ) : null}
+              {pendingInvites.map((invite) => {
+                const expiresAt = invite.expiresAt ? new Date(invite.expiresAt) : null;
+                const isExpired = expiresAt ? expiresAt.getTime() < Date.now() : false;
+                return (
+                  <div className="settings-column-row" key={`pending-invite-${invite.email}`}>
+                    <div className="settings-column-visibility">
+                      <span>
+                        {invite.displayName?.trim() || invite.email}
+                        {invite.displayName?.trim() ? (
+                          <span className="settings-location-count">{invite.email}</span>
+                        ) : null}
+                      </span>
+                      <span className="settings-core-pill">{invite.role}</span>
+                      {isExpired ? (
+                        <span className="settings-core-pill">Expired</span>
+                      ) : expiresAt ? (
+                        <span className="settings-location-count">
+                          Expires {formatInviteDate(invite.expiresAt)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="settings-column-actions">
+                      <button
+                        type="button"
+                        className="button button-secondary button-sm"
+                        disabled={
+                          resendingInviteEmail === invite.email ||
+                          cancellingInviteEmail === invite.email
+                        }
+                        onClick={() => { void onResendInvite(invite.email); }}
+                      >
+                        {resendingInviteEmail === invite.email ? "Resending…" : "Resend"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-ghost button-sm"
+                        disabled={
+                          resendingInviteEmail === invite.email ||
+                          cancellingInviteEmail === invite.email
+                        }
+                        onClick={() => setPendingCancelInviteEmail(invite.email)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {inviteActionStatus ? (
+                <p className="settings-section-copy">{inviteActionStatus}</p>
+              ) : null}
+              {pendingInvitesError ? (
+                <p className="settings-error">{pendingInvitesError}</p>
+              ) : null}
+            </div>
+            {pendingCancelInviteEmail ? (() => {
+              const email = pendingCancelInviteEmail;
+              return (
+                <div className="settings-destructive-overlay">
+                  <div
+                    className="settings-destructive-backdrop"
+                    onClick={() => setPendingCancelInviteEmail(null)}
+                  />
+                  <div
+                    className="settings-destructive-sheet"
+                    role="dialog"
+                    aria-label="Confirm cancel invite"
+                  >
+                    <div className="settings-destructive-sheet-body">
+                      <p className="settings-destructive-sheet-title">Cancel Invite</p>
+                      <p className="settings-destructive-sheet-msg">
+                        Cancel the invite for {email}? Their seat will be freed and the email
+                        link will stop working.
+                      </p>
+                    </div>
+                    <div className="settings-destructive-sheet-actions">
+                      <button type="button" onClick={() => setPendingCancelInviteEmail(null)}>
+                        Keep Invite
+                      </button>
+                      <button
+                        type="button"
+                        disabled={cancellingInviteEmail === email}
+                        onClick={() => { void onCancelInvite(email); }}
+                      >
+                        {cancellingInviteEmail === email ? "Cancelling…" : "Cancel Invite"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })() : null}
+          </details>
+        ) : null}
 
         <details
           className="settings-section"

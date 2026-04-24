@@ -119,15 +119,16 @@ function ReceiveOrderForm({
       //   1. the order item itself (captured during a prior partial receive)
       //   2. the inventory row's cached latest price (from past restocks)
       // User can override in the input.
-      let prefillCost: number | undefined = i.unitCost;
+      let prefillUnitCost: number | undefined = i.unitCost;
       let tracksExpiration = false;
       let packSize = 0;
+      let rowPackCost: number | undefined;
       if (!freeform) {
         const row = inventoryRows.find((r) => r.id === i.itemId);
         if (row) {
           const rowCost = Number(row.values.unitCost);
-          if (prefillCost === undefined && Number.isFinite(rowCost) && rowCost >= 0) {
-            prefillCost = rowCost;
+          if (prefillUnitCost === undefined && Number.isFinite(rowCost) && rowCost >= 0) {
+            prefillUnitCost = rowCost;
           }
           // A non-freeform item "tracks expiration" when its inventory row
           // already has a non-empty expiration date. Permanent items (e.g.
@@ -135,7 +136,28 @@ function ReceiveOrderForm({
           tracksExpiration = String(row.values.expirationDate ?? "").trim() !== "";
           const rowPack = Number(row.values.packSize);
           if (Number.isFinite(rowPack) && rowPack > 0) packSize = rowPack;
+          const pc = Number(row.values.packCost);
+          if (Number.isFinite(pc) && pc >= 0) rowPackCost = pc;
         }
+      }
+      // When the item is pack-based, box mode is the default and qty + cost
+      // are denominated per box. This is what the user actually receives from
+      // the vendor; inventory is still stored in units (on submit we multiply
+      // qtyThisReceive by packSize, and cost is divided back to per-unit).
+      const receivingAsBoxes = packSize > 0;
+      const qtyRemaining = i.qtyOrdered - i.qtyReceived;
+      const defaultQty = receivingAsBoxes
+        ? String(Math.max(1, Math.ceil(qtyRemaining / packSize)))
+        : String(qtyRemaining);
+      let prefillCostDisplay = "";
+      if (receivingAsBoxes) {
+        // Prefer the row's packCost; otherwise derive from unit cost × pack.
+        const box = rowPackCost !== undefined
+          ? rowPackCost
+          : (prefillUnitCost !== undefined ? prefillUnitCost * packSize : undefined);
+        if (box !== undefined) prefillCostDisplay = formatCurrency(box);
+      } else if (prefillUnitCost !== undefined) {
+        prefillCostDisplay = formatCurrency(prefillUnitCost);
       }
       return {
         itemId: i.itemId,
@@ -143,14 +165,14 @@ function ReceiveOrderForm({
         isFreeform: freeform,
         qtyOrdered: i.qtyOrdered,
         qtyReceived: i.qtyReceived,
-        qtyRemaining: i.qtyOrdered - i.qtyReceived,
-        qtyThisReceive: String(i.qtyOrdered - i.qtyReceived),
+        qtyRemaining,
+        qtyThisReceive: defaultQty,
         expirationDate: "",
-        unitCost: prefillCost !== undefined ? formatCurrency(prefillCost) : "",
+        unitCost: prefillCostDisplay,
         addToInventory: freeform,  // default to save for freeform items
         tracksExpiration,
         packSize,
-        receivingAsBoxes: false,
+        receivingAsBoxes,
         error: "",
       };
     }),
@@ -306,40 +328,11 @@ function ReceiveOrderForm({
                 </label>
               )}
               {line.packSize > 0 && (
-                <div className="order-receive-box-toggle">
-                  <label className="order-receive-add-inventory">
-                    <input
-                      type="checkbox"
-                      checked={line.receivingAsBoxes}
-                      onChange={(e) => updateLine(line.itemId, {
-                        receivingAsBoxes: e.target.checked,
-                        // Reset qty/cost to defaults when flipping mode so the
-                        // numbers stay coherent.
-                        qtyThisReceive: "",
-                        unitCost: "",
-                      })}
-                    />
-                    {line.receivingAsBoxes ? "Received by box —" : `Received by box (${line.packSize}/box)`}
-                  </label>
-                  {line.receivingAsBoxes && (
-                    <span className="order-receive-packsize-wrap">
-                      <input
-                        type="number"
-                        min="1"
-                        className="order-receive-packsize-input"
-                        value={line.packSize}
-                        onChange={(e) => {
-                          // Per-receive override: change pack size for this
-                          // shipment without writing back to the inventory
-                          // row. Handles vendors that ship different box
-                          // sizes than the row's default.
-                          const n = Number(e.target.value);
-                          updateLine(line.itemId, {
-                            packSize: Number.isFinite(n) && n > 0 ? n : 0,
-                          });
-                        }}
-                      />
-                      <span>/box</span>
+                <div className="order-receive-packinfo">
+                  {line.packSize} per box
+                  {Number(line.qtyThisReceive) > 0 && (
+                    <span className="order-receive-packinfo-math">
+                      {" "}· {Number(line.qtyThisReceive) * line.packSize} units this receive
                     </span>
                   )}
                 </div>
@@ -348,7 +341,11 @@ function ReceiveOrderForm({
             </div>
             <div className="order-receive-cell" data-label="Ordered">
               <div className="order-receive-progress">
-                <span>{line.qtyOrdered}</span>
+                <span>
+                  {line.receivingAsBoxes && line.packSize > 0
+                    ? `${line.qtyOrdered} (${Math.ceil(line.qtyOrdered / line.packSize)} box${Math.ceil(line.qtyOrdered / line.packSize) === 1 ? "" : "es"})`
+                    : line.qtyOrdered}
+                </span>
                 {line.qtyReceived > 0 && (
                   <span className="order-receive-remaining"> ({line.qtyRemaining} remaining)</span>
                 )}
@@ -645,6 +642,23 @@ function OrderCard({
                     ),
                   ),
                 ).sort();
+                // Pack size: check the live inventory row first (most current),
+                // fall back to the pack size captured on freeform order items.
+                const row = inventoryRows.find((r) => r.id === item.itemId);
+                const rowPack = row ? Number(row.values.packSize) : NaN;
+                const packSize = Number.isFinite(rowPack) && rowPack > 0
+                  ? rowPack
+                  : (item.packSize ?? 0);
+                const isPack = packSize > 0;
+                const formatQtyWithBoxes = (unitQty: number) => {
+                  if (!isPack || unitQty === 0) return String(unitQty);
+                  const boxes = unitQty / packSize;
+                  const whole = Number.isInteger(boxes);
+                  const label = whole
+                    ? `${boxes} box${boxes === 1 ? "" : "es"}`
+                    : `${(Math.round(boxes * 10) / 10)} boxes`;
+                  return `${unitQty} (${label})`;
+                };
                 return (
                   <tr key={item.itemId} className={item.qtyReceived >= item.qtyOrdered ? "order-detail-row--done" : ""}>
                     <td>
@@ -653,8 +667,8 @@ function OrderCard({
                         <span className="order-freeform-badge">new</span>
                       )}
                     </td>
-                    <td>{item.qtyOrdered}</td>
-                    <td>{item.qtyReceived}</td>
+                    <td>{formatQtyWithBoxes(item.qtyOrdered)}</td>
+                    <td>{formatQtyWithBoxes(item.qtyReceived)}</td>
                     <td>
                       {expirations.length === 0
                         ? "—"
@@ -668,7 +682,13 @@ function OrderCard({
                             )
                             .join(", ")}
                     </td>
-                    <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost) : "—"}</td>
+                    <td>
+                      {item.unitCost !== undefined ? (
+                        isPack
+                          ? `${formatCurrency(item.unitCost * packSize)}/box`
+                          : formatCurrency(item.unitCost)
+                      ) : "—"}
+                    </td>
                     <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost * item.qtyOrdered) : "—"}</td>
                   </tr>
                 );

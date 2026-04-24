@@ -5946,6 +5946,28 @@ textarea.inventory-card-input {
   box-sizing: border-box;
 }
 
+/* Wraps the qty input + optional "box(es) (N ea)" hint for pack items. */
+.checklist-qty-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.checklist-qty-unit {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.checklist-qty-unit-detail {
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
 .checklist-raw-name-field {
   width: 100% !important;
   min-width: 0 !important;
@@ -6830,37 +6852,20 @@ textarea.inventory-card-input {
   cursor: pointer;
 }
 
-.order-receive-box-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.order-receive-packsize-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  font-size: 0.75rem;
+/* Pack-size hint under a pack-based receive line — replaces the old
+ * "Received by box" toggle + override. Box mode is now implicit when
+ * the inventory row has a pack size.
+ */
+.order-receive-packinfo {
+  font-size: 0.72rem;
   color: var(--text-secondary);
+  margin-top: 0.2rem;
+  line-height: 1.2;
 }
 
-.order-receive-packsize-input {
-  width: 55px;
-  padding: 0.15rem 0.35rem;
-  font-size: 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  text-align: center;
-  font-family: inherit;
-}
-
-.order-receive-packsize-input:focus {
-  outline: none;
-  border-color: var(--focus);
-  box-shadow: 0 0 0 2px var(--focus-ring-soft);
+.order-receive-packinfo-math {
+  color: var(--text-muted);
+  opacity: 0.85;
 }
 
 .order-form-freeform {

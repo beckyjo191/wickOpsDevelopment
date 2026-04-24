@@ -61,12 +61,18 @@ type ReorderItem = {
   activeQty: number;        // non-expired qty summed across all rows
   expiredQty: number;       // expired qty summed across all rows
   minQuantity: number;
+  // Suggested order quantity. Denominated in BOXES when packSize > 0, else
+  // units. Input qty (user-edited on the checklist) follows the same denom.
   suggestedQty: number;
   hasExpired: boolean;
   orderedAt: string | null; // most recent orderedAt across all rows
   // Per-unit price: prefers packCost / packSize when both are set, falls back
   // to the row's stored unitCost. Null when we have no price data at all.
   unitCost: number | null;
+  // Units per box. 0 means the item is not pack-based — qty/display stays in
+  // units. >0 flips the UI into box-denominated mode for suggest, input,
+  // subtotal, and order submission (where we multiply back to units).
+  packSize: number;
   // True when the user added this item via the "Add Items" panel (not flagged
   // as low by the auto-reorder logic). Pre-checked in the vendor card so it
   // rolls into Mark-as-Ordered alongside low-stock items.
@@ -817,12 +823,15 @@ function VendorChecklistCard({
   // Running subtotal across checked lines (inventory items with a known
   // unit cost). Items without a unit cost are counted separately so the
   // subtotal line can note "(+N without price)" for transparency.
+  // For pack items, input qty is in boxes — convert to units before applying
+  // the per-unit cost so the subtotal reflects actual spend.
   const checkedSubtotal = lines.reduce((sum, line) => {
     if (!line.checked) return sum;
     const item = group.items.find((i) => i.row.id === line.rowId);
     if (!item || item.unitCost === null) return sum;
-    const qty = Math.max(0, Number(line.qty) || 0);
-    return sum + item.unitCost * qty;
+    const qtyRaw = Math.max(0, Number(line.qty) || 0);
+    const qtyUnits = item.packSize > 0 ? qtyRaw * item.packSize : qtyRaw;
+    return sum + item.unitCost * qtyUnits;
   }, 0);
   const unpricedCount = lines.filter((line) => {
     if (!line.checked) return false;
@@ -839,13 +848,17 @@ function VendorChecklistCard({
   });
 
   const handlePlaceOrder = () => {
+    // Input qty is in boxes for pack items, units otherwise. The order is
+    // always stored in units, so convert here before handing off.
     const inventoryItems = lines
       .filter((l) => l.checked)
-      .map((l) => ({
-        rowId: l.rowId,
-        name: l.name,
-        qty: Math.max(1, Number(l.qty) || 1),
-      }));
+      .map((l) => {
+        const item = group.items.find((i) => i.row.id === l.rowId);
+        const packSize = item?.packSize ?? 0;
+        const qtyRaw = Math.max(1, Number(l.qty) || 1);
+        const qtyUnits = packSize > 0 ? qtyRaw * packSize : qtyRaw;
+        return { rowId: l.rowId, name: l.name, qty: qtyUnits };
+      });
     // Use allRowIds so every lot in the group gets stamped as ordered.
     const checkedRowIds = lines.filter((l) => l.checked).flatMap((l) => l.allRowIds);
     onMarkOrdered(checkedRowIds, group.domain, inventoryItems);
@@ -923,7 +936,9 @@ function VendorChecklistCard({
                       )}
                       {itemData.unitCost !== null && (
                         <span className="reorder-item-unitcost">
-                          {formatCurrency(itemData.unitCost)}/unit
+                          {itemData.packSize > 0
+                            ? `${formatCurrency(itemData.unitCost * itemData.packSize)}/box`
+                            : `${formatCurrency(itemData.unitCost)}/unit`}
                         </span>
                       )}
                     </span>
@@ -931,14 +946,24 @@ function VendorChecklistCard({
                 </div>
               </div>
               <div className="checklist-cell">
-                <input
-                  className="field checklist-qty-field"
-                  type="number"
-                  min="1"
-                  placeholder="Qty"
-                  value={line.qty}
-                  onChange={(e) => updateLineQty(line.rowId, e.target.value)}
-                />
+                <div className="checklist-qty-wrap">
+                  <input
+                    className="field checklist-qty-field"
+                    type="number"
+                    min="1"
+                    placeholder="Qty"
+                    value={line.qty}
+                    onChange={(e) => updateLineQty(line.rowId, e.target.value)}
+                  />
+                  {itemData && itemData.packSize > 0 && (
+                    <span className="checklist-qty-unit">
+                      box{Number(line.qty) === 1 ? "" : "es"}
+                      <span className="checklist-qty-unit-detail">
+                        {" "}({itemData.packSize} ea)
+                      </span>
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -1070,7 +1095,9 @@ function NoLinkCard({
                     )}
                     {item.unitCost !== null && (
                       <span className="reorder-item-unitcost">
-                        {formatCurrency(item.unitCost)}/unit
+                        {item.packSize > 0
+                          ? `${formatCurrency(item.unitCost * item.packSize)}/box`
+                          : `${formatCurrency(item.unitCost)}/unit`}
                       </span>
                     )}
                   </span>
@@ -1208,7 +1235,6 @@ export function ReorderTab({
       if (agg.latestOrderedAt) continue;
 
       const itemName = key.split("\x00")[0];
-      const suggestedQty = Math.max(1, Math.ceil(agg.minQuantity - agg.activeQty));
 
       // Representative row: prefer non-expired row with lowest active qty
       const activeRows = agg.rows.filter((r) => {
@@ -1224,14 +1250,22 @@ export function ReorderTab({
       // price from packCost / packSize when both are set, else the row's
       // stored unitCost. Null when neither is available.
       const packCost = Number(repRow.values.packCost);
-      const packSize = Number(repRow.values.packSize);
+      const packSizeRaw = Number(repRow.values.packSize);
+      const packSize = Number.isFinite(packSizeRaw) && packSizeRaw > 0 ? packSizeRaw : 0;
       const storedUnit = Number(repRow.values.unitCost);
       let unitCost: number | null = null;
-      if (Number.isFinite(packCost) && Number.isFinite(packSize) && packSize > 0) {
+      if (Number.isFinite(packCost) && packSize > 0) {
         unitCost = packCost / packSize;
       } else if (Number.isFinite(storedUnit) && storedUnit >= 0) {
         unitCost = storedUnit;
       }
+
+      // Suggest in boxes when pack-based (round up shortfall to whole boxes),
+      // else in units. Input + subtotal follow this denomination too.
+      const shortfallUnits = agg.minQuantity - agg.activeQty;
+      const suggestedQty = packSize > 0
+        ? Math.max(1, Math.ceil(shortfallUnits / packSize))
+        : Math.max(1, Math.ceil(shortfallUnits));
 
       const item: ReorderItem = {
         row: repRow,
@@ -1245,6 +1279,7 @@ export function ReorderTab({
         hasExpired: agg.expiredQty > 0,
         orderedAt: agg.latestOrderedAt,
         unitCost,
+        packSize,
       };
 
       if (agg.reorderLink) {
@@ -1310,6 +1345,7 @@ export function ReorderTab({
       reorderLink: string;
       minQuantity: number;
       unitCost: number | null;
+      packSize: number;
     };
     const pickedMap = new Map<string, PickedAgg>();
     const pickedIdSet = new Set(extraPickRowIds);
@@ -1323,10 +1359,11 @@ export function ReorderTab({
       const minQuantity = Number(row.values.minQuantity);
       const hasMin = Number.isFinite(minQuantity) && minQuantity > 0;
       const packCost = Number(row.values.packCost);
-      const packSize = Number(row.values.packSize);
+      const packSizeRaw = Number(row.values.packSize);
+      const packSize = Number.isFinite(packSizeRaw) && packSizeRaw > 0 ? packSizeRaw : 0;
       const storedUnit = Number(row.values.unitCost);
       let unitCost: number | null = null;
-      if (Number.isFinite(packCost) && Number.isFinite(packSize) && packSize > 0) {
+      if (Number.isFinite(packCost) && packSize > 0) {
         unitCost = packCost / packSize;
       } else if (Number.isFinite(storedUnit) && storedUnit >= 0) {
         unitCost = storedUnit;
@@ -1337,6 +1374,7 @@ export function ReorderTab({
         if (!existing.reorderLink && rowLink) existing.reorderLink = rowLink;
         if (hasMin && minQuantity > existing.minQuantity) existing.minQuantity = minQuantity;
         if (existing.unitCost === null && unitCost !== null) existing.unitCost = unitCost;
+        if (existing.packSize === 0 && packSize > 0) existing.packSize = packSize;
       } else {
         pickedMap.set(key, {
           rows: [row],
@@ -1345,6 +1383,7 @@ export function ReorderTab({
           reorderLink: rowLink,
           minQuantity: hasMin ? minQuantity : 0,
           unitCost,
+          packSize,
         });
       }
     }
@@ -1373,10 +1412,13 @@ export function ReorderTab({
         activeQty,
         expiredQty: 0,
         minQuantity: agg.minQuantity,
-        suggestedQty: 1, // default 1 for proactive picks
+        // 1 in whichever unit the item uses — 1 box for pack items, 1 unit
+        // otherwise. VendorChecklistCard renders this in the denominated form.
+        suggestedQty: 1,
         hasExpired: false,
         orderedAt: null,
         unitCost: agg.unitCost,
+        packSize: agg.packSize,
         isExtra: true,
       });
     }
@@ -1561,7 +1603,12 @@ export function ReorderTab({
   ];
   const estimatedTotal = priceableItems.reduce((sum, item) => {
     if (item.unitCost === null) return sum;
-    return sum + item.unitCost * item.suggestedQty;
+    // suggestedQty is in boxes for pack items — convert to units before
+    // applying the per-unit cost.
+    const qtyUnits = item.packSize > 0
+      ? item.suggestedQty * item.packSize
+      : item.suggestedQty;
+    return sum + item.unitCost * qtyUnits;
   }, 0);
   const missingPriceCount = priceableItems.filter((i) => i.unitCost === null).length;
 

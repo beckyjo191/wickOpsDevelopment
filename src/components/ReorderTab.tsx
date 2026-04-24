@@ -1118,6 +1118,7 @@ export function ReorderTab({
   selectedLocation = null,
   onSaveReorderLink,
   onMarkOrdered,
+  onAddItem,
 }: ReorderTabProps) {
   const { vendorGroups, noLinkItems } = useMemo(() => {
     // Aggregate rows by itemName + location into one entry per item

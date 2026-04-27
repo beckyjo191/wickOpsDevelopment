@@ -1397,7 +1397,7 @@ export function useInventoryData({
       if (!Number.isFinite(minQty) || minQty <= 0) continue;
       stubGroupsQueued.add(key);
       const stubId = crypto.randomUUID();
-      const stubValues: Record<string, unknown> = {
+      const stubValues: Record<string, string | number | boolean | null> = {
         itemName: name,
         quantity: 0,
         minQuantity: minQty,

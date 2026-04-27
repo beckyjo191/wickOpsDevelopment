@@ -3,6 +3,57 @@ import type { InventoryRow } from "../lib/inventoryApi";
 import { formatCurrency, parseCurrency } from "../lib/currency";
 import { Check, ExternalLink, Link2Off, Package, Plus, Save, X } from "lucide-react";
 
+// ── Reorder-selection persistence ───────────────────────────────────────
+// Stored in localStorage so a reload mid-cart doesn't wipe the user's
+// checkboxes, qty overrides, or extra picks. Keys are itemName+location
+// (already stable across lot churn), plus rowIds for extra picks. We don't
+// scope by org: mismatched keys after an org switch simply don't match any
+// rendered item, so they're inert — the Mark-as-Ordered path prunes the
+// ones that get used.
+
+type PersistedReorderState = {
+  checked: string[];
+  qty: Record<string, string>;
+  extras: string[];
+};
+
+const REORDER_STATE_STORAGE_KEY = "wickops.reorder.state.v1";
+
+const EMPTY_REORDER_STATE: PersistedReorderState = {
+  checked: [],
+  qty: {},
+  extras: [],
+};
+
+function readPersistedReorderState(): PersistedReorderState {
+  if (typeof window === "undefined") return EMPTY_REORDER_STATE;
+  try {
+    const raw = window.localStorage.getItem(REORDER_STATE_STORAGE_KEY);
+    if (!raw) return EMPTY_REORDER_STATE;
+    const parsed = JSON.parse(raw) as Partial<PersistedReorderState>;
+    return {
+      checked: Array.isArray(parsed.checked) ? parsed.checked.filter((k): k is string => typeof k === "string") : [],
+      qty: parsed.qty && typeof parsed.qty === "object"
+        ? Object.fromEntries(
+            Object.entries(parsed.qty).filter(([, v]) => typeof v === "string"),
+          ) as Record<string, string>
+        : {},
+      extras: Array.isArray(parsed.extras) ? parsed.extras.filter((id): id is string => typeof id === "string") : [],
+    };
+  } catch {
+    return EMPTY_REORDER_STATE;
+  }
+}
+
+function writePersistedReorderState(state: PersistedReorderState): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(REORDER_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Quota exceeded or storage disabled — degrade silently.
+  }
+}
+
 export type OrderItem = {
   rowId: string | null;
   name: string;
@@ -904,7 +955,26 @@ function VendorChecklistCard({
                     href={normalizeLinkValue(line.link)}
                     target={`wickops-vendor-${group.domain}`}
                     rel="noopener noreferrer"
-                    onClick={() => markLineChecked(line.rowId)}
+                    onClick={(e) => {
+                      // iOS Safari ignores <a target="name"> reuse and opens
+                      // a fresh tab per click, which means ordering 20 items
+                      // from one vendor leaves 20 tabs to clean up. Taking
+                      // over the click with window.open and the same target
+                      // name reliably funnels every subsequent click in this
+                      // vendor card into the already-open tab — works the
+                      // same on desktop, so we do it unconditionally.
+                      // Modifier keys (cmd/ctrl/middle-click) are left alone
+                      // so power users can still fan out intentionally.
+                      if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                        e.preventDefault();
+                        window.open(
+                          normalizeLinkValue(line.link),
+                          `wickops-vendor-${group.domain}`,
+                          "noopener",
+                        );
+                      }
+                      markLineChecked(line.rowId);
+                    }}
                     title={`Open ${line.name} on ${group.domain}`}
                   >
                     {line.name}
@@ -1318,7 +1388,9 @@ export function ReorderTab({
   // Rows the user has explicitly picked for this reorder via the panel (not
   // low-stock). Stored as rowId — we look up the live row from inventoryRows
   // during rendering so stale pick state doesn't drift if the row changes.
-  const [extraPickRowIds, setExtraPickRowIds] = useState<string[]>([]);
+  const [extraPickRowIds, setExtraPickRowIds] = useState<string[]>(
+    () => readPersistedReorderState().extras,
+  );
 
   // Build a ReorderItem for each extra-picked row, using the same shape and
   // unit-cost derivation as low-stock items. Items already represented in
@@ -1492,8 +1564,27 @@ export function ReorderTab({
   // Checked state persists across list-filter renders (previously held inside
   // each VendorChecklistCard, which remounted when filter changed). Keyed by
   // the item-state key (itemName + location) so it survives lot churn too.
-  const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set());
-  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
+  // Also persisted to localStorage so a page reload mid-reorder doesn't wipe
+  // the cart the user was building.
+  const [checkedKeys, setCheckedKeys] = useState<Set<string>>(
+    () => new Set(readPersistedReorderState().checked),
+  );
+  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>(
+    () => readPersistedReorderState().qty,
+  );
+
+  // Persist reorder selection to localStorage on every change. Saves as a
+  // plain object because Set isn't JSON-serializable. Stored globally (not
+  // keyed by org) since keys are itemName+location — unmatchable keys after
+  // an org switch are harmless; MarkOrdered already prunes the ones that
+  // actually get acted on.
+  useEffect(() => {
+    writePersistedReorderState({
+      checked: Array.from(checkedKeys),
+      qty: qtyDrafts,
+      extras: extraPickRowIds,
+    });
+  }, [checkedKeys, qtyDrafts, extraPickRowIds]);
 
   const toggleCheckedKey = (key: string) => {
     setCheckedKeys((prev) => {

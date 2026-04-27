@@ -624,7 +624,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
     const submittedLines = normalized.map((entry) => {
       const row = rowById.get(entry.itemId);
       const name = row ? getItemDisplayName(row) : entry.itemId;
-      return `${name} ×${entry.quantityUsed}`;
+      return `${name} -${entry.quantityUsed}`;
     });
 
     setSubmitting(true);
@@ -663,7 +663,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
 
   const recentActivity = recentSubmissions
     .filter((s) => s.status !== "rejected")
-    .slice(0, 1);
+    .slice(0, 5);
 
   return (
     <section className="app-content">
@@ -900,7 +900,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
               {recentActivity.map((sub) => {
                 let entries: import("../lib/inventoryApi").PendingEntry[] = [];
                 try { entries = JSON.parse(sub.entriesJson); } catch { entries = []; }
-                const label = entries.map((e) => `${e.itemName} ×${e.quantityUsed}`).join(", ");
+                const label = entries.map((e) => `${e.itemName} -${e.quantityUsed}`).join(", ");
                 const when = formatActivityTime(sub.submittedAt);
                 return (
                   <li key={sub.id} className="usage-activity-row">

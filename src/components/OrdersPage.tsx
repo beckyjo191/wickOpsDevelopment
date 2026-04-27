@@ -332,7 +332,7 @@ function ReceiveOrderForm({
                   {line.packSize} per box
                   {Number(line.qtyThisReceive) > 0 && (
                     <span className="order-receive-packinfo-math">
-                      {" "}· {Number(line.qtyThisReceive) * line.packSize} units this receive
+                      {" "}· adds {Number(line.qtyThisReceive) * line.packSize} to stock
                     </span>
                   )}
                 </div>

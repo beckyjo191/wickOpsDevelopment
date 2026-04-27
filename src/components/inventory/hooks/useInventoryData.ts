@@ -724,12 +724,30 @@ export function useInventoryData({
     const idsToMove = selectedRowIds.size > 0 ? selectedRowIds : (selectedRowId ? new Set([selectedRowId]) : new Set<string>());
     if (idsToMove.size === 0) return;
     pushUndoSnapshot();
+    // Capture source locations before the move so we can keep them visible
+    // (via a blank placeholder row) when we'd otherwise empty them out.
+    const sourceLocations = new Set<string>();
+    for (const row of rowsRef.current) {
+      if (!idsToMove.has(row.id)) continue;
+      const loc = String(row.values[locationColumn.key] ?? "").trim();
+      if (loc && loc !== targetLocation) sourceLocations.add(loc);
+    }
     setRows((prev) => {
-      const next = prev.map((row) =>
+      let next = prev.map((row) =>
         idsToMove.has(row.id)
           ? { ...row, values: { ...row.values, [locationColumn.key]: targetLocation } }
           : row,
       );
+      for (const sourceLoc of sourceLocations) {
+        const stillHasRows = next.some(
+          (row) => String(row.values[locationColumn.key] ?? "").trim() === sourceLoc,
+        );
+        if (!stillHasRows) {
+          const blank = createBlankInventoryRow(allColumns, next.length);
+          blank.values[locationColumn.key] = sourceLoc;
+          next = [...next, blank];
+        }
+      }
       rowsRef.current = next;
       return next;
     });
@@ -1345,12 +1363,69 @@ export function useInventoryData({
 
     if (retiredRowsToSave.length === 0) return;
 
+    // When retirement empties the last active lot for a (itemName, location)
+    // group, leave a quantity-zero stub behind so the Reorder tab still knows
+    // the user needs to restock. Without this, the row vanishes from reorder
+    // analytics the instant it gets retired. We skip the stub when:
+    //   - another active lot for the same group remains (that lot already
+    //     carries the min-qty signal)
+    //   - the retired row has no minQuantity set (reorder has nothing to
+    //     flag against, so a stub row would just sit there silently)
+    //   - we've already queued a stub for this group in the current batch
+    //     (retiring 3 lots of the same item should spawn 1 stub, not 3)
+    const retiredRowIdSet = new Set(retiredRowsToSave.map((r) => r.id));
+    const groupKey = (name: string, loc: string) => `${name}\x00${loc}`;
+    const groupHasRemainingActiveLot = new Set<string>();
+    for (const row of rowsRef.current) {
+      if (retiredRowIdSet.has(row.id)) continue;
+      if (row.values.retiredAt) continue;
+      const name = String(row.values.itemName ?? "").trim();
+      if (!name) continue;
+      const loc = String(row.values.location ?? "").trim();
+      groupHasRemainingActiveLot.add(groupKey(name, loc));
+    }
+    const stubGroupsQueued = new Set<string>();
+    const stubsToCreate: InventoryRow[] = [];
+    for (const retiredRow of retiredRowsToSave) {
+      const name = String(retiredRow.values.itemName ?? "").trim();
+      if (!name) continue;
+      const loc = String(retiredRow.values.location ?? "").trim();
+      const key = groupKey(name, loc);
+      if (groupHasRemainingActiveLot.has(key)) continue;
+      if (stubGroupsQueued.has(key)) continue;
+      const minQty = Number(retiredRow.values.minQuantity);
+      if (!Number.isFinite(minQty) || minQty <= 0) continue;
+      stubGroupsQueued.add(key);
+      const stubId = crypto.randomUUID();
+      const stubValues: Record<string, unknown> = {
+        itemName: name,
+        quantity: 0,
+        minQuantity: minQty,
+        location: loc,
+        parentItemId: String(retiredRow.values.parentItemId ?? stubId),
+      };
+      // Carry reorder-relevant metadata forward so the stub behaves like the
+      // original lot for reorder purposes (vendor link, pack sizing, price).
+      for (const field of ["reorderLink", "packSize", "packCost", "unitCost", "category"] as const) {
+        const v = retiredRow.values[field];
+        if (v !== undefined && v !== null && v !== "") stubValues[field] = v;
+      }
+      stubsToCreate.push({
+        id: stubId,
+        position: rowsRef.current.length + stubsToCreate.length,
+        values: stubValues,
+        createdAt: now,
+      });
+    }
+
     pushUndoSnapshot();
     setRows((prev) => {
       const byId = new Map(retiredRowsToSave.map((r) => [r.id, r]));
       const next = prev.map((row) => byId.get(row.id) ?? row);
-      rowsRef.current = next;
-      return next;
+      // Append stubs after the existing rows so they don't disturb ordering.
+      const withStubs = stubsToCreate.length > 0 ? [...next, ...stubsToCreate] : next;
+      rowsRef.current = withStubs;
+      return withStubs;
     });
 
     // Direct save with retireMetadata — bypasses the batched autosave so the
@@ -1358,16 +1433,20 @@ export function useInventoryData({
     savingRef.current = true;
     setSaving(true);
     try {
-      await saveInventoryItems(retiredRowsToSave, [], { retireMetadata });
+      await saveInventoryItems([...retiredRowsToSave, ...stubsToCreate], [], { retireMetadata });
       const snap = lastSavedSnapshotRef.current;
       const nextSnap = new Map(snap);
       for (const row of retiredRowsToSave) {
         nextSnap.set(row.id, serializeRowForSnapshot(row, row.position));
       }
+      for (const stub of stubsToCreate) {
+        nextSnap.set(stub.id, serializeRowForSnapshot(stub, stub.position));
+      }
       lastSavedSnapshotRef.current = nextSnap;
       setDirtyRowIds((prev) => {
         const next = new Set(prev);
         for (const r of retiredRowsToSave) next.delete(r.id);
+        for (const s of stubsToCreate) next.delete(s.id);
         dirtyRowIdsRef.current = next;
         return next;
       });

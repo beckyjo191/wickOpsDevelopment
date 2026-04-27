@@ -56,7 +56,7 @@ import {
 import { GripVertical, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "inventoryColumns" | "importData" | "exportData" | "help";
+type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "inventoryColumns" | "importData" | "exportData";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
@@ -66,7 +66,6 @@ const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   inventoryColumns: false,
   importData: false,
   exportData: false,
-  help: false,
 };
 
 interface SettingsPageProps {
@@ -290,10 +289,6 @@ export function SettingsPage({
           typeof parsed.exportData === "boolean"
             ? parsed.exportData
             : DEFAULT_DISCLOSURE_STATE.exportData,
-        help:
-          typeof parsed.help === "boolean"
-            ? parsed.help
-            : DEFAULT_DISCLOSURE_STATE.help,
       });
       setLoadedDisclosureKey(disclosureStorageKey);
     } catch {
@@ -1479,32 +1474,6 @@ export function SettingsPage({
           )}
         </details>
 
-        <details
-          className="settings-section"
-          open={disclosures.help}
-          onToggle={(event) => onDisclosureToggle("help", event.currentTarget.open)}
-        >
-          <summary className="settings-section-title">Help</summary>
-          <p className="settings-section-copy">Color guide used throughout the app.</p>
-          <div className="settings-legend">
-            <div className="settings-legend-item">
-              <span className="settings-legend-dot" style={{ background: "var(--danger)" }} />
-              <span>Expired</span>
-            </div>
-            <div className="settings-legend-item">
-              <span className="settings-legend-dot" style={{ background: "var(--caution)" }} />
-              <span>Expiring within 30 days</span>
-            </div>
-            <div className="settings-legend-item">
-              <span className="settings-legend-dot" style={{ background: "var(--notice)" }} />
-              <span>Expiring within 60 days</span>
-            </div>
-            <div className="settings-legend-item">
-              <span className="settings-legend-dot" style={{ background: "var(--warning)" }} />
-              <span>Low stock</span>
-            </div>
-          </div>
-        </details>
       </div>
     </section>
   );

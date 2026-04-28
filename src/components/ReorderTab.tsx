@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
 import { formatCurrency, parseCurrency } from "../lib/currency";
-import { Check, ExternalLink, Link2Off, Minus, Package, Plus, Save, X } from "lucide-react";
+import { Check, ExternalLink, Link2Off, Minus, Package, X } from "lucide-react";
 
 // ── Reorder-selection persistence ───────────────────────────────────────
 // Stored in localStorage so a reload mid-cart doesn't wipe the user's

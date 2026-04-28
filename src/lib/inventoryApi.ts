@@ -136,6 +136,7 @@ export const loadInventoryBootstrap = async (): Promise<{
   columns: InventoryColumn[];
   items: InventoryRow[];
   registeredLocations: string[];
+  registeredVendors: string[];
   columnVisibilityOverrides: ColumnVisibilityOverrides;
   nextToken: string | null;
 }> => {
@@ -172,6 +173,9 @@ export const loadInventoryBootstrap = async (): Promise<{
       .sort((a, b) => a.position - b.position),
     registeredLocations: Array.isArray(data.registeredLocations)
       ? (data.registeredLocations as string[]).filter((l: string) => typeof l === "string" && l.length > 0)
+      : [],
+    registeredVendors: Array.isArray(data.registeredVendors)
+      ? (data.registeredVendors as string[]).filter((v: string) => typeof v === "string" && v.length > 0)
       : [],
     columnVisibilityOverrides: (data.columnVisibilityOverrides ?? {}) as ColumnVisibilityOverrides,
     nextToken: data.nextToken ?? null,
@@ -924,6 +928,45 @@ export const removeInventoryLocation = async (name: string): Promise<string[]> =
   if (!res.ok) throw new Error((await res.text()) || "Failed to remove location");
   const data = await res.json();
   return Array.isArray(data.locations) ? data.locations : [];
+};
+
+export const addInventoryVendor = async (name: string): Promise<string[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/vendors`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await extractApiError(res, "Failed to add vendor"));
+  const data = await res.json();
+  return Array.isArray(data.vendors) ? data.vendors : [];
+};
+
+export const renameInventoryVendor = async (oldName: string, newName: string): Promise<{ vendors: string[]; renamedCount: number }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/vendors/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ oldName, newName }),
+  });
+  if (!res.ok) throw new Error(await extractApiError(res, "Failed to rename vendor"));
+  const data = await res.json();
+  return {
+    vendors: Array.isArray(data.vendors) ? data.vendors : [],
+    renamedCount: Number(data.renamedCount ?? 0),
+  };
+};
+
+export const removeInventoryVendor = async (name: string): Promise<string[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/vendors`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error((await res.text()) || "Failed to remove vendor");
+  const data = await res.json();
+  return Array.isArray(data.vendors) ? data.vendors : [];
 };
 
 // ─── XLSX Template Generation ─────────────────────────────────────────────────

@@ -143,7 +143,7 @@ export function InventoryMobileCards({
           const daysUntil = getDaysUntilExpiration(expValue);
           let expClass = "";
           if (daysUntil !== null) {
-            if (daysUntil < 0) expClass = "inventory-card-exp--expired";
+            if (daysUntil <= 0) expClass = "inventory-card-exp--expired";
             else if (daysUntil <= 30) expClass = "inventory-card-exp--soon";
             else if (daysUntil <= 60) expClass = "inventory-card-exp--warning";
           }

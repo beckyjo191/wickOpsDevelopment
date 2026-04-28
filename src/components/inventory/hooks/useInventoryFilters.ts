@@ -40,7 +40,13 @@ const UNASSIGNED_LOCATION = "Unassigned";
 const getDaysUntilExpiration = (value: string | number | boolean | null | undefined) => {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
-  const date = new Date(raw);
+  // Parse bare YYYY-MM-DD as local date components — `new Date("2026-04-28")`
+  // would otherwise be UTC midnight, which reads back as the prior day in any
+  // timezone west of UTC and skews the day-difference by one.
+  const isoDateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const date = isoDateOnly
+    ? new Date(Number(isoDateOnly[1]), Number(isoDateOnly[2]) - 1, Number(isoDateOnly[3]))
+    : new Date(raw);
   if (Number.isNaN(date.getTime())) return null;
 
   const today = new Date();
@@ -130,12 +136,14 @@ export function useInventoryFilters({
   // "retired" and "pendingSubmissions" were previously stored here.
   // Retired items are now only visible via the Activity page.
   // Pending submissions moved to the Activity page too.
-  const VALID_TABS: ActiveTab[] = ["all", "expired", "exp30", "exp60", "lowStock", "quickAdd", "logUsage"];
+  const VALID_TABS: ActiveTab[] = ["all", "expired", "exp30", "exp60", "lowStock", "logUsage"];
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => {
     if (initialFilter) return initialFilter;
     try {
       const saved = localStorage.getItem("wickops.inventory.activeTab");
-      if (saved === "retired" || saved === "pendingSubmissions") return "all";
+      // "retired" / "pendingSubmissions" / "quickAdd" (Fast Restock, removed)
+      // → fall back to "all" so users with stale localStorage land cleanly.
+      if (saved === "retired" || saved === "pendingSubmissions" || saved === "quickAdd") return "all";
       if (saved && (VALID_TABS as string[]).includes(saved)) {
         return saved as ActiveTab;
       }
@@ -154,7 +162,7 @@ export function useInventoryFilters({
   };
 
   const activeFilter: InventoryFilter =
-    activeTab === "quickAdd" || activeTab === "logUsage" ? "all" : activeTab;
+    activeTab === "logUsage" ? "all" : activeTab;
   const setActiveFilter = (f: InventoryFilter) => setActiveTabRaw(f);
 
   // When navigating from dashboard with a filter, sync the tab
@@ -297,10 +305,11 @@ export function useInventoryFilters({
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
       // Retired rows don't count as expired — they've already been handled, even
       // though their expirationDate is still in the past for history.
-      const isExpired = !isRetired && daysUntil !== null && daysUntil < 0;
+      // Today (daysUntil === 0) counts as expired: by end-of-day the item is past.
+      const isExpired = !isRetired && daysUntil !== null && daysUntil <= 0;
       if (isExpired) expired++;
-      if (!isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 30) exp30++;
-      if (!isRetired && daysUntil !== null && daysUntil >= 0 && daysUntil <= 60) exp60++;
+      if (!isRetired && daysUntil !== null && daysUntil > 0 && daysUntil <= 30) exp30++;
+      if (!isRetired && daysUntil !== null && daysUntil > 0 && daysUntil <= 60) exp60++;
       const quantityRaw = row.values.quantity;
       const minQuantityRaw = row.values.minQuantity;
       const quantity = Number(quantityRaw);
@@ -374,9 +383,9 @@ export function useInventoryFilters({
         if (activeFilter === "lowStock") {
           passesTab = hasMinQuantity && Number.isFinite(quantity) && quantity < minQuantity;
         }
-        if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil < 0;
-        if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 30;
-        if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil >= 0 && daysUntil <= 60;
+        if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil <= 0;
+        if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil > 0 && daysUntil <= 30;
+        if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil > 0 && daysUntil <= 60;
         if (!passesTab) return false;
 
         if (locationColumn && effectiveLocationFilter !== "All Locations") {

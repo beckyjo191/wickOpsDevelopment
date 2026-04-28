@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
 import { formatCurrency, parseCurrency } from "../lib/currency";
-import { Check, ExternalLink, Link2Off, Package, Plus, Save, X } from "lucide-react";
+import { Check, ExternalLink, Link2Off, Minus, Package, Plus, Save, X } from "lucide-react";
 
 // ── Reorder-selection persistence ───────────────────────────────────────
 // Stored in localStorage so a reload mid-cart doesn't wipe the user's
@@ -90,18 +90,31 @@ export type AddItemInput = {
   packSize: string;
   packCost: string;
   location: string;
+  vendor: string;
 };
 
 interface ReorderTabProps {
   rows: InventoryRow[];
   availableLocations?: string[];
+  availableVendors?: string[];
+  /** Add a vendor to the org registry from inside the Reorder UI (Missing
+   *  Info dropdown / bulk toolbar). Parent is responsible for refreshing
+   *  `availableVendors` so the new entry appears in the dropdown. */
+  onAddVendor?: (name: string) => Promise<void>;
   selectedLocation?: string | null;
-  onSaveReorderLink?: (rowIds: string[], link: string) => Promise<void> | void;
+  /** Patch values on one or more inventory rows. Used by the Missing
+   *  Information card to fill in `vendor` / `unitCost` / `packCost` /
+   *  `packSize`. Same patch is applied to every rowId. */
+  onSaveItemFields?: (rowIds: string[], patch: Record<string, string | number | boolean | null>) => Promise<void> | void;
+  /** Surface the current reorder-list size to the parent so the Orders tab
+   *  bar can render a count badge consistent with Pending Receipt / Closed
+   *  Orders. Fires whenever the count changes (including → 0). */
+  onCountChange?: (count: number) => void;
+  /** Per-vendor "Mark as Ordered" handoff — the user has reviewed the
+   *  suggested items and qtys inside a vendor card and wants to commit.
+   *  Stamps orderedAt on the rows AND creates a RestockOrder in pending
+   *  state. The New Order tab covers the freeform + cross-vendor cases. */
   onMarkOrdered?: (rowIds: string[], vendor: string, orderItems: OrderItem[]) => void;
-  /** Persist the newly-added item as an inventory row. Returns the saved row
-   *  so ReorderTab can auto-check it by key immediately. Without this,
-   *  Add-to-reorder-list only lives in memory and vanishes on reload. */
-  onAddItem?: (input: AddItemInput) => Promise<{ rowId: string; itemName: string; location: string }>;
 }
 
 type ReorderItem = {
@@ -109,6 +122,9 @@ type ReorderItem = {
   allRowIds: string[];      // all row IDs in this name+location group
   itemName: string;
   reorderLink: string;
+  /** Vendor name from item.values.vendor (empty when unassigned). When set,
+   *  this is the primary grouping key; reorderLink domain is the fallback. */
+  vendor: string;
   activeQty: number;        // non-expired qty summed across all rows
   expiredQty: number;       // expired qty summed across all rows
   minQuantity: number;
@@ -131,7 +147,8 @@ type ReorderItem = {
 };
 
 type VendorGroup = {
-  domain: string;
+  /** Vendor name — also serves as the display label and React key. */
+  label: string;
   items: ReorderItem[];
 };
 
@@ -153,7 +170,13 @@ const getVendorDomain = (url: string): string => {
 const getDaysUntilExpiration = (value: string | number | boolean | null | undefined) => {
   const raw = String(value ?? "").trim();
   if (!raw) return null;
-  const date = new Date(raw);
+  // Parse bare YYYY-MM-DD as local date components — `new Date("2026-04-28")`
+  // would otherwise be UTC midnight, which reads back as the prior day in any
+  // timezone west of UTC and skews the day-difference by one.
+  const isoDateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  const date = isoDateOnly
+    ? new Date(Number(isoDateOnly[1]), Number(isoDateOnly[2]) - 1, Number(isoDateOnly[3]))
+    : new Date(raw);
   if (Number.isNaN(date.getTime())) return null;
   const today = new Date();
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
@@ -165,13 +188,17 @@ const getDaysUntilExpiration = (value: string | number | boolean | null | undefi
 
 function AddItemCard({
   availableLocations,
+  availableVendors,
   defaultLocation,
+  defaultVendor,
   onAdd,
   onClose,
   onBack,
 }: {
   availableLocations: string[];
+  availableVendors: string[];
   defaultLocation: string;
+  defaultVendor: string;
   onAdd: (input: {
     name: string;
     link: string;
@@ -181,6 +208,7 @@ function AddItemCard({
     packSize: string;
     packCost: string;
     location: string;
+    vendor: string;
   }) => void;
   onClose: () => void;
   /** Optional: when provided, shows a "← Back" button that returns the user
@@ -196,6 +224,7 @@ function AddItemCard({
   const [packSize, setPackSize] = useState("");
   const [packCost, setPackCost] = useState("");
   const [location, setLocation] = useState(defaultLocation);
+  const [vendor, setVendor] = useState(defaultVendor);
   const [error, setError] = useState("");
 
   // On blur, reformat freshly-typed currency as "$4,239.00". Matches the
@@ -248,7 +277,7 @@ function AddItemCard({
         return;
       }
     }
-    onAdd({ name, link, qty, minQty, unitCost, packSize, packCost, location });
+    onAdd({ name, link, qty, minQty, unitCost, packSize, packCost, location, vendor });
     onClose();
   };
 
@@ -343,6 +372,21 @@ function AddItemCard({
           </select>
         </label>
         <label className="reorder-add-item-field">
+          <span>Vendor (optional)</span>
+          <select
+            className="field"
+            value={vendor}
+            onChange={(e) => setVendor(e.target.value)}
+          >
+            <option value="">Unassigned</option>
+            {availableVendors.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="reorder-add-item-field">
           <span>Pack size (optional)</span>
           <input
             className="field"
@@ -410,7 +454,7 @@ function OrderBuilderPanel({
   onPick,
   onAddNew,
   onClose,
-  onSaveReorderLink,
+  onSaveItemFields,
 }: {
   inventoryRows: InventoryRow[];
   availableLocations: string[];
@@ -426,8 +470,9 @@ function OrderBuilderPanel({
   onClose: () => void;
   /** When provided, picking an item that has no reorderLink triggers an inline
    *  prompt to add one before the item goes onto the reorder list. The user
-   *  can also skip, in which case the item lands in the No-Link card. */
-  onSaveReorderLink?: (rowIds: string[], link: string) => Promise<void> | void;
+   *  can also skip, in which case the item lands in the Missing Information
+   *  card. Generic patch shape — link prompt sends `{ reorderLink }`. */
+  onSaveItemFields?: (rowIds: string[], patch: Record<string, string | number | boolean | null>) => Promise<void> | void;
 }) {
   const [search, setSearch] = useState("");
   const [location, setLocation] = useState(defaultLocation);
@@ -561,12 +606,14 @@ function OrderBuilderPanel({
       handleSkipLink();
       return;
     }
-    if (onSaveReorderLink) {
+    if (onSaveItemFields) {
       setSavingLink(true);
       try {
         // Save the link across every lot so future aggregation keeps them
         // together under the same vendor card.
-        await onSaveReorderLink(linkPromptResult.allRowIds, normalizeLinkValue(trimmed));
+        await onSaveItemFields(linkPromptResult.allRowIds, {
+          reorderLink: normalizeLinkValue(trimmed),
+        });
       } finally {
         setSavingLink(false);
       }
@@ -818,6 +865,7 @@ function VendorChecklistCard({
   checkedKeys,
   qtyDrafts,
   onToggleChecked,
+  onSetManyChecked,
   onSetQty,
   onMarkOrdered,
   onRemoveExtra,
@@ -831,6 +879,9 @@ function VendorChecklistCard({
    *  suggestedQty when absent. */
   qtyDrafts: Record<string, string>;
   onToggleChecked: (key: string) => void;
+  /** Bulk-toggle for the "check all" checkbox at the top of the card. Single
+   *  state update for N items so we don't queue N renders on click. */
+  onSetManyChecked: (keys: string[], checked: boolean) => void;
   onSetQty: (key: string, qty: string) => void;
   onMarkOrdered: (rowIds: string[], vendor: string, orderItems: OrderItem[]) => void;
   /** Called when the user removes an extra-picked item (non-low item they
@@ -912,23 +963,90 @@ function VendorChecklistCard({
       });
     // Use allRowIds so every lot in the group gets stamped as ordered.
     const checkedRowIds = lines.filter((l) => l.checked).flatMap((l) => l.allRowIds);
-    onMarkOrdered(checkedRowIds, group.domain, inventoryItems);
+    onMarkOrdered(checkedRowIds, group.label, inventoryItems);
   };
 
   return (
     <div className="reorder-vendor-card app-card">
       <div className="reorder-vendor-header">
         <div className="reorder-vendor-info">
-          <h4 className="reorder-vendor-name">{group.domain}</h4>
+          <h4 className="reorder-vendor-name">{group.label}</h4>
           <span className="reorder-vendor-count">
             {group.items.length} item{group.items.length !== 1 ? "s" : ""}
           </span>
         </div>
       </div>
 
+      {/* Selection summary + Mark as Ordered. Sits above the item list so
+       *  the action button is visible without scrolling once the user has
+       *  checked items in a long vendor group. */}
+      {checkedCount > 0 && (
+        <div className="checklist-done-banner checklist-done-banner--inline checklist-done-banner--top">
+          <div className="checklist-done-banner-row">
+            <div className="checklist-done-banner-summary">
+              <span className="checklist-done-banner-count">
+                {checkedCount} item{checkedCount !== 1 ? "s" : ""} selected
+              </span>
+              {checkedSubtotal > 0 && (
+                <span className="checklist-done-banner-subtotal">
+                  Subtotal: <strong>{formatCurrency(checkedSubtotal)}</strong>
+                  {unpricedCount > 0 && (
+                    <span className="checklist-done-banner-unpriced">
+                      {" "}(+{unpricedCount} without price)
+                    </span>
+                  )}
+                </span>
+              )}
+              {checkedSubtotal === 0 && unpricedCount > 0 && (
+                <span className="checklist-done-banner-subtotal">
+                  <span className="checklist-done-banner-unpriced">
+                    No pricing on selected items
+                  </span>
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="button button-primary button-sm"
+              onClick={handlePlaceOrder}
+            >
+              Mark as Ordered
+            </button>
+          </div>
+          <p className="checklist-done-banner-hint">
+            Unchecked items will stay in your reorder list.
+          </p>
+        </div>
+      )}
+
       <div className="checklist-items checklist-items--inline">
+        {/* Column header. The first cell carries a check-all checkbox that
+         *  toggles every item in this vendor at once. Three visual states:
+         *  empty → indeterminate (some checked) → all-checked. Click cycles
+         *  empty/partial → all-checked → cleared. */}
         <div className="checklist-items-header">
-          <div className="checklist-cell checklist-cell--checkbox" />
+          <div className="checklist-cell checklist-cell--checkbox">
+            {lines.length > 0 && (() => {
+              const allKeys = lines
+                .map((l) => keyForRowId(l.rowId))
+                .filter((k): k is string => k !== null);
+              const allChecked = checkedCount === lines.length;
+              const someChecked = checkedCount > 0 && !allChecked;
+              return (
+                <button
+                  type="button"
+                  className={`checklist-checkbox checklist-checkbox--checkall${
+                    allChecked ? " checked" : someChecked ? " indeterminate" : ""
+                  }`}
+                  onClick={() => onSetManyChecked(allKeys, !allChecked)}
+                  aria-label={allChecked ? "Uncheck all items" : "Check all items"}
+                  aria-pressed={allChecked}
+                >
+                  {allChecked ? <Check size={14} /> : someChecked ? <Minus size={14} /> : null}
+                </button>
+              );
+            })()}
+          </div>
           <div className="checklist-cell">Item</div>
           <div className="checklist-cell">Qty</div>
         </div>
@@ -953,7 +1071,7 @@ function VendorChecklistCard({
                   <a
                     className="checklist-item-name"
                     href={normalizeLinkValue(line.link)}
-                    target={`wickops-vendor-${group.domain}`}
+                    target={`wickops-vendor-${group.label}`}
                     rel="noopener noreferrer"
                     onClick={(e) => {
                       // iOS Safari ignores <a target="name"> reuse and opens
@@ -969,13 +1087,13 @@ function VendorChecklistCard({
                         e.preventDefault();
                         window.open(
                           normalizeLinkValue(line.link),
-                          `wickops-vendor-${group.domain}`,
+                          `wickops-vendor-${group.label}`,
                           "noopener",
                         );
                       }
                       markLineChecked(line.rowId);
                     }}
-                    title={`Open ${line.name} on ${group.domain}`}
+                    title={`Open ${line.name} on ${group.label}`}
                   >
                     {line.name}
                     <ExternalLink size={12} />
@@ -1039,108 +1157,646 @@ function VendorChecklistCard({
           );
         })}
       </div>
+    </div>
+  );
+}
 
-      {checkedCount > 0 && (
-        <div className="checklist-done-banner checklist-done-banner--inline">
-          <div className="checklist-done-banner-row">
-            <div className="checklist-done-banner-summary">
-              <span className="checklist-done-banner-count">
-                {checkedCount} item{checkedCount !== 1 ? "s" : ""} selected
-              </span>
-              {checkedSubtotal > 0 && (
-                <span className="checklist-done-banner-subtotal">
-                  Subtotal: <strong>{formatCurrency(checkedSubtotal)}</strong>
-                  {unpricedCount > 0 && (
-                    <span className="checklist-done-banner-unpriced">
-                      {" "}(+{unpricedCount} without price)
-                    </span>
-                  )}
-                </span>
-              )}
-              {checkedSubtotal === 0 && unpricedCount > 0 && (
-                <span className="checklist-done-banner-subtotal">
-                  <span className="checklist-done-banner-unpriced">
-                    No pricing on selected items
-                  </span>
-                </span>
-              )}
-            </div>
-            <button
-              type="button"
-              className="button button-primary button-sm"
-              onClick={handlePlaceOrder}
+// ── VendorSelect ─────────────────────────────────────────────────────────────
+
+/** Domain → vendor-name suggestion. Strips "www." and the TLD, then
+ *  TitleCases the first character. boundtree.com → BoundTree (the user can
+ *  edit before saving; this is a soft suggestion only). */
+const suggestVendorNameFromUrl = (url: string): string => {
+  const domain = getVendorDomain(url);
+  if (!domain) return "";
+  const stem = domain.replace(/^www\./, "").split(".")[0] ?? "";
+  if (!stem) return "";
+  return stem.charAt(0).toUpperCase() + stem.slice(1);
+};
+
+/** Vendor picker used in the Missing Info card (per-row + bulk toolbar) and
+ *  the compose panel. Same autocomplete pattern as the inventory item
+ *  picker: type-ahead filter with a dropdown of existing vendors, plus a
+ *  "+ Add 'X' as new vendor" sentinel when the typed text doesn't match.
+ *  Selecting freeform calls onAddVendor (which the parent uses to call the
+ *  vendor registry API) then onChange with the new name.
+ *
+ *  When `value` is set, the input renders as readonly showing the selected
+ *  vendor with an × clear button — mirrors the Log Usage item autocomplete. */
+export function VendorSelect({
+  value,
+  availableVendors,
+  onChange,
+  onAddVendor,
+  disabled,
+  className,
+  ariaLabel,
+  placeholder,
+}: {
+  value: string;
+  availableVendors: string[];
+  onChange: (next: string) => void;
+  onAddVendor?: (name: string) => Promise<void>;
+  /** No longer used — kept in the signature for back-compat with call sites
+   *  that pass `suggestedName`. The autocomplete now lets users type any
+   *  starting text directly. */
+  suggestedName?: string;
+  disabled?: boolean;
+  className?: string;
+  ariaLabel?: string;
+  placeholder?: string;
+}) {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const [adding, setAdding] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  type VendorOption =
+    | { kind: "existing"; key: string; name: string }
+    | { kind: "freeform"; key: string; text: string };
+
+  const options = useMemo<VendorOption[]>(() => {
+    const q = search.trim().toLowerCase();
+    const matches = availableVendors
+      .filter((v) => !q || v.toLowerCase().includes(q))
+      .slice()
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    const out: VendorOption[] = matches.map((v) => ({ kind: "existing", key: `existing:${v}`, name: v }));
+    if (q && onAddVendor) {
+      const exact = availableVendors.some((v) => v.toLowerCase() === q);
+      if (!exact) out.push({ kind: "freeform", key: `freeform:${q}`, text: search.trim() });
+    }
+    return out;
+  }, [availableVendors, search, onAddVendor]);
+
+  useEffect(() => { setHighlightIndex(-1); }, [options.length, open]);
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (highlightIndex >= 0 && listRef.current) {
+      const el = listRef.current.children[highlightIndex] as HTMLElement | undefined;
+      el?.scrollIntoView({ block: "nearest" });
+    }
+  }, [highlightIndex]);
+
+  const selectExisting = (name: string) => {
+    onChange(name);
+    setSearch("");
+    setOpen(false);
+    inputRef.current?.blur();
+  };
+
+  const selectFreeform = async (name: string) => {
+    if (!onAddVendor) return;
+    setAdding(true);
+    try {
+      await onAddVendor(name);
+      onChange(name);
+      setSearch("");
+      setOpen(false);
+      inputRef.current?.blur();
+    } catch (err) {
+      // Surface error inline by leaving the input populated; the user can
+      // retry. We don't show an inline error message — keeps the UI tight.
+      console.error("Failed to add vendor", err);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const selectOption = (opt: VendorOption) => {
+    if (opt.kind === "existing") selectExisting(opt.name);
+    else void selectFreeform(opt.text);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "Enter") { setOpen(true); e.preventDefault(); }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.min(i + 1, options.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const target = highlightIndex >= 0 ? options[highlightIndex] : options[0];
+      if (target) selectOption(target);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  };
+
+  const showDropdown = open && !value && options.length > 0;
+  const isDisabled = disabled || adding;
+  const wrapClass = `usage-autocomplete vendor-autocomplete${className ? ` ${className}` : ""}`;
+
+  return (
+    <div className={wrapClass} ref={wrapRef}>
+      <div className="usage-autocomplete-input-wrap">
+        <input
+          ref={inputRef}
+          type="text"
+          className="usage-autocomplete-input"
+          value={value || search}
+          onChange={(e) => {
+            if (value) {
+              // Editing while a vendor is set clears the selection so the
+              // user can pick (or add) a new one without an extra step.
+              onChange("");
+            }
+            setSearch(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => { if (!value) setOpen(true); }}
+          onKeyDown={onKeyDown}
+          disabled={isDisabled}
+          placeholder={placeholder ?? "Choose a vendor"}
+          readOnly={!!value}
+          role="combobox"
+          aria-expanded={showDropdown}
+          aria-autocomplete="list"
+          aria-label={ariaLabel}
+          autoComplete="off"
+        />
+        {(value || search) && (
+          <button
+            type="button"
+            className="usage-autocomplete-clear"
+            onClick={() => {
+              onChange("");
+              setSearch("");
+              inputRef.current?.focus();
+              setOpen(true);
+            }}
+            disabled={isDisabled}
+            aria-label="Clear vendor"
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {showDropdown && (
+        <ul className="usage-autocomplete-list" ref={listRef} role="listbox">
+          {options.map((opt, i) => (
+            <li
+              key={opt.key}
+              className={`usage-autocomplete-option${i === highlightIndex ? " usage-autocomplete-option--hl" : ""}${opt.kind === "freeform" ? " usage-autocomplete-option--freeform" : ""}`}
+              role="option"
+              aria-selected={i === highlightIndex}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => selectOption(opt)}
             >
-              Mark as Ordered
-            </button>
-          </div>
-          <p className="checklist-done-banner-hint">
-            Unchecked items will stay in your reorder list.
-          </p>
-        </div>
+              {opt.kind === "existing" ? (
+                <span className="usage-autocomplete-option-name">{opt.name}</span>
+              ) : (
+                <span className="usage-autocomplete-option-name">+ Add "{opt.text}" as new vendor</span>
+              )}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
-// ── NoLinkCard ───────────────────────────────────────────────────────────────
+// ── VendorSummaryCard ────────────────────────────────────────────────────────
 
-function NoLinkCard({
+/** Vendor card for the Reorder dashboard: a tight table of low/expired items
+ *  with each name linked to the product URL (so users can open the vendor
+ *  page in a click), plus a single "Order →" CTA in the header that hands
+ *  off to the compose panel pre-filled. The card is read-only — quantity
+ *  and price editing live in the compose panel. */
+function VendorSummaryCard({
+  group,
+  onOrder,
+}: {
+  group: VendorGroup;
+  onOrder: () => void;
+}) {
+  const itemCount = group.items.length;
+  const estimatedTotal = group.items.reduce((sum, item) => {
+    if (item.unitCost === null) return sum;
+    const qtyUnits = item.packSize > 0 ? item.suggestedQty * item.packSize : item.suggestedQty;
+    return sum + item.unitCost * qtyUnits;
+  }, 0);
+
+  // Stable target name so multiple link clicks within the same vendor
+  // funnel into one tab (matches the prior VendorChecklistCard behavior).
+  const tabTarget = `wickops-vendor-${group.label}`;
+
+  return (
+    <div className="vendor-summary-card reorder-vendor-card app-card">
+      <div className="vendor-summary-header">
+        <div className="vendor-summary-meta">
+          <h4 className="vendor-summary-name">{group.label}</h4>
+          <span className="vendor-summary-sub">
+            {itemCount} item{itemCount !== 1 ? "s" : ""}
+            {estimatedTotal > 0 ? (
+              <>
+                {" · "}
+                <span className="vendor-summary-estimate">
+                  Est. <strong>{formatCurrency(estimatedTotal)}</strong>
+                </span>
+              </>
+            ) : null}
+          </span>
+        </div>
+        <button
+          type="button"
+          className="button button-primary button-sm vendor-summary-order"
+          onClick={onOrder}
+        >
+          Order →
+        </button>
+      </div>
+
+      <div className="checklist-items checklist-items--inline vendor-summary-list">
+        <div className="checklist-items-header vendor-summary-row">
+          <div className="checklist-cell">Item</div>
+          <div className="checklist-cell vendor-summary-cell--meta">Suggested</div>
+        </div>
+        {group.items.map((item) => {
+          const lowLabel = item.minQuantity > 0
+            ? `Low: ${item.activeQty}/${item.minQuantity}`
+            : null;
+          const isPack = item.packSize > 0;
+          const qtyUnits = isPack ? item.suggestedQty * item.packSize : item.suggestedQty;
+          const lineEst = item.unitCost !== null ? item.unitCost * qtyUnits : null;
+          const qtyLabel = isPack
+            ? `${item.suggestedQty} box${item.suggestedQty !== 1 ? "es" : ""} (${qtyUnits})`
+            : `${item.suggestedQty}`;
+          const linkHref = item.reorderLink ? normalizeLinkValue(item.reorderLink) : "";
+          return (
+            <div key={item.row.id} className="checklist-item vendor-summary-row">
+              <div className="checklist-cell">
+                <div className="checklist-item-info">
+                  {linkHref ? (
+                    <a
+                      className="checklist-item-name"
+                      href={linkHref}
+                      target={tabTarget}
+                      rel="noopener noreferrer"
+                      onClick={(e) => {
+                        // iOS Safari ignores <a target="name"> reuse and
+                        // opens a fresh tab per click. Force-funnel into
+                        // one tab via window.open with the same target —
+                        // works on desktop too. Modifier keys / middle-
+                        // click left alone for power users.
+                        if (!e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                          e.preventDefault();
+                          window.open(linkHref, tabTarget, "noopener");
+                        }
+                      }}
+                      title={`Open ${item.itemName} on ${group.label}`}
+                    >
+                      {item.itemName}
+                      <ExternalLink size={12} />
+                    </a>
+                  ) : (
+                    <span className="checklist-item-name checklist-item-name--static">
+                      {item.itemName}
+                    </span>
+                  )}
+                  {lowLabel ? (
+                    <span className="reorder-item-status reorder-status-lowStock">
+                      {lowLabel}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <div className="checklist-cell vendor-summary-cell--meta">
+                <span className="vendor-summary-qty">{qtyLabel}</span>
+                {lineEst !== null ? (
+                  <span className="vendor-summary-line-cost">
+                    {formatCurrency(lineEst)}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── MissingInfoCard ──────────────────────────────────────────────────────────
+
+/** Per-row pending price inputs. Vendor saves on selection (no draft needed
+ *  — single click is intentional). Price fields (unit cost OR pack
+ *  size + pack cost depending on the row's mode) are freeform, so we hold
+ *  drafts for them. URL isn't collected here — it's not gating and lives on
+ *  the inventory grid. */
+type MissingInfoDrafts = {
+  unitCost?: string;
+  packSize?: string;
+  packCost?: string;
+};
+
+/** Sticks together items that aren't ready to reorder yet — they're missing
+ *  a vendor, a price, or both. Each row collects exactly those two gating
+ *  fields; everything else (URL, pack size/cost) is editable from the
+ *  inventory grid. Vendor auto-saves on selection; unit cost auto-saves on
+ *  blur. Items leave the card as soon as vendor AND price are set. */
+function MissingInfoCard({
   items,
-  onSaveReorderLink,
+  availableVendors,
+  onAddVendor,
+  onSaveItemFields,
   onRemoveExtra,
 }: {
   items: ReorderItem[];
-  onSaveReorderLink?: (rowIds: string[], link: string) => Promise<void> | void;
+  availableVendors: string[];
+  onAddVendor?: (name: string) => Promise<void>;
+  onSaveItemFields?: (rowIds: string[], patch: Record<string, string | number | boolean | null>) => Promise<void> | void;
   onRemoveExtra?: (rowId: string) => void;
 }) {
-  const [linkInputs, setLinkInputs] = useState<Record<string, string>>({});
-  const [savingId, setSavingId] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, MissingInfoDrafts>>({});
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  // Per-row pricing mode. Defaults derive from existing row data: any row
+  // with a packSize or packCost stored opens in "box" mode so the user sees
+  // the inputs they'll actually edit. Toggling here only affects the input
+  // shown; saving is what writes the corresponding fields to the row.
+  const [priceModeOverrides, setPriceModeOverrides] = useState<Record<string, "unit" | "box">>({});
+  const priceModeFor = (item: ReorderItem): "unit" | "box" => {
+    const override = priceModeOverrides[item.row.id];
+    if (override) return override;
+    const packSize = Number(item.row.values.packSize);
+    const packCost = Number(item.row.values.packCost);
+    if ((Number.isFinite(packSize) && packSize > 0) || (Number.isFinite(packCost) && packCost > 0)) {
+      return "box";
+    }
+    return "unit";
+  };
+  const setPriceMode = (rowId: string, mode: "unit" | "box") => {
+    setPriceModeOverrides((prev) => ({ ...prev, [rowId]: mode }));
+  };
+  // Multi-select state for bulk vendor assignment. Keyed by row.id so the
+  // checkbox stays paired with the rendered row even as the list re-orders.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkVendor, setBulkVendor] = useState("");
+  const [bulkSaving, setBulkSaving] = useState(false);
 
-  const handleSave = async (item: ReorderItem) => {
-    const value = (linkInputs[item.row.id] ?? "").trim();
-    if (!value || !onSaveReorderLink) return;
-    setSavingId(item.row.id);
-    try {
-      await onSaveReorderLink(item.allRowIds, normalizeLinkValue(value));
-      setLinkInputs((prev) => {
-        const next = { ...prev };
-        delete next[item.row.id];
+  const visibleIds = items.map((i) => i.row.id);
+  // Trim selection set to currently visible rows so a row that left the card
+  // (e.g. its vendor just got set, removing it from "missing") doesn't keep
+  // its checkbox state in limbo. Also lets the master checkbox reflect what's
+  // actually on screen.
+  const effectiveSelectedIds = useMemo(
+    () => new Set(visibleIds.filter((id) => selectedIds.has(id))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, selectedIds],
+  );
+  const allSelected = visibleIds.length > 0 && effectiveSelectedIds.size === visibleIds.length;
+  const someSelected = effectiveSelectedIds.size > 0 && !allSelected;
+
+  const toggleOne = (rowId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  };
+  const toggleAll = () => {
+    setSelectedIds((prev) => {
+      if (allSelected) {
+        // Deselecting "all" clears just the visible ids, not any stragglers.
+        const next = new Set(prev);
+        for (const id of visibleIds) next.delete(id);
         return next;
-      });
+      }
+      const next = new Set(prev);
+      for (const id of visibleIds) next.add(id);
+      return next;
+    });
+  };
+
+  // Suggest a vendor name for the bulk-add input by looking at the most
+  // common link domain across selected items. Falls back to whatever the
+  // first selected item has when domains differ. Soft suggestion only.
+  const bulkSuggestion = useMemo(() => {
+    const selected = items.filter((i) => effectiveSelectedIds.has(i.row.id));
+    if (selected.length === 0) return "";
+    const counts = new Map<string, number>();
+    for (const item of selected) {
+      const name = suggestVendorNameFromUrl(item.reorderLink);
+      if (!name) continue;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    let best = "";
+    let bestCount = 0;
+    for (const [name, count] of counts) {
+      if (count > bestCount) { best = name; bestCount = count; }
+    }
+    return best;
+  }, [items, effectiveSelectedIds]);
+
+  const handleBulkApply = async () => {
+    if (!onSaveItemFields || !bulkVendor.trim()) return;
+    const selectedItems = items.filter((i) => effectiveSelectedIds.has(i.row.id));
+    if (selectedItems.length === 0) return;
+    const allRowIds = selectedItems.flatMap((i) => i.allRowIds);
+    setBulkSaving(true);
+    try {
+      await onSaveItemFields(allRowIds, { vendor: bulkVendor.trim() });
+      setSelectedIds(new Set());
+      setBulkVendor("");
     } finally {
-      setSavingId(null);
+      setBulkSaving(false);
     }
   };
 
+  const updateDraft = (rowId: string, patch: Partial<MissingInfoDrafts>) =>
+    setDrafts((prev) => ({ ...prev, [rowId]: { ...(prev[rowId] ?? {}), ...patch } }));
+
+  const rawCurrency = (raw: unknown): string => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? formatCurrency(n) : "";
+  };
+  const rawNumber = (raw: unknown): string => {
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? String(n) : "";
+  };
+
+  const markSaving = (rowId: string, on: boolean) => {
+    setSavingIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(rowId);
+      else next.delete(rowId);
+      return next;
+    });
+  };
+
+  const savePatch = async (item: ReorderItem, patch: Record<string, string | number | boolean | null>) => {
+    if (!onSaveItemFields || Object.keys(patch).length === 0) return;
+    markSaving(item.row.id, true);
+    try {
+      await onSaveItemFields(item.allRowIds, patch);
+    } finally {
+      markSaving(item.row.id, false);
+    }
+  };
+
+  // Vendor saves immediately when the user picks one — selection is a
+  // deliberate one-click action, no draft needed.
+  const handleVendorChange = async (item: ReorderItem, vendor: string) => {
+    await savePatch(item, { vendor });
+  };
+
+  // Unit cost saves on blur. Empty input = no change (don't clobber existing
+  // values). Non-numeric input is ignored.
+  const handlePriceBlur = async (item: ReorderItem) => {
+    const raw = (drafts[item.row.id]?.unitCost ?? "").trim();
+    if (!raw) return;
+    const parsed = parseCurrency(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    await savePatch(item, { unitCost: parsed });
+    setDrafts((prev) => ({
+      ...prev,
+      [item.row.id]: { ...(prev[item.row.id] ?? {}), unitCost: formatCurrency(parsed) },
+    }));
+  };
+
+  // Pack size / pack cost auto-save on blur (box mode). Each saves
+  // independently so the user can fill them in any order; the row exits
+  // Missing Info once both are present (derived unitCost > 0).
+  const handlePackSizeBlur = async (item: ReorderItem) => {
+    const raw = (drafts[item.row.id]?.packSize ?? "").trim();
+    if (!raw) return;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const floored = Math.floor(parsed);
+    await savePatch(item, { packSize: floored });
+    setDrafts((prev) => ({
+      ...prev,
+      [item.row.id]: { ...(prev[item.row.id] ?? {}), packSize: String(floored) },
+    }));
+  };
+
+  const handlePackCostBlur = async (item: ReorderItem) => {
+    const raw = (drafts[item.row.id]?.packCost ?? "").trim();
+    if (!raw) return;
+    const parsed = parseCurrency(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    await savePatch(item, { packCost: parsed });
+    setDrafts((prev) => ({
+      ...prev,
+      [item.row.id]: { ...(prev[item.row.id] ?? {}), packCost: formatCurrency(parsed) },
+    }));
+  };
+
   return (
-    <div className="reorder-vendor-card reorder-nolink-card app-card">
+    <div className="reorder-vendor-card reorder-missing-card app-card">
       <div className="reorder-vendor-header">
         <div className="reorder-vendor-info">
           <Link2Off size={18} />
-          <h4 className="reorder-vendor-name">No Reorder Link</h4>
+          <h4 className="reorder-vendor-name">Missing Information</h4>
           <span className="reorder-vendor-count">
             {items.length} item{items.length !== 1 ? "s" : ""}
           </span>
         </div>
       </div>
       <p className="reorder-nolink-hint">
-        Add a vendor link below so you can reorder this item next time.
+        These items need a vendor before they can be reordered. Price is
+        optional here — you'll set it when receiving the order. Use the
+        checkboxes to bulk-assign a vendor, or fill fields per row.
       </p>
-      <div className="reorder-nolink-list">
-        <div className="reorder-nolink-header">
+
+      {effectiveSelectedIds.size > 0 ? (
+        <div className="reorder-bulk-toolbar">
+          <span className="reorder-bulk-count">
+            {effectiveSelectedIds.size} selected
+          </span>
+          <span className="reorder-bulk-label">Set vendor:</span>
+          <VendorSelect
+            value={bulkVendor}
+            availableVendors={availableVendors}
+            onChange={setBulkVendor}
+            onAddVendor={onAddVendor}
+            suggestedName={bulkSuggestion}
+            disabled={bulkSaving}
+            className="reorder-bulk-select"
+            ariaLabel="Bulk vendor"
+          />
+          <button
+            type="button"
+            className="button button-primary button-sm"
+            onClick={() => void handleBulkApply()}
+            disabled={bulkSaving || !bulkVendor.trim()}
+          >
+            {bulkSaving ? "Applying…" : "Apply"}
+          </button>
+          <button
+            type="button"
+            className="button button-ghost button-sm"
+            onClick={() => setSelectedIds(new Set())}
+            disabled={bulkSaving}
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
+
+      <div className="checklist-items checklist-items--inline reorder-missing-grid">
+        <div className="checklist-items-header reorder-missing-row">
+          <div className="checklist-cell checklist-cell--checkbox">
+            <input
+              type="checkbox"
+              className="reorder-missing-row-checkbox"
+              checked={allSelected}
+              ref={(el) => { if (el) el.indeterminate = someSelected; }}
+              onChange={toggleAll}
+              disabled={items.length === 0}
+              aria-label="Select all missing-info items"
+            />
+          </div>
           <div className="checklist-cell">Item</div>
-          <div className="checklist-cell">Vendor link</div>
-          <div className="checklist-cell" />
+          <div className="checklist-cell">Vendor</div>
+          <div className="checklist-cell">Price</div>
         </div>
         {items.map((item) => {
-          const value = linkInputs[item.row.id] ?? "";
-          const saving = savingId === item.row.id;
+          const draft = drafts[item.row.id] ?? {};
+          const vendorValue = item.vendor ?? "";
+          const unitCostValue = draft.unitCost ?? rawCurrency(item.row.values.unitCost);
+          const packSizeValue = draft.packSize ?? rawNumber(item.row.values.packSize);
+          const packCostValue = draft.packCost ?? rawCurrency(item.row.values.packCost);
+          const saving = savingIds.has(item.row.id);
+          const missingVendor = !item.vendor;
+          const mode = priceModeFor(item);
           return (
-            <div key={item.row.id} className={`reorder-nolink-row${item.isExtra ? " reorder-nolink-row--extra" : ""}`}>
+            <div
+              key={item.row.id}
+              className={`checklist-item checklist-item--form reorder-missing-row${item.isExtra ? " reorder-missing-row--extra" : ""}`}
+            >
+              <div className="checklist-cell checklist-cell--checkbox">
+                <input
+                  type="checkbox"
+                  className="reorder-missing-row-checkbox"
+                  checked={effectiveSelectedIds.has(item.row.id)}
+                  onChange={() => toggleOne(item.row.id)}
+                  aria-label={`Select ${item.itemName}`}
+                />
+              </div>
               <div className="checklist-cell">
-                <div className="reorder-nolink-name">
-                  <span className="reorder-item-name">{item.itemName}</span>
-                  <span className="reorder-item-badges">
+                <div className="checklist-item-info">
+                  <span className="checklist-item-name checklist-item-name--static">{item.itemName}</span>
+                  <span className="checklist-item-detail">
                     {item.isExtra ? (
                       onRemoveExtra ? (
                         <button
@@ -1154,50 +1810,111 @@ function NoLinkCard({
                           <X size={11} />
                         </button>
                       ) : (
-                        <span className="reorder-item-status reorder-status-extra">
-                          Added
-                        </span>
+                        <span className="reorder-item-status reorder-status-extra">Added</span>
                       )
                     ) : (
                       <span className="reorder-item-status reorder-status-lowStock">
                         Low: {item.activeQty}/{item.minQuantity}
                       </span>
                     )}
-                    {item.unitCost !== null && (
-                      <span className="reorder-item-unitcost">
-                        {item.packSize > 0
-                          ? `${formatCurrency(item.unitCost * item.packSize)}/box`
-                          : `${formatCurrency(item.unitCost)}/unit`}
-                      </span>
-                    )}
                   </span>
                 </div>
               </div>
               <div className="checklist-cell">
-                <input
-                  className="field reorder-nolink-input"
-                  placeholder="https://vendor.com/product..."
-                  value={value}
-                  onChange={(e) =>
-                    setLinkInputs((prev) => ({ ...prev, [item.row.id]: e.target.value }))
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleSave(item);
-                  }}
-                  disabled={!onSaveReorderLink || saving}
+                <VendorSelect
+                  value={vendorValue}
+                  availableVendors={availableVendors}
+                  onChange={(next) => void handleVendorChange(item, next)}
+                  onAddVendor={onAddVendor}
+                  suggestedName={suggestVendorNameFromUrl(item.reorderLink)}
+                  disabled={!onSaveItemFields || saving}
+                  className={missingVendor ? "field--missing" : ""}
+                  ariaLabel="Vendor"
                 />
               </div>
-              <div className="checklist-cell">
-                <button
-                  type="button"
-                  className="button button-primary button-sm"
-                  onClick={() => handleSave(item)}
-                  disabled={!value.trim() || !onSaveReorderLink || saving}
-                  title="Save link"
+              <div className="checklist-cell reorder-missing-price-cell">
+                <div
+                  className="reorder-price-mode"
+                  role="tablist"
+                  aria-label="Pricing mode"
                 >
-                  <Save size={13} />
-                  Save
-                </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === "unit"}
+                    className={`reorder-price-mode-btn${mode === "unit" ? " active" : ""}`}
+                    onClick={() => setPriceMode(item.row.id, "unit")}
+                    disabled={saving}
+                  >
+                    Unit
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={mode === "box"}
+                    className={`reorder-price-mode-btn${mode === "box" ? " active" : ""}`}
+                    onClick={() => setPriceMode(item.row.id, "box")}
+                    disabled={saving}
+                  >
+                    Box
+                  </button>
+                </div>
+                {mode === "unit" ? (
+                  <input
+                    className="field reorder-missing-input"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="$ / unit"
+                    aria-label="Unit cost"
+                    value={unitCostValue}
+                    onChange={(e) => updateDraft(item.row.id, { unitCost: e.target.value })}
+                    onBlur={() => void handlePriceBlur(item)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        void handlePriceBlur(item);
+                      }
+                    }}
+                    disabled={!onSaveItemFields || saving}
+                  />
+                ) : (
+                  <div className="reorder-missing-box-inputs">
+                    <input
+                      className="field reorder-missing-input"
+                      type="number"
+                      min="1"
+                      placeholder="Pack size"
+                      aria-label="Pack size (units per box)"
+                      value={packSizeValue}
+                      onChange={(e) => updateDraft(item.row.id, { packSize: e.target.value })}
+                      onBlur={() => void handlePackSizeBlur(item)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handlePackSizeBlur(item);
+                        }
+                      }}
+                      disabled={!onSaveItemFields || saving}
+                    />
+                    <input
+                      className="field reorder-missing-input"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="$ / box"
+                      aria-label="Pack cost"
+                      value={packCostValue}
+                      onChange={(e) => updateDraft(item.row.id, { packCost: e.target.value })}
+                      onBlur={() => void handlePackCostBlur(item)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handlePackCostBlur(item);
+                        }
+                      }}
+                      disabled={!onSaveItemFields || saving}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -1211,13 +1928,13 @@ function NoLinkCard({
 
 export function ReorderTab({
   rows,
-  availableLocations = [],
-  selectedLocation = null,
-  onSaveReorderLink,
+  availableVendors = [],
+  onAddVendor,
+  onSaveItemFields,
+  onCountChange,
   onMarkOrdered,
-  onAddItem,
 }: ReorderTabProps) {
-  const { vendorGroups, noLinkItems } = useMemo(() => {
+  const { vendorGroups, incompleteItems } = useMemo(() => {
     // Aggregate rows by itemName + location into one entry per item
     type ItemAgg = {
       rows: InventoryRow[];
@@ -1226,6 +1943,7 @@ export function ReorderTab({
       minQuantity: number;
       hasMin: boolean;
       reorderLink: string;
+      vendor: string;
       latestOrderedAt: string | null;
     };
 
@@ -1240,8 +1958,9 @@ export function ReorderTab({
 
       const quantity = Number.isFinite(Number(row.values.quantity)) ? Number(row.values.quantity) : 0;
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
-      const isExpired = daysUntil !== null && daysUntil < 0;
+      const isExpired = daysUntil !== null && daysUntil <= 0;
       const rowLink = normalizeLinkValue(String(row.values.reorderLink ?? "").trim());
+      const rowVendor = String(row.values.vendor ?? "").trim();
       const rowOrderedAt = row.values.orderedAt ? String(row.values.orderedAt) : null;
 
       const existing = groupMap.get(key);
@@ -1262,6 +1981,7 @@ export function ReorderTab({
           minQuantity: hasMin ? minQuantity : 0,
           hasMin,
           reorderLink: rowLink,
+          vendor: rowVendor,
           latestOrderedAt: rowOrderedAt,
         });
       } else {
@@ -1288,6 +2008,10 @@ export function ReorderTab({
         if (!existing.reorderLink && rowLink) {
           existing.reorderLink = rowLink;
         }
+        // Prefer any row with a vendor assigned
+        if (!existing.vendor && rowVendor) {
+          existing.vendor = rowVendor;
+        }
         // Track most recent orderedAt across all rows
         if (rowOrderedAt && (!existing.latestOrderedAt || rowOrderedAt > existing.latestOrderedAt)) {
           existing.latestOrderedAt = rowOrderedAt;
@@ -1296,7 +2020,7 @@ export function ReorderTab({
     }
 
     const reorderItems: ReorderItem[] = [];
-    const noLink: ReorderItem[] = [];
+    const incomplete: ReorderItem[] = [];
 
     for (const [key, agg] of groupMap.entries()) {
       // Only show if actively low — expired qty doesn't count toward stock
@@ -1309,7 +2033,7 @@ export function ReorderTab({
       // Representative row: prefer non-expired row with lowest active qty
       const activeRows = agg.rows.filter((r) => {
         const d = getDaysUntilExpiration(r.values.expirationDate);
-        return d === null || d >= 0;
+        return d === null || d > 0;
       });
       const candidateRows = activeRows.length > 0 ? activeRows : agg.rows;
       const repRow = candidateRows.reduce((best, r) =>
@@ -1342,6 +2066,7 @@ export function ReorderTab({
         allRowIds: agg.rows.map((r) => r.id),
         itemName,
         reorderLink: agg.reorderLink,
+        vendor: agg.vendor,
         activeQty: agg.activeQty,
         expiredQty: agg.expiredQty,
         minQuantity: agg.minQuantity,
@@ -1352,20 +2077,25 @@ export function ReorderTab({
         packSize,
       };
 
-      if (agg.reorderLink) {
+      // Vendor is the only hard requirement to land in a vendor card —
+      // price is collected when the order is received (the receive flow
+      // prompts for unit cost), so items without a price can still be
+      // ordered. Items without a vendor go to the Missing Information card
+      // because we can't group them.
+      if (item.vendor) {
         reorderItems.push(item);
       } else {
-        noLink.push(item);
+        incomplete.push(item);
       }
     }
 
-    // Group reorder items by vendor domain
-    const domainMap = new Map<string, ReorderItem[]>();
+    // Group reorder items by vendor name. Items reach this point only when
+    // vendor is set (the gate above sends unassigned items to Missing Info).
+    const groupedByKey = new Map<string, { label: string; items: ReorderItem[] }>();
     for (const item of reorderItems) {
-      const domain = getVendorDomain(item.reorderLink);
-      const existing = domainMap.get(domain);
-      if (existing) existing.push(item);
-      else domainMap.set(domain, [item]);
+      const existing = groupedByKey.get(item.vendor);
+      if (existing) existing.items.push(item);
+      else groupedByKey.set(item.vendor, { label: item.vendor, items: [item] });
     }
 
     // Alphabetize items within each vendor group so the reorder checklist has
@@ -1374,17 +2104,15 @@ export function ReorderTab({
     const nameCompare = (a: ReorderItem, b: ReorderItem) =>
       a.itemName.localeCompare(b.itemName, undefined, { sensitivity: "base" });
 
-    const groups: VendorGroup[] = Array.from(domainMap.entries())
-      .map(([domain, items]) => ({ domain, items: [...items].sort(nameCompare) }))
+    const groups: VendorGroup[] = Array.from(groupedByKey.values())
+      .map((g) => ({ label: g.label, items: [...g.items].sort(nameCompare) }))
       .sort((a, b) => b.items.length - a.items.length);
 
-    noLink.sort(nameCompare);
+    incomplete.sort(nameCompare);
 
-    return { vendorGroups: groups, noLinkItems: noLink };
+    return { vendorGroups: groups, incompleteItems: incomplete };
   }, [rows]);
 
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [showOrderBuilder, setShowOrderBuilder] = useState(false);
   // Rows the user has explicitly picked for this reorder via the panel (not
   // low-stock). Stored as rowId — we look up the live row from inventoryRows
   // during rendering so stale pick state doesn't drift if the row changes.
@@ -1394,8 +2122,8 @@ export function ReorderTab({
 
   // Build a ReorderItem for each extra-picked row, using the same shape and
   // unit-cost derivation as low-stock items. Items already represented in
-  // vendorGroups/noLinkItems (user picked something that became low) are
-  // skipped so we don't render duplicates.
+  // vendorGroups / incompleteItems (user picked something that became low)
+  // are skipped so we don't render duplicates.
   const extraPickedItems = useMemo<ReorderItem[]>(() => {
     if (extraPickRowIds.length === 0) return [];
     const alreadyCoveredRowIds = new Set<string>();
@@ -1404,7 +2132,7 @@ export function ReorderTab({
         item.allRowIds.forEach((id) => alreadyCoveredRowIds.add(id));
       }
     }
-    for (const item of noLinkItems) {
+    for (const item of incompleteItems) {
       item.allRowIds.forEach((id) => alreadyCoveredRowIds.add(id));
     }
     // Group picked rows by itemName + location so a multi-lot item (e.g. one
@@ -1415,6 +2143,7 @@ export function ReorderTab({
       itemName: string;
       location: string;
       reorderLink: string;
+      vendor: string;
       minQuantity: number;
       unitCost: number | null;
       packSize: number;
@@ -1428,6 +2157,7 @@ export function ReorderTab({
       const rowLocation = String(row.values.location ?? "").trim();
       const key = `${itemName}\x00${rowLocation}`;
       const rowLink = normalizeLinkValue(String(row.values.reorderLink ?? "").trim());
+      const rowVendor = String(row.values.vendor ?? "").trim();
       const minQuantity = Number(row.values.minQuantity);
       const hasMin = Number.isFinite(minQuantity) && minQuantity > 0;
       const packCost = Number(row.values.packCost);
@@ -1444,6 +2174,7 @@ export function ReorderTab({
       if (existing) {
         existing.rows.push(row);
         if (!existing.reorderLink && rowLink) existing.reorderLink = rowLink;
+        if (!existing.vendor && rowVendor) existing.vendor = rowVendor;
         if (hasMin && minQuantity > existing.minQuantity) existing.minQuantity = minQuantity;
         if (existing.unitCost === null && unitCost !== null) existing.unitCost = unitCost;
         if (existing.packSize === 0 && packSize > 0) existing.packSize = packSize;
@@ -1453,6 +2184,7 @@ export function ReorderTab({
           itemName,
           location: rowLocation,
           reorderLink: rowLink,
+          vendor: rowVendor,
           minQuantity: hasMin ? minQuantity : 0,
           unitCost,
           packSize,
@@ -1464,7 +2196,7 @@ export function ReorderTab({
       // Representative row — prefer a non-expired row with the lowest qty.
       const activeRows = agg.rows.filter((r) => {
         const d = getDaysUntilExpiration(r.values.expirationDate);
-        return d === null || d >= 0;
+        return d === null || d > 0;
       });
       const candidateRows = activeRows.length > 0 ? activeRows : agg.rows;
       const repRow = candidateRows.reduce((best, r) =>
@@ -1473,7 +2205,7 @@ export function ReorderTab({
       const activeQty = agg.rows.reduce((sum, r) => {
         const qty = Number.isFinite(Number(r.values.quantity)) ? Number(r.values.quantity) : 0;
         const d = getDaysUntilExpiration(r.values.expirationDate);
-        const isExpired = d !== null && d < 0;
+        const isExpired = d !== null && d <= 0;
         return isExpired ? sum : sum + qty;
       }, 0);
       out.push({
@@ -1481,6 +2213,7 @@ export function ReorderTab({
         allRowIds: agg.rows.map((r) => r.id),
         itemName: agg.itemName,
         reorderLink: agg.reorderLink,
+        vendor: agg.vendor,
         activeQty,
         expiredQty: 0,
         minQuantity: agg.minQuantity,
@@ -1495,45 +2228,41 @@ export function ReorderTab({
       });
     }
     return out;
-  }, [extraPickRowIds, vendorGroups, noLinkItems, rows]);
+  }, [extraPickRowIds, vendorGroups, incompleteItems, rows]);
 
-  // Merge extra picks into the same vendor-domain grouping as low-stock items.
-  // Items with a reorderLink route to the matching vendor card; items without
-  // one go to the No-Link card (treated just like low-stock unlinked items).
+  // Merge extra picks into the same vendor grouping as low-stock items.
+  // Items with vendor + price route to the matching vendor card; the rest go
+  // to the Missing Information card so the user can fill in what's missing.
   const vendorGroupsWithExtras = useMemo<VendorGroup[]>(() => {
     if (extraPickedItems.length === 0) return vendorGroups;
     const nameCompare = (a: ReorderItem, b: ReorderItem) =>
       a.itemName.localeCompare(b.itemName, undefined, { sensitivity: "base" });
-    // Clone the groups so we don't mutate the original memo result.
     const cloned: VendorGroup[] = vendorGroups.map((g) => ({
-      domain: g.domain,
+      label: g.label,
       items: [...g.items],
     }));
-    const domainIndex = new Map(cloned.map((g, i) => [g.domain, i]));
+    const labelIndex = new Map(cloned.map((g, i) => [g.label, i]));
     for (const item of extraPickedItems) {
-      if (!item.reorderLink) continue; // no-link extras handled below
-      const domain = getVendorDomain(item.reorderLink);
-      const idx = domainIndex.get(domain);
+      if (!item.vendor || item.unitCost === null) continue;
+      const idx = labelIndex.get(item.vendor);
       if (idx === undefined) {
-        domainIndex.set(domain, cloned.length);
-        cloned.push({ domain, items: [item] });
+        labelIndex.set(item.vendor, cloned.length);
+        cloned.push({ label: item.vendor, items: [item] });
       } else {
         cloned[idx].items.push(item);
       }
     }
-    // Re-sort each group so extras slot into alphabetical position instead of
-    // appending at the end of the list.
     for (const g of cloned) g.items.sort(nameCompare);
     return cloned;
   }, [vendorGroups, extraPickedItems]);
 
-  const noLinkItemsWithExtras = useMemo<ReorderItem[]>(() => {
-    const extras = extraPickedItems.filter((i) => !i.reorderLink);
-    if (extras.length === 0) return noLinkItems;
+  const incompleteItemsWithExtras = useMemo<ReorderItem[]>(() => {
+    const extras = extraPickedItems.filter((i) => !i.vendor);
+    if (extras.length === 0) return incompleteItems;
     const nameCompare = (a: ReorderItem, b: ReorderItem) =>
       a.itemName.localeCompare(b.itemName, undefined, { sensitivity: "base" });
-    return [...noLinkItems, ...extras].sort(nameCompare);
-  }, [noLinkItems, extraPickedItems]);
+    return [...incompleteItems, ...extras].sort(nameCompare);
+  }, [incompleteItems, extraPickedItems]);
 
   // Set of row IDs already in the reorder list — used by OrderBuilderPanel to
   // hide already-covered items from search results.
@@ -1544,11 +2273,11 @@ export function ReorderTab({
         item.allRowIds.forEach((id) => set.add(id));
       }
     }
-    for (const item of noLinkItemsWithExtras) {
+    for (const item of incompleteItemsWithExtras) {
       item.allRowIds.forEach((id) => set.add(id));
     }
     return set;
-  }, [vendorGroupsWithExtras, noLinkItemsWithExtras]);
+  }, [vendorGroupsWithExtras, incompleteItemsWithExtras]);
 
   const handlePickExtra = (rowIds: string[]) => {
     setExtraPickRowIds((prev) => {
@@ -1591,6 +2320,19 @@ export function ReorderTab({
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      return next;
+    });
+  };
+
+  // Bulk-set check state across many keys at once. Powers the "check all"
+  // checkbox at the top of each vendor card so we issue a single state
+  // update instead of N toggleCheckedKey calls.
+  const setManyChecked = (keys: string[], checked: boolean) => {
+    if (keys.length === 0) return;
+    setCheckedKeys((prev) => {
+      const next = new Set(prev);
+      if (checked) for (const k of keys) next.add(k);
+      else for (const k of keys) next.delete(k);
       return next;
     });
   };
@@ -1656,12 +2398,24 @@ export function ReorderTab({
     setExtraPickRowIds((prev) => prev.filter((id) => !orderedRowSet.has(id)));
   };
 
-  const totalReorderItems = vendorGroupsWithExtras.reduce((sum, g) => sum + g.items.length, 0);
-  const isEmpty = totalReorderItems === 0 && noLinkItemsWithExtras.length === 0;
+  // Items in vendor groups (have a reorder link, so domain is known).
+  const linkedReorderItems = vendorGroupsWithExtras.reduce((sum, g) => sum + g.items.length, 0);
+  // Total reorderable items = vendor-grouped + items still missing info.
+  // Both are shown to the user, so the count badge reflects everything.
+  const totalReorderItems = linkedReorderItems + incompleteItemsWithExtras.length;
+  const isEmpty = totalReorderItems === 0;
+
+  // Surface the count to the Orders page so the tab badge stays in sync.
+  // Effect (rather than calling during render) avoids the "setState during
+  // render of another component" warning when the count is forwarded into
+  // OrdersPage state.
+  useEffect(() => {
+    onCountChange?.(totalReorderItems);
+  }, [totalReorderItems, onCountChange]);
 
   // Filter the reorder list by item name. Vendor groups that end up with no
   // matching items are hidden entirely. Applies to extras + low-stock +
-  // no-link so one input covers the whole page.
+  // missing-info so one input covers the whole page.
   const [listFilter, setListFilter] = useState("");
   const filterQ = listFilter.trim().toLowerCase();
   const matchesFilter = (name: string) =>
@@ -1670,27 +2424,51 @@ export function ReorderTab({
   const filteredVendorGroups = useMemo<VendorGroup[]>(() => {
     if (!filterQ) return vendorGroupsWithExtras;
     return vendorGroupsWithExtras
-      .map((g) => ({ domain: g.domain, items: g.items.filter((i) => matchesFilter(i.itemName)) }))
+      .map((g) => ({
+        label: g.label,
+        items: g.items.filter((i) => matchesFilter(i.itemName)),
+      }))
       .filter((g) => g.items.length > 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vendorGroupsWithExtras, filterQ]);
 
-  const filteredNoLinkItems = useMemo<ReorderItem[]>(() => {
-    if (!filterQ) return noLinkItemsWithExtras;
-    return noLinkItemsWithExtras.filter((i) => matchesFilter(i.itemName));
+  const filteredIncompleteItems = useMemo<ReorderItem[]>(() => {
+    if (!filterQ) return incompleteItemsWithExtras;
+    return incompleteItemsWithExtras.filter((i) => matchesFilter(i.itemName));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [noLinkItemsWithExtras, filterQ]);
+  }, [incompleteItemsWithExtras, filterQ]);
 
   const filteredTotalItems = filteredVendorGroups.reduce((sum, g) => sum + g.items.length, 0)
-    + filteredNoLinkItems.length;
+    + filteredIncompleteItems.length;
   const hasFilterActive = filterQ.length > 0;
+
+  // Vendor sub-tabs. Show whenever there are 2+ tab targets (vendors plus
+  // an optional Missing Info tab) so the user can jump between them without
+  // scrolling a tall stack of cards. With a single vendor and no missing
+  // info, fall back to direct rendering — a tab bar of one is silly.
+  const hasMissingTab = filteredIncompleteItems.length > 0;
+  const useVendorTabs = filteredVendorGroups.length + (hasMissingTab ? 1 : 0) > 1;
+  // Marker key used in place of a vendor domain when the user selects the
+  // Missing Information tab.
+  const MISSING_TAB_KEY = "__missing__";
+  const [activeVendor, setActiveVendor] = useState<string | null>(null);
+  // Derive the effective active tab each render so a stale value (e.g. the
+  // vendor got filtered out by search) never produces an empty view.
+  const validTabKeys = [
+    ...filteredVendorGroups.map((g) => g.label),
+    ...(hasMissingTab ? [MISSING_TAB_KEY] : []),
+  ];
+  const effectiveActiveVendor =
+    activeVendor && validTabKeys.includes(activeVendor)
+      ? activeVendor
+      : (validTabKeys[0] ?? null);
 
   // Estimated total to reorder everything in the list at the suggested qty.
   // Items without a known price are skipped; we count those separately so
   // the user sees what's missing.
   const priceableItems = [
     ...vendorGroupsWithExtras.flatMap((g) => g.items),
-    ...noLinkItemsWithExtras,
+    ...incompleteItemsWithExtras,
   ];
   const estimatedTotal = priceableItems.reduce((sum, item) => {
     if (item.unitCost === null) return sum;
@@ -1707,20 +2485,6 @@ export function ReorderTab({
     <div className="reorder-tab">
       <div className="reorder-header">
         <div className="reorder-header-left">
-          <div className="reorder-header-titlerow">
-            <h3 className="reorder-title">
-              Reorder
-              {totalReorderItems > 0 && (
-                <span className="reorder-count-badge">{totalReorderItems}</span>
-              )}
-            </h3>
-            {!isEmpty && (
-              <span className="reorder-subtitle">
-                {vendorGroupsWithExtras.length} vendor{vendorGroupsWithExtras.length !== 1 ? "s" : ""}
-                {noLinkItemsWithExtras.length > 0 && ` · ${noLinkItemsWithExtras.length} missing link${noLinkItemsWithExtras.length !== 1 ? "s" : ""}`}
-              </span>
-            )}
-          </div>
           {!isEmpty && (estimatedTotal > 0 || missingPriceCount > 0) && (
             <span className="reorder-estimate">
               Estimated:{" "}
@@ -1733,72 +2497,32 @@ export function ReorderTab({
             </span>
           )}
         </div>
-        {(!isEmpty || (!showOrderBuilder && !showAddForm)) && (
+        {!isEmpty && (
           <div className="reorder-header-right">
-            {!isEmpty && (
-              <div className="reorder-list-filter inventory-search-wrap">
-                <input
-                  className="inventory-search-input"
-                  type="search"
-                  placeholder="Search items..."
-                  value={listFilter}
-                  onChange={(e) => setListFilter(e.target.value)}
-                  aria-label="Search reorder list"
-                />
-                {listFilter && (
-                  <button
-                    type="button"
-                    className="inventory-search-clear"
-                    onClick={() => setListFilter("")}
-                    aria-label="Clear search"
-                    title="Clear search"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            )}
-            {!showOrderBuilder && !showAddForm && (
-              <button
-                type="button"
-                className="button button-secondary button-sm reorder-add-item-btn"
-                onClick={() => setShowOrderBuilder(true)}
-              >
-                <Plus size={13} /> Add Items
-              </button>
-            )}
+            <div className="reorder-list-filter inventory-search-wrap">
+              <input
+                className="inventory-search-input"
+                type="search"
+                placeholder="Search items..."
+                value={listFilter}
+                onChange={(e) => setListFilter(e.target.value)}
+                aria-label="Search reorder list"
+              />
+              {listFilter && (
+                <button
+                  type="button"
+                  className="inventory-search-clear"
+                  onClick={() => setListFilter("")}
+                  aria-label="Clear search"
+                  title="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>
-
-      {showOrderBuilder && (
-        <OrderBuilderPanel
-          inventoryRows={rows}
-          availableLocations={availableLocations}
-          defaultLocation={selectedLocation ?? ""}
-          alreadyPickedRowIds={alreadyPickedRowIds}
-          onPick={handlePickExtra}
-          onAddNew={() => {
-            setShowOrderBuilder(false);
-            setShowAddForm(true);
-          }}
-          onClose={() => setShowOrderBuilder(false)}
-          onSaveReorderLink={onSaveReorderLink}
-        />
-      )}
-
-      {showAddForm && (
-        <AddItemCard
-          availableLocations={availableLocations}
-          defaultLocation={selectedLocation ?? ""}
-          onAdd={handleAddItem}
-          onClose={() => setShowAddForm(false)}
-          onBack={() => {
-            setShowAddForm(false);
-            setShowOrderBuilder(true);
-          }}
-        />
-      )}
 
       {isEmpty && (
         <div className="reorder-empty">
@@ -1814,25 +2538,104 @@ export function ReorderTab({
         </p>
       )}
 
-      {filteredVendorGroups.map((group) => (
-        <VendorChecklistCard
-          key={group.domain}
-          group={group}
-          checkedKeys={checkedKeys}
-          qtyDrafts={qtyDrafts}
-          onToggleChecked={toggleCheckedKey}
-          onSetQty={setQtyForKey}
-          onMarkOrdered={handleMarkOrderedForVendor}
-          onRemoveExtra={handleRemoveExtra}
-        />
-      ))}
+      {/* Sub-tabs — one per vendor (with item count + estimated $) plus a
+       *  Missing Info tab when applicable. Hidden when there's just one
+       *  target since a single tab is noise. */}
+      {useVendorTabs && (
+        <div
+          className="inventory-filter-chips reorder-vendor-tabs"
+          role="tablist"
+          aria-label="Reorder vendors"
+        >
+          {filteredVendorGroups.map((group) => {
+            const groupEst = group.items.reduce((sum, item) => {
+              if (item.unitCost === null) return sum;
+              const qtyUnits = item.packSize > 0 ? item.suggestedQty * item.packSize : item.suggestedQty;
+              return sum + item.unitCost * qtyUnits;
+            }, 0);
+            return (
+              <button
+                key={group.label}
+                type="button"
+                role="tab"
+                aria-selected={effectiveActiveVendor === group.label}
+                className={`inventory-chip${effectiveActiveVendor === group.label ? " active" : ""}`}
+                onClick={() => setActiveVendor(group.label)}
+              >
+                <span className="inventory-chip-label">{group.label}</span>
+                <span className="inventory-chip-badge">
+                  {group.items.length}
+                  {groupEst > 0 ? ` · ${formatCurrency(groupEst)}` : ""}
+                </span>
+              </button>
+            );
+          })}
+          {hasMissingTab && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={effectiveActiveVendor === MISSING_TAB_KEY}
+              className={`inventory-chip reorder-vendor-tab--missing${effectiveActiveVendor === MISSING_TAB_KEY ? " active" : ""}`}
+              onClick={() => setActiveVendor(MISSING_TAB_KEY)}
+            >
+              <span className="inventory-chip-label">Missing Info</span>
+              <span className="inventory-chip-badge">{filteredIncompleteItems.length}</span>
+            </button>
+          )}
+        </div>
+      )}
 
-      {filteredNoLinkItems.length > 0 && (
-        <NoLinkCard
-          items={filteredNoLinkItems}
-          onSaveReorderLink={onSaveReorderLink}
-          onRemoveExtra={handleRemoveExtra}
-        />
+      {useVendorTabs ? (
+        effectiveActiveVendor === MISSING_TAB_KEY ? (
+          <MissingInfoCard
+            items={filteredIncompleteItems}
+            availableVendors={availableVendors}
+            onAddVendor={onAddVendor}
+            onSaveItemFields={onSaveItemFields}
+          />
+        ) : (
+          (() => {
+            const activeGroup = filteredVendorGroups.find((g) => g.label === effectiveActiveVendor);
+            if (!activeGroup) return null;
+            return (
+              <VendorChecklistCard
+                key={activeGroup.label}
+                group={activeGroup}
+                checkedKeys={checkedKeys}
+                qtyDrafts={qtyDrafts}
+                onToggleChecked={toggleCheckedKey}
+                onSetManyChecked={setManyChecked}
+                onSetQty={setQtyForKey}
+                onMarkOrdered={handleMarkOrderedForVendor}
+                onRemoveExtra={handleRemoveExtra}
+              />
+            );
+          })()
+        )
+      ) : (
+        <>
+          {filteredVendorGroups.map((group) => (
+            <VendorChecklistCard
+              key={group.label}
+              group={group}
+              checkedKeys={checkedKeys}
+              qtyDrafts={qtyDrafts}
+              onToggleChecked={toggleCheckedKey}
+              onSetManyChecked={setManyChecked}
+              onSetQty={setQtyForKey}
+              onMarkOrdered={handleMarkOrderedForVendor}
+              onRemoveExtra={handleRemoveExtra}
+            />
+          ))}
+          {filteredIncompleteItems.length > 0 && (
+            <MissingInfoCard
+              items={filteredIncompleteItems}
+              availableVendors={availableVendors}
+              onAddVendor={onAddVendor}
+              onSaveItemFields={onSaveItemFields}
+            />
+          )}
+        </>
       )}
     </div>
   );

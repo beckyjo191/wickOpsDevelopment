@@ -305,7 +305,13 @@ export const detectHeaderRowIndex = (
 export const getDaysUntilExpiration = (raw: string | null | undefined): number | null => {
   const str = String(raw ?? "").trim();
   if (!str) return null;
-  const date = new Date(str);
+  // Parse bare YYYY-MM-DD as local date components — `new Date("2026-04-28")`
+  // would otherwise be UTC midnight, which reads back as the prior day in any
+  // timezone west of UTC and skews the day-difference by one.
+  const isoDateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str);
+  const date = isoDateOnly
+    ? new Date(Number(isoDateOnly[1]), Number(isoDateOnly[2]) - 1, Number(isoDateOnly[3]))
+    : new Date(str);
   if (Number.isNaN(date.getTime())) return null;
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);

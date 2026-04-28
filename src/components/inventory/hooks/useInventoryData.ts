@@ -52,7 +52,7 @@ interface UseInventoryDataParams {
   UNASSIGNED_LOCATION: string;
   /** From the filters hook */
   setSelectedRowIds: React.Dispatch<React.SetStateAction<Set<string>>>;
-  /** Current inventory tab. Used to disable table edits when in Fast Restock mode. */
+  /** Current inventory tab. Used to disable table edits when in Log Usage mode. */
   activeTab: ActiveTab;
   /** From the filters hook — selected row IDs (for allFilteredSelected) */
   selectedRowIds: Set<string>;
@@ -84,7 +84,7 @@ export function useInventoryData({
   toDateInputValue,
   setCurrentPage,
 }: UseInventoryDataParams) {
-  const canEditTable = canEditInventory && activeTab !== "quickAdd" && activeTab !== "logUsage";
+  const canEditTable = canEditInventory && activeTab !== "logUsage";
 
   // ── Core state ──
   const [loading, setLoading] = useState(true);
@@ -114,6 +114,7 @@ export function useInventoryData({
   const [addingLocation, setAddingLocation] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [addLocationError, setAddLocationError] = useState<string | null>(null);
+  const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
   const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
 
@@ -190,6 +191,7 @@ export function useInventoryData({
     const persistedRows = bootstrap.items;
     setOrganizationId(String(bootstrap.access?.organizationId ?? ""));
     setRegisteredLocations(bootstrap.registeredLocations ?? []);
+    setRegisteredVendors(bootstrap.registeredVendors ?? []);
     setColumns(resolvedColumns);
     setUserColumnOverrides(bootstrap.columnVisibilityOverrides ?? {});
     const nextRows =
@@ -1518,6 +1520,9 @@ export function useInventoryData({
     setNewLocationName,
     addLocationError,
     setAddLocationError,
+    // Vendors
+    registeredVendors,
+    setRegisteredVendors,
     // Delete
     pendingDeleteRows,
     setPendingDeleteRows,

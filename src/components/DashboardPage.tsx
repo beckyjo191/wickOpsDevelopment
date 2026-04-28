@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Package, ClipboardList, Zap, ShoppingCart } from "lucide-react";
+import { AlertTriangle, Package, ClipboardList, ShoppingCart } from "lucide-react";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
 import { pickLoadingLine } from "../lib/loadingLines";
 
-type InventoryFilter = "expired" | "exp30" | "lowStock" | "quickAdd" | "logUsage";
+type InventoryFilter = "expired" | "exp30" | "lowStock" | "logUsage";
 
 interface DashboardPageProps {
   accessibleModules: AppModuleKey[];
@@ -214,16 +214,6 @@ export function DashboardPage({
                 >
                   <ClipboardList size={18} strokeWidth={2} />
                   <span>Log Usage</span>
-                </button>
-              ) : null}
-              {canEditInventory && onNavigateToInventoryWithFilter ? (
-                <button
-                  type="button"
-                  className="dash-action-btn"
-                  onClick={() => onNavigateToInventoryWithFilter("quickAdd", selectedLocation)}
-                >
-                  <Zap size={18} strokeWidth={2} />
-                  <span>Fast Restock</span>
                 </button>
               ) : null}
             </div>

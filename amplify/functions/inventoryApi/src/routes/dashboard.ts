@@ -7,6 +7,7 @@ import { ensureColumns } from "../columns";
 import { listAllItems, listItemsPage } from "../items";
 import { getDaysUntilExpiration } from "../csv";
 import { getRegisteredLocations } from "../locations";
+import { getRegisteredVendors } from "../vendors";
 import { ddb } from "../clients";
 
 export const handleAlertSummary = async (ctx: RouteContext) => {
@@ -34,7 +35,8 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
 
     const daysUntil = getDaysUntilExpiration(values.expirationDate as string | null | undefined);
     if (daysUntil !== null) {
-      if (daysUntil < 0) {
+      // Today (daysUntil === 0) counts as expired: by end-of-day the item is past.
+      if (daysUntil <= 0) {
         expiredCount += 1;
         locCounts.expiredCount += 1;
       } else if (daysUntil <= 30) {
@@ -84,9 +86,10 @@ export const handleBootstrap = async (ctx: RouteContext) => {
   // Use paginated fetch to stay well under Lambda's 6 MB response limit.
   // Each item is ~200 bytes JSON, so 10k items ≈ 2 MB — safe margin under 6 MB.
   const BOOTSTRAP_PAGE_SIZE = 10_000;
-  let [page, registeredLocations] = await Promise.all([
+  let [page, registeredLocations, registeredVendors] = await Promise.all([
     listItemsPage(storage, access.organizationId, BOOTSTRAP_PAGE_SIZE),
     getRegisteredLocations(storage),
+    getRegisteredVendors(storage),
   ]);
   let items = page.items;
   let nextToken = page.nextToken;
@@ -133,6 +136,7 @@ export const handleBootstrap = async (ctx: RouteContext) => {
     columns,
     items,
     registeredLocations,
+    registeredVendors,
     columnVisibilityOverrides: access.columnVisibilityOverrides,
     nextToken,
   });

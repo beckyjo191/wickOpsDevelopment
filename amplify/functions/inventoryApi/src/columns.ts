@@ -26,6 +26,7 @@ const CORE_COLUMN_IS_EDITABLE: Record<string, boolean> = {
   unitCost: false,   // derived from packCost / packSize (or restock events)
   packSize: true,    // user enters the box size
   packCost: true,    // user enters the per-pack price (source of truth)
+  vendor: true,      // managed via vendor registry; users pick from dropdown
 };
 
 export const listColumns = async (storage: InventoryStorage): Promise<InventoryColumn[]> => {
@@ -106,7 +107,7 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
               organizationId,
               module: "inventory",
               key: "reorderLink",
-              label: "Reorder Link",
+              label: "Product URL",
               type: "link",
               isCore: true,
               isRequired: false,
@@ -225,6 +226,59 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       }
     }
 
+    // Ensure the vendor core column exists (added after packCost).
+    // Hidden by default — users opt in once they start managing vendors.
+    const hasVendorColumn = existing.some(
+      (c) => normalizeLooseKey(c.key) === "vendor",
+    );
+    if (!hasVendorColumn) {
+      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 90);
+      try {
+        await ddb.send(
+          new PutCommand({
+            TableName: storage.columnTable,
+            Item: {
+              id: coreColumnIdForKey("vendor"),
+              organizationId,
+              module: "inventory",
+              key: "vendor",
+              label: "Vendor",
+              type: "text",
+              isCore: true,
+              isRequired: false,
+              isVisible: false,
+              isEditable: true,
+              sortOrder: maxSort + 10,
+              createdAt: new Date().toISOString(),
+            } satisfies InventoryColumn,
+            ConditionExpression: "attribute_not_exists(id)",
+          }),
+        );
+      } catch (err: any) {
+        if (err?.name !== "ConditionalCheckFailedException") throw err;
+      }
+    }
+
+    // Rename the reorderLink column label if it's still the old default.
+    // The field was renamed "Reorder Link" → "Product URL" so the inventory
+    // table header matches the rest of the UI. Only touches columns whose
+    // label is exactly the old default — preserves any user customization.
+    const reorderLinkCol = existing.find((c) => c.key === "reorderLink");
+    if (reorderLinkCol && reorderLinkCol.label === "Reorder Link") {
+      try {
+        await ddb.send(
+          new UpdateCommand({
+            TableName: storage.columnTable,
+            Key: { id: reorderLinkCol.id },
+            UpdateExpression: "SET label = :v",
+            ExpressionAttributeValues: { ":v": "Product URL" },
+          }),
+        );
+      } catch (err) {
+        console.warn("Failed to rename reorderLink column label", err);
+      }
+    }
+
     // Reconcile isEditable on existing core columns so schema changes across
     // releases (e.g. packCost flipped to editable) propagate without needing
     // a manual backfill. Only touches core columns whose current value
@@ -257,7 +311,9 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       || !hasUnitCostColumn
       || !hasPackSizeColumn
       || !hasPackCostColumn
+      || !hasVendorColumn
       || reconciled
+      || (reorderLinkCol && reorderLinkCol.label === "Reorder Link")
     ) {
       return listColumns(storage);
     }
@@ -334,7 +390,7 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       organizationId,
       module: "inventory",
       key: "reorderLink",
-      label: "Reorder Link",
+      label: "Product URL",
       type: "link",
       isCore: true,
       isRequired: false,
@@ -387,6 +443,21 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       isVisible: false,
       isEditable: true,
       sortOrder: 90,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      organizationId,
+      module: "inventory",
+      key: "vendor",
+      label: "Vendor",
+      type: "text",
+      isCore: true,
+      isRequired: false,
+      // Hidden by default — orgs that don't manage vendors won't see it.
+      // Managed via the vendor registry; users pick from a dropdown in the UI.
+      isVisible: false,
+      isEditable: true,
+      sortOrder: 100,
       createdAt: new Date().toISOString(),
     },
   ];

@@ -23,6 +23,7 @@ import {
 } from "aws-amplify/auth";
 import {
   addInventoryLocation,
+  addInventoryVendor,
   createBillingPortalSession,
   createInventoryColumn,
   deleteInventoryColumn,
@@ -31,7 +32,9 @@ import {
   type ModuleAccessUser,
   type AppModuleKey,
   removeInventoryLocation,
+  removeInventoryVendor,
   renameInventoryLocation,
+  renameInventoryVendor,
   revokeUserAccess,
   syncCurrentUserEmail,
   updateUserModuleAccess,
@@ -56,13 +59,14 @@ import {
 import { GripVertical, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "inventoryColumns" | "importData" | "exportData";
+type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "vendors" | "inventoryColumns" | "importData" | "exportData";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
   userModuleAccess: true,
   pendingInvites: true,
   locations: true,
+  vendors: true,
   inventoryColumns: false,
   importData: false,
   exportData: false,
@@ -157,6 +161,14 @@ export function SettingsPage({
   const [editingLocationValue, setEditingLocationValue] = useState("");
   const [renameLocationError, setRenameLocationError] = useState<string | null>(null);
   const [pendingDeleteLocation, setPendingDeleteLocation] = useState<string | null>(null);
+  const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
+  const [newVendorName, setNewVendorName] = useState("");
+  const [savingVendor, setSavingVendor] = useState(false);
+  const [vendorError, setVendorError] = useState<string | null>(null);
+  const [editingVendorName, setEditingVendorName] = useState<string | null>(null);
+  const [editingVendorValue, setEditingVendorValue] = useState("");
+  const [renameVendorError, setRenameVendorError] = useState<string | null>(null);
+  const [pendingDeleteVendor, setPendingDeleteVendor] = useState<string | null>(null);
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
   const [loadedDisclosureKey, setLoadedDisclosureKey] = useState<string>("");
@@ -176,6 +188,7 @@ export function SettingsPage({
             ),
           );
           setRegisteredLocations(bootstrap.registeredLocations ?? []);
+          setRegisteredVendors(bootstrap.registeredVendors ?? []);
           setInventoryRows(bootstrap.items ?? []);
           setUserColumnOverrides(bootstrap.columnVisibilityOverrides ?? {});
         }
@@ -277,6 +290,10 @@ export function SettingsPage({
           typeof parsed.locations === "boolean"
             ? parsed.locations
             : DEFAULT_DISCLOSURE_STATE.locations,
+        vendors:
+          typeof parsed.vendors === "boolean"
+            ? parsed.vendors
+            : DEFAULT_DISCLOSURE_STATE.vendors,
         inventoryColumns:
           typeof parsed.inventoryColumns === "boolean"
             ? parsed.inventoryColumns
@@ -402,6 +419,102 @@ export function SettingsPage({
       console.error(err);
     } finally {
       setSavingLocation(false);
+    }
+  };
+
+  // Derive merged vendor list: registered + from item data
+  const allVendors = (() => {
+    const fromItems = new Set(
+      inventoryRows
+        .map((r) => String(r.values.vendor ?? "").trim())
+        .filter((v) => v.length > 0),
+    );
+    const merged = new Set([...registeredVendors, ...fromItems]);
+    return Array.from(merged).sort((a, b) => a.localeCompare(b));
+  })();
+
+  const getItemCountForVendor = (vendor: string): number =>
+    inventoryRows.filter((r) => String(r.values.vendor ?? "").trim() === vendor).length;
+
+  const onAddVendor = async () => {
+    const name = newVendorName.trim();
+    if (!name) return;
+    const duplicate = allVendors.find((v) => v.toLowerCase() === name.toLowerCase());
+    if (duplicate) {
+      setVendorError(`"${duplicate}" already exists`);
+      return;
+    }
+    setVendorError(null);
+    setSavingVendor(true);
+    try {
+      const vendors = await addInventoryVendor(name);
+      setRegisteredVendors(vendors);
+      setNewVendorName("");
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      if (msg.includes("already exists")) {
+        setVendorError(msg);
+      } else {
+        console.error(err);
+      }
+    } finally {
+      setSavingVendor(false);
+    }
+  };
+
+  const onRenameVendor = async (oldName: string) => {
+    const newName = editingVendorValue.trim();
+    if (!newName || newName === oldName) {
+      setEditingVendorName(null);
+      setRenameVendorError(null);
+      return;
+    }
+    const duplicate = allVendors.find(
+      (v) => v !== oldName && v.toLowerCase() === newName.toLowerCase(),
+    );
+    if (duplicate) {
+      setRenameVendorError(`"${duplicate}" already exists`);
+      return;
+    }
+    setRenameVendorError(null);
+    setSavingVendor(true);
+    try {
+      const result = await renameInventoryVendor(oldName, newName);
+      setRegisteredVendors(result.vendors);
+      setInventoryRows((prev) =>
+        prev.map((r) => {
+          if (String(r.values.vendor ?? "").trim() === oldName) {
+            return { ...r, values: { ...r.values, vendor: newName } };
+          }
+          return r;
+        }),
+      );
+      setEditingVendorName(null);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      if (msg.includes("already exists")) {
+        setRenameVendorError(msg);
+      } else {
+        console.error(err);
+      }
+    } finally {
+      setSavingVendor(false);
+    }
+  };
+
+  const onRemoveVendor = async (name: string) => {
+    setSavingVendor(true);
+    try {
+      const vendors = await removeInventoryVendor(name);
+      setRegisteredVendors(vendors);
+      setInventoryRows((prev) =>
+        prev.filter((r) => String(r.values.vendor ?? "").trim() !== name),
+      );
+      setPendingDeleteVendor(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSavingVendor(false);
     }
   };
 
@@ -1354,6 +1467,146 @@ export function SettingsPage({
 
         <details
           className="settings-section"
+          open={disclosures.vendors}
+          onToggle={(event) => onDisclosureToggle("vendors", event.currentTarget.open)}
+        >
+          <summary className="settings-section-title">Vendors</summary>
+          {canManageInventoryColumns ? (
+            <>
+              <div className="settings-field-row" style={{ marginBottom: vendorError ? "0.25rem" : "0.5rem" }}>
+                <input
+                  className={`field${vendorError ? " field--error" : ""}`}
+                  placeholder="New vendor name"
+                  value={newVendorName}
+                  onChange={(e) => { setNewVendorName(e.target.value); setVendorError(null); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") void onAddVendor(); }}
+                />
+                <button
+                  className="button button-secondary"
+                  onClick={() => void onAddVendor()}
+                  disabled={savingVendor || !newVendorName.trim()}
+                >
+                  Add Vendor
+                </button>
+              </div>
+              {vendorError ? (
+                <p className="settings-field-error">{vendorError}</p>
+              ) : null}
+              <div className="settings-columns-list">
+                {loadingColumns ? <div>Loading vendors...</div> : null}
+                {!loadingColumns && allVendors.length === 0 ? (
+                  <div className="settings-section-copy">No vendors yet. Add one above.</div>
+                ) : null}
+                {allVendors.map((vendor) => {
+                  const itemCount = getItemCountForVendor(vendor);
+                  return (
+                    <div key={vendor} className="settings-column-row">
+                      <div className="settings-column-visibility">
+                        {editingVendorName === vendor ? (
+                          <span className="settings-column-edit">
+                            <input
+                              className={`field settings-column-edit-input${renameVendorError ? " field--error" : ""}`}
+                              value={editingVendorValue}
+                              onChange={(e) => { setEditingVendorValue(e.target.value); setRenameVendorError(null); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") void onRenameVendor(vendor); if (e.key === "Escape") { setEditingVendorName(null); setRenameVendorError(null); } }}
+                              disabled={savingVendor}
+                              autoFocus
+                            />
+                            <button
+                              className="button button-secondary settings-inline-action"
+                              onClick={() => void onRenameVendor(vendor)}
+                              disabled={savingVendor || !editingVendorValue.trim()}
+                              type="button"
+                            >
+                              Save
+                            </button>
+                            <button
+                              className="button button-ghost settings-inline-action"
+                              onClick={() => { setEditingVendorName(null); setRenameVendorError(null); }}
+                              type="button"
+                            >
+                              Cancel
+                            </button>
+                            {renameVendorError ? (
+                              <span className="settings-field-error" style={{ width: "100%" }}>{renameVendorError}</span>
+                            ) : null}
+                          </span>
+                        ) : (
+                          <span>
+                            {vendor}
+                            <span className="settings-location-count">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="settings-column-actions">
+                        <div className="settings-action-wrap">
+                          <button
+                            className="settings-action-icon"
+                            onClick={() => { setEditingVendorName(vendor); setEditingVendorValue(vendor); }}
+                            disabled={savingVendor}
+                            aria-label="Rename vendor"
+                            type="button"
+                          >
+                            <Pencil aria-hidden="true" />
+                          </button>
+                          <span className="settings-action-tip" role="tooltip">Rename</span>
+                        </div>
+                        <div className="settings-action-wrap">
+                          <button
+                            className="settings-action-icon settings-action-icon--danger"
+                            onClick={() => setPendingDeleteVendor((prev) => prev === vendor ? null : vendor)}
+                            disabled={savingVendor}
+                            aria-label="Remove vendor"
+                            type="button"
+                          >
+                            <Trash2 aria-hidden="true" />
+                          </button>
+                          <span className="settings-action-tip" role="tooltip">Remove</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {pendingDeleteVendor ? (() => {
+                const vendorName = pendingDeleteVendor;
+                const deleteVendorItemCount = getItemCountForVendor(vendorName);
+                return (
+                  <div className="settings-destructive-overlay">
+                    <div className="settings-destructive-backdrop" onClick={() => setPendingDeleteVendor(null)} />
+                    <div className="settings-destructive-sheet" role="dialog" aria-label="Confirm remove">
+                      <div className="settings-destructive-sheet-body">
+                        <p className="settings-destructive-sheet-title">Remove Vendor</p>
+                        <p className="settings-destructive-sheet-msg">
+                          {deleteVendorItemCount > 0
+                            ? `"${vendorName}" has ${deleteVendorItemCount} item${deleteVendorItemCount !== 1 ? "s" : ""} that will become unassigned.`
+                            : `Remove "${vendorName}"?`}
+                        </p>
+                      </div>
+                      <div className="settings-destructive-sheet-actions">
+                        <button type="button" onClick={() => setPendingDeleteVendor(null)}>Cancel</button>
+                        <button
+                          type="button"
+                          disabled={savingVendor}
+                          onClick={() => { void onRemoveVendor(vendorName); }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })() : null}
+            </>
+          ) : (
+            <p className="settings-section-copy">
+              Only administrators can manage vendors.
+            </p>
+          )}
+        </details>
+
+        <details
+          className="settings-section"
           open={disclosures.inventoryColumns}
           onToggle={(event) => onDisclosureToggle("inventoryColumns", event.currentTarget.open)}
         >
@@ -1361,7 +1614,7 @@ export function SettingsPage({
           {canManageInventoryColumns ? (
             <>
               <p className="settings-section-copy">
-                Drag the handle to reorder columns. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date, Reorder Link) are required and cannot be deleted.
+                Drag the handle to reorder columns. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date, Product URL) are required and cannot be deleted.
               </p>
               <div className="settings-columns-toolbar">
                 <div className="inventory-search-wrap settings-columns-toolbar-search">

@@ -24,6 +24,8 @@ import { usePendingSubmissions } from "./inventory/hooks/usePendingSubmissions";
 import { PendingSubmissionsTab } from "./inventory/PendingSubmissionsTab";
 import type { PendingEntry } from "./inventory/inventoryTypes";
 import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
+import { DaySection } from "../lib/dayGroups";
+import { dayGroupLabel } from "../lib/dayGroupLabel";
 
 type AuditTab = "feed" | "analytics" | "item-history" | "pending";
 
@@ -201,16 +203,7 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function dayGroupLabel(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today.getTime() - 86400000);
-  const eventDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  if (eventDay.getTime() === today.getTime()) return "Today";
-  if (eventDay.getTime() === yesterday.getTime()) return "Yesterday";
-  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
-}
+// `dayGroupLabel` lives in src/lib/dayGroups.tsx — shared with OrdersPage.
 
 function getVisibleEditChanges(event: AuditEvent): Array<{ field: string; from: unknown; to: unknown }> {
   if (event.action !== "ITEM_EDIT") return [];
@@ -363,42 +356,9 @@ function groupByDay<T>(items: Array<T & { timestamp: string; user: string }>): A
   return days;
 }
 
-/** Collapsible day section. Today's section opens by default, older days
- *  collapse — when collapsed the header shows a "N changes, M users" summary
- *  so the user can scan history without expanding. */
-function DaySection({
-  label,
-  rowCount,
-  userCount,
-  defaultOpen,
-  children,
-}: {
-  label: string;
-  rowCount: number;
-  userCount: number;
-  defaultOpen: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <>
-      <button
-        type="button"
-        className="audit-flat-day-divider audit-flat-day-toggle"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
-        <span className="audit-flat-day-chevron">{open ? "▾" : "▸"}</span>
-        <span className="audit-flat-day-label">{label}</span>
-        <span className="audit-flat-day-summary">
-          {rowCount} change{rowCount !== 1 ? "s" : ""}
-          {userCount > 0 ? ` · ${userCount} user${userCount !== 1 ? "s" : ""}` : ""}
-        </span>
-      </button>
-      {open ? children : null}
-    </>
-  );
-}
+// `DaySection` lives in src/lib/dayGroups.tsx — shared with OrdersPage. Each
+//  caller computes its own `summary` since the audit log uses
+//  "N changes · M users" while closed orders use "N orders".
 
 /** Per-(day, item) row data for the main activity feed. */
 type ActivityRowData = {
@@ -499,12 +459,17 @@ function FlatActivityFeed({
   const days = aggregateActivityRows(events);
   return (
     <div className="audit-flat-feed">
-      {days.map((day) => (
+      {days.map((day) => {
+        const rowCount = day.rows.length;
+        const userCount = day.users.size;
+        const summary =
+          `${rowCount} change${rowCount !== 1 ? "s" : ""}` +
+          (userCount > 0 ? ` · ${userCount} user${userCount !== 1 ? "s" : ""}` : "");
+        return (
         <DaySection
           key={day.label}
           label={day.label}
-          rowCount={day.rows.length}
-          userCount={day.users.size}
+          summary={summary}
           defaultOpen={day.label === "Today" || day.label === "Yesterday"}
         >
           {day.rows.map((row) => {
@@ -536,7 +501,8 @@ function FlatActivityFeed({
             );
           })}
         </DaySection>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -755,12 +721,17 @@ function FlatItemHistory({ events }: { events: AuditEvent[] }) {
 
   return (
     <div className="audit-flat-feed audit-flat-feed--history">
-      {days.map((day) => (
+      {days.map((day) => {
+        const rowCount = day.rows.length;
+        const userCount = day.users.size;
+        const summary =
+          `${rowCount} change${rowCount !== 1 ? "s" : ""}` +
+          (userCount > 0 ? ` · ${userCount} user${userCount !== 1 ? "s" : ""}` : "");
+        return (
         <DaySection
           key={day.label}
           label={day.label}
-          rowCount={day.rows.length}
-          userCount={day.users.size}
+          summary={summary}
           defaultOpen={day.label === "Today" || day.label === "Yesterday"}
         >
           {day.rows.map((row) => {
@@ -787,7 +758,8 @@ function FlatItemHistory({ events }: { events: AuditEvent[] }) {
             );
           })}
         </DaySection>
-      ))}
+        );
+      })}
     </div>
   );
 }

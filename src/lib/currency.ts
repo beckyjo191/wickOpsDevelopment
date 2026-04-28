@@ -1,8 +1,8 @@
 // ── Currency formatting helpers ─────────────────────────────────────────────
-// Shared between OrdersPage, QuickAddPage, and the inventory cell renderer so
-// unit cost always displays consistently (e.g. ".89" → "$0.89"). Values are
-// stored as numeric strings in valuesJson; formatting is applied only on
-// render and on blur-normalization.
+// Shared between OrdersPage and the inventory cell renderer so unit cost
+// always displays consistently (e.g. ".89" → "$0.89"). Values are stored
+// as numeric strings in valuesJson; formatting is applied only on render
+// and on blur-normalization.
 
 /** Format a number as USD ("$4,239.00"). Returns "" for NaN. */
 export const formatCurrency = (amount: number): string => {

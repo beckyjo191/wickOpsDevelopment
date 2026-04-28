@@ -11,6 +11,7 @@ import { handleListOnboardingTemplates, handleApplyOnboardingTemplate } from "./
 import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics } from "./routes/audit";
 import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestockOrder, handleCloseRestockOrder } from "./routes/restock";
 import { handleAddLocation, handleRemoveLocation, handleRenameLocation } from "./routes/locations";
+import { handleAddVendor, handleRemoveVendor, handleRenameVendor } from "./routes/vendors";
 import { handleAlertSummary, handleBootstrap } from "./routes/dashboard";
 import { handleListItems, handleSaveItems } from "./routes/inventory";
 import { handleSubmitUsage, handleListPendingSubmissions, handleApproveSubmission, handleRejectSubmission, handleDeleteSubmission } from "./routes/usage";
@@ -59,6 +60,11 @@ const routes: Route[] = [
   { method: "POST",   pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleAddLocation },
   { method: "DELETE",  pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleRemoveLocation },
   { method: "POST",   pattern: "/inventory/locations/rename",           needsStorage: true, module: "inventory", handler: handleRenameLocation },
+
+  // Vendors
+  { method: "POST",   pattern: "/inventory/vendors",                    needsStorage: true, module: "inventory", handler: handleAddVendor },
+  { method: "DELETE",  pattern: "/inventory/vendors",                    needsStorage: true, module: "inventory", handler: handleRemoveVendor },
+  { method: "POST",   pattern: "/inventory/vendors/rename",             needsStorage: true, module: "inventory", handler: handleRenameVendor },
 
   // Dashboard / bootstrap
   { method: "GET",    pattern: "/inventory/alert-summary",              needsStorage: true, module: "inventory", handler: handleAlertSummary },

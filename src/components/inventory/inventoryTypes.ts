@@ -8,7 +8,7 @@ export type {
 } from "../../lib/inventoryApi";
 
 export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
-export type ActiveTab = InventoryFilter | "quickAdd" | "logUsage";
+export type ActiveTab = InventoryFilter | "logUsage";
 export type SortDirection = "asc" | "desc";
 
 export type InventoryInitialAction = "import-csv" | "paste-import" | "download-template";

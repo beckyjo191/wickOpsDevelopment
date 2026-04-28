@@ -36,8 +36,8 @@ export function InventoryFilterBar({
   ];
 
   const visible = chips.filter((c) => c.visible);
-  // In quickAdd / logUsage modes, no chip should be highlighted (an inline panel is shown).
-  const isInlineMode = activeTab === "quickAdd" || activeTab === "logUsage";
+  // In logUsage mode, no chip should be highlighted (an inline panel is shown).
+  const isInlineMode = activeTab === "logUsage";
   const activeKey: InventoryFilter = isInlineMode ? "all" : activeTab;
 
   return (

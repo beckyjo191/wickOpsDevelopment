@@ -18,7 +18,6 @@ import { useInventoryData } from "./hooks/useInventoryData";
 import { AddLocationForm } from "./AddLocationForm";
 import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryFilterBar } from "./InventoryFilterBar";
-import { QuickAddPage } from "../QuickAddPage";
 import { InventoryUsagePage } from "../InventoryUsagePage";
 import { InventoryMobileCards } from "./InventoryMobileCards";
 import { InventoryDesktopTable } from "./InventoryDesktopTable";
@@ -225,9 +224,9 @@ export function InventoryPage({
     );
   }
 
-  // Inline modes (QuickAdd / LogUsage) hide the table-scoped controls
+  // Inline mode (LogUsage) hides the table-scoped controls
   // like search that don't apply to the form view.
-  const isInlineMode = filters.activeTab === "quickAdd" || filters.activeTab === "logUsage";
+  const isInlineMode = filters.activeTab === "logUsage";
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (
@@ -310,15 +309,6 @@ export function InventoryPage({
                   onClick={() => filters.setActiveTabRaw("logUsage")}
                 >
                   Log Usage
-                </button>
-              ) : null}
-              {canEditInventory ? (
-                <button
-                  type="button"
-                  className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
-                  onClick={() => filters.setActiveTabRaw("quickAdd")}
-                >
-                  Fast Restock
                 </button>
               ) : null}
             </div>
@@ -413,15 +403,6 @@ export function InventoryPage({
                   onClick={() => filters.setActiveTabRaw("logUsage")}
                 >
                   Log Usage
-                </button>
-              ) : null}
-              {canEditInventory ? (
-                <button
-                  type="button"
-                  className={`inventory-toolbar-action inventory-toolbar-action--primary${filters.activeTab === "quickAdd" ? " active" : ""}`}
-                  onClick={() => filters.setActiveTabRaw("quickAdd")}
-                >
-                  Fast Restock
                 </button>
               ) : null}
 
@@ -549,9 +530,7 @@ export function InventoryPage({
           </>
         )}
 
-        {filters.activeTab === "quickAdd" ? (
-          <QuickAddPage selectedLocation={selectedLocation} />
-        ) : filters.activeTab === "logUsage" ? (
+        {filters.activeTab === "logUsage" ? (
           <InventoryUsagePage selectedLocation={selectedLocation} />
         ) : (
           <>

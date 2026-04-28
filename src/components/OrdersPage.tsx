@@ -28,7 +28,7 @@ import {
   type RestockOrderItem,
   type RestockReceiveLine,
 } from "../lib/inventoryApi";
-import { ReorderTab, VendorSelect } from "./ReorderTab";
+import { ReorderTab, VendorSelect, type OrderItem } from "./ReorderTab";
 import { formatCurrency, parseCurrency } from "../lib/currency";
 
 
@@ -1574,72 +1574,6 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
     inventoryRowsRef.current = updated;
     if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
   }, []);
-
-  // Persist a freshly-added reorder item as a real inventory row so it survives
-  // reload. Values the user entered (min qty, unit cost, pack size/cost, vendor
-  // link, location) flow straight onto the row, mirroring how an item added
-  // through the inventory table would look. Returned info lets ReorderTab
-  // auto-check the new row by key.
-  const handleAddItem = useCallback(async (input: AddItemInput) => {
-    const newId = crypto.randomUUID();
-    const now = new Date().toISOString();
-    const name = input.name.trim();
-    if (!name) throw new Error("Item name is required.");
-    const qtyNum = Number(input.qty) || 1;
-    const minQtyRaw = Number(input.minQty);
-    const minQuantity = Number.isFinite(minQtyRaw) && minQtyRaw > 0 ? minQtyRaw : qtyNum;
-    const locationValue = input.location?.trim() || selectedLocation || "";
-    const vendorValue = input.vendor?.trim() ?? "";
-    const linkTrim = input.link.trim();
-    const normalizedLink = linkTrim
-      ? (/^https?:\/\//i.test(linkTrim) ? linkTrim : `https://${linkTrim}`)
-      : "";
-    const values: Record<string, string | number | boolean | null> = {
-      itemName: name,
-      quantity: 0,
-      minQuantity,
-      location: locationValue,
-      parentItemId: newId,
-    };
-    if (vendorValue) values.vendor = vendorValue;
-    if (normalizedLink) values.reorderLink = normalizedLink;
-    if (input.unitCost.trim()) {
-      const uc = parseCurrency(input.unitCost);
-      if (Number.isFinite(uc) && uc >= 0) values.unitCost = uc;
-    }
-    if (input.packSize.trim()) {
-      const ps = Number(input.packSize);
-      if (Number.isFinite(ps) && ps > 0) values.packSize = ps;
-    }
-    if (input.packCost.trim()) {
-      const pc = parseCurrency(input.packCost);
-      if (Number.isFinite(pc) && pc >= 0) values.packCost = pc;
-    }
-    const current = inventoryRowsRef.current;
-    const newRow: InventoryRow = {
-      id: newId,
-      position: current.length,
-      values,
-      createdAt: now,
-    };
-    const updated = [...current, newRow];
-    setInventoryRows(updated);
-    inventoryRowsRef.current = updated;
-    try {
-      await saveInventoryItems([newRow], []);
-    } catch (err) {
-      // Roll back the optimistic insert so the user doesn't see a ghost row
-      // that vanishes on next bootstrap.
-      const reverted = updated.filter((r) => r.id !== newId);
-      setInventoryRows(reverted);
-      inventoryRowsRef.current = reverted;
-      setError(err instanceof Error
-        ? `Could not save item: ${err.message}`
-        : "Could not save item.");
-      throw err;
-    }
-    return { rowId: newId, itemName: name, location: locationValue };
-  }, [selectedLocation]);
 
   // Called after an OrderCard receives or closes an order. Clears orderedAt for the
   // order's items so they reappear in Needs Reorder if still low, then reloads

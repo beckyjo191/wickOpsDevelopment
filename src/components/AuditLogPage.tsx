@@ -24,6 +24,8 @@ import {
 import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
 import { DaySection } from "../lib/dayGroups";
 import { dayGroupLabel } from "../lib/dayGroupLabel";
+import { useMobileDetect } from "./inventory/hooks/useMobileDetect";
+import { AuditMobileFeed } from "./AuditMobileFeed";
 
 export type AuditTab = "feed" | "analytics" | "item-history";
 
@@ -374,7 +376,7 @@ function eventTitleAttr(event: AuditEvent): string | undefined {
   return v || undefined;
 }
 
-type DayBucket<T> = { label: string; rows: T[]; users: Set<string> };
+export type DayBucket<T> = { label: string; rows: T[]; users: Set<string> };
 
 function groupByDay<T>(items: Array<T & { timestamp: string; user: string }>): Array<DayBucket<T>> {
   const days: Array<DayBucket<T>> = [];
@@ -427,7 +429,7 @@ function detectUndoable(event: AuditEvent): UndoableEvent | undefined {
 }
 
 /** Per-(day, item) row data for the main activity feed. */
-type ActivityRowData = {
+export type ActivityRowData = {
   key: string;
   timestamp: string;
   itemId: string | null;
@@ -442,7 +444,7 @@ type ActivityRowData = {
   undoableEvent?: UndoableEvent;
 };
 
-function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
+export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
   type Bucket = {
     events: AuditEvent[];
     lastTimestamp: string;
@@ -525,7 +527,7 @@ function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRo
   return days;
 }
 
-const UNDO_TOOLTIPS: Record<UndoableKind, string> = {
+export const UNDO_TOOLTIPS: Record<UndoableKind, string> = {
   usage: "Undo this usage — restore the decremented quantity",
   retire: "Undo this retire — clear the retire markers and restore the quantity",
   column: "Restore this column — bring back the deleted column and its values",
@@ -1197,6 +1199,7 @@ function AnalyticsDashboard({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInventory, onTabChange }: AuditLogPageProps) {
+  const { isMobile } = useMobileDetect();
   const [tab, setTab] = useState<AuditTab>("feed");
 
   // Notify parent of active sub-tab so subnav-level help can react.
@@ -1425,12 +1428,21 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           {undoError && <p className="audit-error">{undoError}</p>}
 
           {visibleEvents.length > 0 && (
-            <FlatActivityFeed
-              events={visibleEvents}
-              onViewItemHistory={viewItemHistory}
-              onUndoEvent={undoCallback}
-              undoingEventId={undoingEventId}
-            />
+            isMobile ? (
+              <AuditMobileFeed
+                events={visibleEvents}
+                onViewItemHistory={viewItemHistory}
+                onUndoEvent={undoCallback}
+                undoingEventId={undoingEventId}
+              />
+            ) : (
+              <FlatActivityFeed
+                events={visibleEvents}
+                onViewItemHistory={viewItemHistory}
+                onUndoEvent={undoCallback}
+                undoingEventId={undoingEventId}
+              />
+            )
           )}
 
           {loading && (

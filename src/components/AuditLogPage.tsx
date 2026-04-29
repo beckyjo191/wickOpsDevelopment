@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchAuditFeed,
   fetchItemHistory,
@@ -12,6 +12,7 @@ import {
 import {
   Activity,
   BarChart3,
+  Calendar,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -20,6 +21,7 @@ import {
   RotateCcw,
   Search,
   User,
+  X,
 } from "lucide-react";
 import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
 import { DaySection } from "../lib/dayGroups";
@@ -587,7 +589,7 @@ function FlatActivityFeed({
                     <span className="audit-flat-summary"> — {row.summary}</span>
                   </span>
                   <span className="audit-flat-cell audit-flat-user">
-                    <User size={11} />
+                    <User size={14} />
                     {row.user}
                   </span>
                 </button>
@@ -599,7 +601,7 @@ function FlatActivityFeed({
                     disabled={isUndoing}
                     title={UNDO_TOOLTIPS[row.undoableEvent!.kind]}
                   >
-                    <RotateCcw size={12} /> {isUndoing ? "Undoing…" : "Undo"}
+                    <RotateCcw size={14} /> {isUndoing ? "Undoing…" : "Undo"}
                   </button>
                 )}
               </div>
@@ -868,7 +870,7 @@ function FlatItemHistory({
                   {row.summary}
                 </span>
                 <span className="audit-flat-cell audit-flat-user">
-                  <User size={11} />
+                  <User size={14} />
                   {row.user}
                 </span>
                 {showUndo && (
@@ -879,7 +881,7 @@ function FlatItemHistory({
                     disabled={isUndoing}
                     title={UNDO_TOOLTIPS[row.undoableEvent!.kind]}
                   >
-                    <RotateCcw size={12} /> {isUndoing ? "Undoing…" : "Undo"}
+                    <RotateCcw size={14} /> {isUndoing ? "Undoing…" : "Undo"}
                   </button>
                 )}
               </div>
@@ -1214,6 +1216,42 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   // case-insensitively. For history older than what's loaded, the user can
   // still hit Load More and it'll pick up more events to search.
   const [searchTerm, setSearchTerm] = useState("");
+  // Optional date range filter on event timestamp. Mirrors the closed-orders
+  // popover so the activity feed reads the same way.
+  const [feedFromDate, setFeedFromDate] = useState("");
+  const [feedToDate, setFeedToDate] = useState("");
+  const [feedDateFilterOpen, setFeedDateFilterOpen] = useState(false);
+  const feedDateFilterRef = useRef<HTMLDivElement | null>(null);
+
+  // Click outside / Escape closes the date popover.
+  useEffect(() => {
+    if (!feedDateFilterOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!feedDateFilterRef.current) return;
+      if (!feedDateFilterRef.current.contains(e.target as Node)) setFeedDateFilterOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFeedDateFilterOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [feedDateFilterOpen]);
+
+  const feedDateRangeLabel = (() => {
+    if (!feedFromDate && !feedToDate) return null;
+    const fmt = (iso: string) =>
+      new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+    if (feedFromDate && feedToDate) return `${fmt(feedFromDate)} – ${fmt(feedToDate)}`;
+    if (feedFromDate) return `From ${fmt(feedFromDate)}`;
+    return `Until ${fmt(feedToDate)}`;
+  })();
 
   const [historyItemId, setHistoryItemId] = useState<string | null>(null);
   const [historyItemName, setHistoryItemName] = useState("");
@@ -1359,12 +1397,22 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   // user still needs to Load More, which is why we don't strip events with
   // no itemName (system events, imports) until they explicitly search.
   const normalizedSearch = searchTerm.trim().toLowerCase();
-  const visibleEvents = normalizedSearch
-    ? noiseFreeEvents.filter((e) => {
-        const hay = `${e.itemName ?? ""} ${e.userName ?? ""} ${e.userEmail ?? ""}`.toLowerCase();
-        return hay.includes(normalizedSearch);
-      })
-    : noiseFreeEvents;
+  const feedFromMs = feedFromDate ? new Date(feedFromDate).getTime() : null;
+  // Inclusive "to" — bump to end of day so a single-day filter still catches
+  // events from later that day.
+  const feedToMs = feedToDate
+    ? new Date(feedToDate).getTime() + 24 * 60 * 60 * 1000 - 1
+    : null;
+  const visibleEvents = noiseFreeEvents.filter((e) => {
+    if (feedFromMs !== null || feedToMs !== null) {
+      const ts = new Date(e.timestamp).getTime();
+      if (feedFromMs !== null && ts < feedFromMs) return false;
+      if (feedToMs !== null && ts > feedToMs) return false;
+    }
+    if (!normalizedSearch) return true;
+    const hay = `${e.itemName ?? ""} ${e.userName ?? ""} ${e.userEmail ?? ""}`.toLowerCase();
+    return hay.includes(normalizedSearch);
+  });
 
 
   return (
@@ -1409,9 +1457,63 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
                   aria-label="Clear search"
                   title="Clear search"
                 >
-                  ×
+                  <X size={14} />
                 </button>
               ) : null}
+            </div>
+            <div className="audit-filter-container" ref={feedDateFilterRef}>
+              <button
+                type="button"
+                className={`button button-secondary button-sm closed-orders-daterange-toggle${
+                  feedDateRangeLabel ? " active" : ""
+                }`}
+                onClick={() => setFeedDateFilterOpen((o) => !o)}
+                aria-expanded={feedDateFilterOpen}
+                aria-haspopup="dialog"
+              >
+                <Calendar size={14} />
+                {feedDateRangeLabel ?? "Date range"}
+              </button>
+              {feedDateFilterOpen && (
+                <div
+                  className="audit-filter-menu closed-orders-daterange-menu"
+                  role="dialog"
+                  aria-label="Filter activity by date"
+                >
+                  <div className="closed-orders-daterange-fields">
+                    <label className="closed-orders-daterange-field">
+                      <span>From</span>
+                      <input
+                        className="field"
+                        type="date"
+                        value={feedFromDate}
+                        onChange={(e) => setFeedFromDate(e.target.value)}
+                      />
+                    </label>
+                    <label className="closed-orders-daterange-field">
+                      <span>To</span>
+                      <input
+                        className="field"
+                        type="date"
+                        value={feedToDate}
+                        onChange={(e) => setFeedToDate(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                  {(feedFromDate || feedToDate) && (
+                    <button
+                      type="button"
+                      className="button button-secondary button-sm closed-orders-daterange-clear"
+                      onClick={() => {
+                        setFeedFromDate("");
+                        setFeedToDate("");
+                      }}
+                    >
+                      Clear dates
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
@@ -1447,7 +1549,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
 
           {loading && (
             <div className="audit-loading">
-              <Loader2 size={20} className="spin" />
+              <Loader2 size={22} className="spin" />
             </div>
           )}
 
@@ -1510,7 +1612,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           </div>
 
           {historyLoading && historyEvents.length === 0 && (
-            <div className="audit-loading"><Loader2 size={20} className="spin" /></div>
+            <div className="audit-loading"><Loader2 size={22} className="spin" /></div>
           )}
 
           {!historyLoading && historyEvents.length === 0 && (
@@ -1567,7 +1669,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           </div>
 
           {analyticsLoading && (
-            <div className="audit-loading"><Loader2 size={20} className="spin" /></div>
+            <div className="audit-loading"><Loader2 size={22} className="spin" /></div>
           )}
 
           {!analyticsLoading && analytics && (

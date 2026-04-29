@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Check } from "lucide-react";
 import { useAuthenticator } from "@aws-amplify/ui-react";
 import { authFetch } from "../lib/authFetch";
 import {
@@ -100,7 +101,7 @@ export default function SubscriptionPage() {
                   {plan.features.map((feature) => (
                     <li key={feature} className="plan-card-feature">
                       <span className="plan-card-check" aria-hidden="true">
-                        ✓
+                        <Check size={14} />
                       </span>
                       {feature}
                     </li>
@@ -120,7 +121,7 @@ export default function SubscriptionPage() {
         </div>
 
         <div className="app-actions" style={{ justifyContent: "center" }}>
-          <button className="button button-ghost" type="button" onClick={signOut}>
+          <button className="button button-danger" type="button" onClick={signOut}>
             Sign Out
           </button>
         </div>

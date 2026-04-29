@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { HelpCircle, X } from "lucide-react";
+import { HelpModal } from "../shared/HelpModal";
 import type { ActiveTab } from "./inventoryTypes";
 
 type HelpSection = {
@@ -129,7 +128,7 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
         title: "Inventory",
         body: (
           <>
-            <p className="orders-help-lead">
+            <p className="help-modal-lead">
               Each row is a single lot — same item across multiple lots
               (different expirations or vendors) gets its own row.
             </p>
@@ -194,59 +193,10 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
 }
 
 export function InventoryHelp({ activeTab }: { activeTab: ActiveTab }) {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
-
   const section = getHelpForTab(activeTab);
-  const labelText = `${section.title} help`;
-
   return (
-    <>
-      <button
-        type="button"
-        className="orders-help-btn"
-        onClick={() => setOpen(true)}
-        aria-label={labelText}
-        title={labelText}
-      >
-        <HelpCircle size={16} />
-      </button>
-      {open && (
-        <div
-          className="orders-help-overlay"
-          onClick={() => setOpen(false)}
-          role="presentation"
-        >
-          <div
-            className="orders-help-modal app-card"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="inventory-help-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="orders-help-modal-header">
-              <h3 id="inventory-help-title">{section.title}</h3>
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => setOpen(false)}
-                aria-label="Close"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="orders-help-modal-body">{section.body}</div>
-          </div>
-        </div>
-      )}
-    </>
+    <HelpModal key={activeTab} title={section.title}>
+      {section.body}
+    </HelpModal>
   );
 }

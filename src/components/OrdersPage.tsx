@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
+  ArrowRight,
   Calendar,
   CheckCircle,
   ChevronDown,
   ChevronUp,
-  HelpCircle,
   Loader2,
   PackageCheck,
   Plus,
@@ -13,6 +13,7 @@ import {
   ShoppingCart,
   X,
 } from "lucide-react";
+import { HelpModal } from "./shared/HelpModal";
 import { DaySection } from "../lib/dayGroups";
 import { dayGroupLabel } from "../lib/dayGroupLabel";
 import {
@@ -314,7 +315,7 @@ function ReceiveOrderForm({
             Ordered {formatDateTime(order.createdAt)} by {order.createdByName}
           </p>
         </div>
-        <button type="button" className="button button-ghost button-sm" onClick={onCancel}>
+        <button type="button" className="button button-ghost button-sm" onClick={onCancel} aria-label="Close">
           <X size={16} />
         </button>
       </div>
@@ -369,8 +370,10 @@ function ReceiveOrderForm({
                 max={line.receivingAsBoxes && line.packSize > 0
                   ? Math.ceil(line.qtyRemaining / line.packSize)
                   : line.qtyRemaining}
+                placeholder="0"
                 value={line.qtyThisReceive}
                 onChange={(e) => updateLine(line.itemId, { qtyThisReceive: e.target.value, error: "" })}
+                onFocus={(e) => e.currentTarget.select()}
               />
             </div>
             {hasExpirationColumn && (
@@ -385,10 +388,10 @@ function ReceiveOrderForm({
                 ) : (
                   <button
                     type="button"
-                    className="button button-ghost button-sm order-receive-add-expiration"
+                    className="button button-secondary button-sm order-receive-add-expiration"
                     onClick={() => updateLine(line.itemId, { showExpirationInput: true })}
                   >
-                    + Add expiration
+                    <Plus size={14} /> Add expiration
                   </button>
                 )}
               </div>
@@ -452,7 +455,7 @@ function ReceiveOrderForm({
             </button>
             <button
               type="button"
-              className="button button-ghost"
+              className="button button-danger"
               onClick={() => submitReceive(lines, true)}
               disabled={submitting}
             >
@@ -554,16 +557,16 @@ function OrderCard({
                   className="button button-primary button-sm"
                   onClick={() => setShowReceive(true)}
                 >
-                  <PackageCheck size={13} /> Receive
+                  <PackageCheck size={14} /> Receive
                 </button>
                 <button
                   type="button"
-                  className="button button-ghost button-sm"
+                  className="button button-danger button-sm"
                   onClick={() => setConfirmingCancel(true)}
                   disabled={closing}
                   title="Cancel order — items return to reorder list"
                 >
-                  <X size={13} /> Cancel
+                  <X size={14} /> Cancel
                 </button>
               </>
             )}
@@ -573,9 +576,10 @@ function OrderCard({
             {order.status !== "open" && (
               <button
                 type="button"
-                className="button button-ghost button-sm"
+                className="button button-secondary button-sm order-card-expand"
                 onClick={() => setExpanded((v) => !v)}
                 title={expanded ? "Collapse" : "Expand"}
+                aria-label={expanded ? "Collapse" : "Expand"}
               >
                 {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
@@ -589,7 +593,7 @@ function OrderCard({
         {confirmingCancel && (
           <div className="order-cancel-confirm">
             <div className="order-cancel-confirm-header">
-              <AlertTriangle size={15} />
+              <AlertTriangle size={16} />
               <strong>Cancel this order?</strong>
             </div>
             <p className="order-cancel-confirm-hint">
@@ -618,11 +622,11 @@ function OrderCard({
               </button>
               <button
                 type="button"
-                className="button button-ghost button-sm"
+                className="button button-danger button-sm"
                 onClick={handleConfirmCancel}
                 disabled={closing}
               >
-                {closing ? <Loader2 size={13} className="spin" /> : <X size={13} />}
+                {closing ? <Loader2 size={14} className="spin" /> : <X size={14} />}
                 Cancel order
               </button>
             </div>
@@ -749,140 +753,91 @@ function OrderCard({
 // ── Orders Help ────────────────────────────────────────────────────────────
 
 export function OrdersHelp() {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
-
   return (
-    <>
-      <button
-        type="button"
-        className="orders-help-btn"
-        onClick={() => setOpen(true)}
-        aria-label="How Orders work"
-        title="How Orders work"
-      >
-        <HelpCircle size={16} />
-      </button>
-      {open && (
-        <div
-          className="orders-help-overlay"
-          onClick={() => setOpen(false)}
-          role="presentation"
-        >
-          <div
-            className="orders-help-modal app-card"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="orders-help-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="orders-help-modal-header">
-              <h3 id="orders-help-title">How Orders work</h3>
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => setOpen(false)}
-                aria-label="Close"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="orders-help-modal-body">
-              <p className="orders-help-flow">
-                <strong>Reorder</strong>
-                <span aria-hidden="true"> → </span>
-                <strong>Pending Receipt</strong>
-                <span aria-hidden="true"> → </span>
-                <strong>Closed Orders</strong>
-              </p>
+    <HelpModal title="How Orders work" triggerLabel="How Orders work">
+      <p className="help-modal-flow">
+        <strong>Reorder</strong>
+        <ArrowRight size={14} aria-hidden="true" />
+        <strong>Pending Receipt</strong>
+        <ArrowRight size={14} aria-hidden="true" />
+        <strong>Closed Orders</strong>
+      </p>
 
-              <h4>Reorder</h4>
-              <p>
-                Items below their min quantity, grouped by vendor. Each
-                vendor is a tab with an item count and estimated total.
-              </p>
-              <ul>
-                <li>
-                  <strong>Check items + Mark as Ordered</strong> — creates a
-                  pending order for that vendor. Those items leave the
-                  reorder list until received or cancelled.
-                </li>
-                <li>
-                  <strong>Missing Info tab</strong> — items without a vendor.
-                  Bulk-assign one with the checkboxes, or set per-row.
-                </li>
-              </ul>
+      <h4>Reorder</h4>
+      <p>
+        Items below their min quantity, grouped by vendor. Each
+        vendor is a tab with an item count and estimated total.
+      </p>
+      <ul>
+        <li>
+          <strong>Check items + Mark as Ordered</strong> — creates a
+          pending order for that vendor. Those items leave the
+          reorder list until received or cancelled.
+        </li>
+        <li>
+          <strong>Missing Info tab</strong> — items without a vendor.
+          Bulk-assign one with the checkboxes, or set per-row.
+        </li>
+      </ul>
 
-              <h4>+ New order</h4>
-              <p>
-                Top-right button for anything that doesn't fit a vendor card:
-                in-person buys, brand-new items, mixed vendors, etc.
-              </p>
-              <ul>
-                <li>
-                  Type in the <strong>vendor</strong> field to add a new one
-                  on the spot. Picking a vendor pre-fills its low-stock items.
-                </li>
-                <li>
-                  <strong>Already received</strong> closes the order
-                  immediately and adds the items to inventory — for things
-                  you already have in hand.
-                </li>
-              </ul>
+      <h4>+ New order</h4>
+      <p>
+        Top-right button for anything that doesn't fit a vendor card:
+        in-person buys, brand-new items, mixed vendors, etc.
+      </p>
+      <ul>
+        <li>
+          Type in the <strong>vendor</strong> field to add a new one
+          on the spot. Picking a vendor pre-fills its low-stock items.
+        </li>
+        <li>
+          <strong>Already received</strong> closes the order
+          immediately and adds the items to inventory — for things
+          you already have in hand.
+        </li>
+      </ul>
 
-              <h4>Pending Receipt</h4>
-              <ul>
-                <li>
-                  <strong>Receive</strong> — log what arrived. Adjust qty for
-                  short shipments, add expiration, update price. Inventory
-                  goes up automatically. The order closes when fully received.
-                </li>
-                <li>
-                  <strong>Partial</strong> — enter what came, choose to close
-                  or leave open. Open partial orders show a
-                  <strong> Partially Received</strong> badge.
-                </li>
-                <li>
-                  <strong>Cancel</strong> — close without receiving. Items
-                  return to the reorder list. Add a note if you want.
-                </li>
-              </ul>
+      <h4>Pending Receipt</h4>
+      <ul>
+        <li>
+          <strong>Receive</strong> — log what arrived. Adjust qty for
+          short shipments, add expiration, update price. Inventory
+          goes up automatically. The order closes when fully received.
+        </li>
+        <li>
+          <strong>Partial</strong> — enter what came, choose to close
+          or leave open. Open partial orders show a
+          <strong> Partially Received</strong> badge.
+        </li>
+        <li>
+          <strong>Cancel</strong> — close without receiving. Items
+          return to the reorder list. Add a note if you want.
+        </li>
+      </ul>
 
-              <h4>Closed Orders</h4>
-              <p>
-                History. Search by vendor / item / note; filter by date.
-                <strong> COMPLETED</strong> = received normally;
-                <strong> CANCELLED</strong> = closed before anything arrived.
-              </p>
+      <h4>Closed Orders</h4>
+      <p>
+        History. Search by vendor / item / note; filter by date.
+        <strong> COMPLETED</strong> = received normally;
+        <strong> CANCELLED</strong> = closed before anything arrived.
+      </p>
 
-              <h4>Tips</h4>
-              <ul>
-                <li>
-                  The min-quantity threshold is set per item in the Inventory
-                  tab.
-                </li>
-                <li>
-                  Expired stock doesn't count toward on-hand — an item can
-                  appear for reorder even if expired units are on the shelf.
-                </li>
-                <li>
-                  Items with a vendor assigned group under that vendor's
-                  card. Items without one land in Missing Info.
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+      <h4>Tips</h4>
+      <ul>
+        <li>
+          The min-quantity threshold is set per item in the Inventory
+          tab.
+        </li>
+        <li>
+          Expired stock doesn't count toward on-hand — an item can
+          appear for reorder even if expired units are on the shelf.
+        </li>
+        <li>
+          Items with a vendor assigned group under that vendor's
+          card. Items without one land in Missing Info.
+        </li>
+      </ul>
+    </HelpModal>
   );
 }
 
@@ -1050,7 +1005,7 @@ function OrderItemAutocomplete({
               disabled={disabled}
               aria-label="Clear selection"
             >
-              ×
+              <X size={14} />
             </button>
           ) : null}
         </div>
@@ -1084,7 +1039,7 @@ function OrderItemAutocomplete({
             disabled={disabled}
             aria-label="Clear search"
           >
-            ×
+            <X size={14} />
           </button>
         )}
       </div>
@@ -1342,8 +1297,10 @@ function ComposeOrderPanel({
                       className="field compose-order-line-qty-input"
                       type="number"
                       min="1"
+                      placeholder="0"
                       value={l.qty}
                       onChange={(e) => updateLine(idx, { qty: e.target.value })}
+                      onFocus={(e) => e.currentTarget.select()}
                       disabled={submitting || !filled}
                       aria-label="Quantity"
                     />
@@ -1356,7 +1313,7 @@ function ComposeOrderPanel({
                       disabled={submitting}
                       aria-label="Remove line"
                     >
-                      ×
+                      <X size={14} />
                     </button>
                   )}
                 </div>
@@ -1369,7 +1326,11 @@ function ComposeOrderPanel({
                     disabled={submitting}
                     aria-expanded={l.expanded}
                   >
-                    {l.expanded ? "Hide details ▴" : "More details ▾"}
+                    {l.expanded ? (
+                      <>Hide details <ChevronUp size={14} /></>
+                    ) : (
+                      <>More details <ChevronDown size={14} /></>
+                    )}
                   </button>
                 ) : null}
 
@@ -1385,6 +1346,7 @@ function ComposeOrderPanel({
                           placeholder="Reorder threshold"
                           value={l.minQuantity}
                           onChange={(e) => updateLine(idx, { minQuantity: e.target.value })}
+                          onFocus={(e) => e.currentTarget.select()}
                           disabled={submitting}
                         />
                       </label>
@@ -1413,7 +1375,7 @@ function ComposeOrderPanel({
           onClick={addEmptyLine}
           disabled={submitting}
         >
-          + Add Item
+          <Plus size={14} /> Add Item
         </button>
 
         <label className="manual-order-checkbox">
@@ -1834,7 +1796,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
 
         {loading && (
           <div className="orders-loading">
-            <Loader2 size={20} className="spin" />
+            <Loader2 size={22} className="spin" />
           </div>
         )}
 
@@ -1923,7 +1885,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
               <div className="orders-section">
                 {openOrders.length === 0 ? (
                   <p className="orders-empty">
-                    <PackageCheck size={20} />
+                    <PackageCheck size={32} strokeWidth={1.5} />
                     <span>No orders waiting to be received.</span>
                     <span className="orders-empty-hint">
                       Place an order from the Reorder or New Order tab and it'll show up here.
@@ -1977,7 +1939,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                             aria-label="Clear search"
                             title="Clear search"
                           >
-                            ×
+                            <X size={14} />
                           </button>
                         ) : null}
                       </div>
@@ -1991,7 +1953,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                           aria-expanded={dateFilterOpen}
                           aria-haspopup="dialog"
                         >
-                          <Calendar size={13} />
+                          <Calendar size={14} />
                           {dateRangeLabel ?? "Date range"}
                         </button>
                         {dateFilterOpen && (
@@ -2000,28 +1962,30 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                             role="dialog"
                             aria-label="Filter closed orders by date"
                           >
-                            <label className="closed-orders-daterange-field">
-                              <span>From</span>
-                              <input
-                                className="field"
-                                type="date"
-                                value={closedFromDate}
-                                onChange={(e) => setClosedFromDate(e.target.value)}
-                              />
-                            </label>
-                            <label className="closed-orders-daterange-field">
-                              <span>To</span>
-                              <input
-                                className="field"
-                                type="date"
-                                value={closedToDate}
-                                onChange={(e) => setClosedToDate(e.target.value)}
-                              />
-                            </label>
+                            <div className="closed-orders-daterange-fields">
+                              <label className="closed-orders-daterange-field">
+                                <span>From</span>
+                                <input
+                                  className="field"
+                                  type="date"
+                                  value={closedFromDate}
+                                  onChange={(e) => setClosedFromDate(e.target.value)}
+                                />
+                              </label>
+                              <label className="closed-orders-daterange-field">
+                                <span>To</span>
+                                <input
+                                  className="field"
+                                  type="date"
+                                  value={closedToDate}
+                                  onChange={(e) => setClosedToDate(e.target.value)}
+                                />
+                              </label>
+                            </div>
                             {(closedFromDate || closedToDate) && (
                               <button
                                 type="button"
-                                className="button button-ghost button-sm closed-orders-daterange-clear"
+                                className="button button-secondary button-sm closed-orders-daterange-clear"
                                 onClick={() => {
                                   setClosedFromDate("");
                                   setClosedToDate("");

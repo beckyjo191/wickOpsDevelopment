@@ -56,7 +56,7 @@ import {
   resendInvite,
   type PendingInvite,
 } from "../lib/invitesApi";
-import { AlertTriangle, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, GripVertical, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
 type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "vendors" | "inventoryColumns" | "importData" | "exportData" | "helpSupport";
@@ -998,7 +998,10 @@ export function SettingsPage({
         </div>
 
         <details className="settings-section" open>
-          <summary className="settings-section-title">Profile</summary>
+          <summary className="settings-section-title">
+            Profile
+            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+          </summary>
           <div className="settings-field-group">
             <label className="settings-field-label">Display Name</label>
             <div className="settings-field-row">
@@ -1109,7 +1112,10 @@ export function SettingsPage({
           open={disclosures.appearance}
           onToggle={(event) => onDisclosureToggle("appearance", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">Appearance</summary>
+          <summary className="settings-section-title">
+            Appearance
+            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+          </summary>
           <div className="settings-theme-options" role="radiogroup" aria-label="Theme preference">
             <label className="settings-theme-option">
               <input
@@ -1150,7 +1156,10 @@ export function SettingsPage({
             open={disclosures.importData}
             onToggle={(event) => onDisclosureToggle("importData", event.currentTarget.open)}
           >
-            <summary className="settings-section-title">Import Data</summary>
+            <summary className="settings-section-title">
+              Import Data
+              <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+            </summary>
             <p className="settings-section-copy">
               Import inventory items from a spreadsheet or paste data directly.
             </p>
@@ -1186,7 +1195,10 @@ export function SettingsPage({
             open={disclosures.exportData}
             onToggle={(event) => onDisclosureToggle("exportData", event.currentTarget.open)}
           >
-            <summary className="settings-section-title">Export Data</summary>
+            <summary className="settings-section-title">
+              Export Data
+              <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+            </summary>
             <p className="settings-section-copy">
               Download all inventory data as a spreadsheet. Includes all items, columns, and locations.
             </p>
@@ -1214,7 +1226,10 @@ export function SettingsPage({
           open={disclosures.userModuleAccess}
           onToggle={(event) => onDisclosureToggle("userModuleAccess", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">Team Access</summary>
+          <summary className="settings-section-title">
+            Team Access
+            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+          </summary>
           {canManageModuleAccess ? (
             <div className="settings-columns-list">
               {loadingModuleAccess ? <div>Loading users...</div> : null}
@@ -1260,7 +1275,7 @@ export function SettingsPage({
                     {user.userId !== currentUserId && !["OWNER", "ACCOUNT_OWNER"].includes(user.role.toUpperCase()) && (
                       <button
                         type="button"
-                        className="button button-ghost button-sm"
+                        className="button button-danger button-sm"
                         disabled={revokingUserId === user.userId || savingModuleAccessUserId === user.userId}
                         onClick={() => { void onRevokeUser(user.userId); }}
                       >
@@ -1288,6 +1303,7 @@ export function SettingsPage({
             <summary className="settings-section-title">
               Pending Invites
               {pendingInvites.length > 0 ? ` (${pendingInvites.length})` : ""}
+              <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
             </summary>
             <p className="settings-section-copy">
               People you've invited who haven't signed in yet. Invites expire 14 days after sending.
@@ -1333,7 +1349,7 @@ export function SettingsPage({
                       </button>
                       <button
                         type="button"
-                        className="button button-ghost button-sm"
+                        className="button button-danger button-sm"
                         disabled={
                           resendingInviteEmail === invite.email ||
                           cancellingInviteEmail === invite.email
@@ -1397,7 +1413,10 @@ export function SettingsPage({
           open={disclosures.locations}
           onToggle={(event) => onDisclosureToggle("locations", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">Locations</summary>
+          <summary className="settings-section-title">
+            Locations
+            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+          </summary>
           {canManageInventoryColumns ? (
             <>
               <div className="settings-field-row" style={{ marginBottom: locationError ? "0.25rem" : "0.5rem" }}>
@@ -1537,7 +1556,10 @@ export function SettingsPage({
           open={disclosures.vendors}
           onToggle={(event) => onDisclosureToggle("vendors", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">Vendors</summary>
+          <summary className="settings-section-title">
+            Vendors
+            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+          </summary>
           {canManageInventoryColumns ? (
             <>
               <div className="settings-field-row" style={{ marginBottom: vendorError ? "0.25rem" : "0.5rem" }}>
@@ -1677,7 +1699,10 @@ export function SettingsPage({
           open={disclosures.inventoryColumns}
           onToggle={(event) => onDisclosureToggle("inventoryColumns", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">Columns</summary>
+          <summary className="settings-section-title">
+            Columns
+            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+          </summary>
           {canManageInventoryColumns ? (
             <>
               <p className="settings-section-copy">
@@ -1799,7 +1824,10 @@ export function SettingsPage({
           open={disclosures.helpSupport}
           onToggle={(event) => onDisclosureToggle("helpSupport", event.currentTarget.open)}
         >
-          <summary className="settings-section-title">Help &amp; Support</summary>
+          <summary className="settings-section-title">
+            Help &amp; Support
+            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
+          </summary>
           <p className="settings-section-copy">
             Have a question, bug report, or feature request? Send us a message and we'll get back to you.
           </p>

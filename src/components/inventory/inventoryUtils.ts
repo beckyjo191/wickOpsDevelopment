@@ -17,17 +17,23 @@ export const createBlankInventoryRow = (
   };
 };
 
-/** True when every value on the row is empty / zero / null — i.e. the row was
- *  created (typically via Add Row) but never given content. Mirrors the
- *  server-side `isAllDefaults` check that classifies a row as a blank-row
- *  delete (silently dropped from the audit log). Used to gate the Discard
- *  affordance: anything with content should be retired instead. */
+/** True when the row has no operational use — no on-hand quantity, no
+ *  expiration date, and no retire markers. The user may have typed a name,
+ *  set a min quantity, attached a vendor, etc., but until the row has actually
+ *  received stock or been retired it's still safe to discard. The server's
+ *  `hasProtectedHistory` check is the final gate (rejects if audit events
+ *  beyond ITEM_CREATE exist), so the client check just hides the Discard
+ *  button when the values themselves clearly indicate operational history.
+ *
+ *  Anything that fails this check should route through Retire instead so
+ *  the loss reason and audit trail are preserved. */
 export const isDiscardableRow = (row: InventoryRow): boolean => {
-  const values = row.values ?? {};
-  for (const v of Object.values(values)) {
-    if (v === null || v === undefined || v === "" || v === 0) continue;
-    return false;
-  }
+  const v = row.values ?? {};
+  const qty = Number(v.quantity ?? 0);
+  if (Number.isFinite(qty) && qty > 0) return false;
+  if (typeof v.expirationDate === "string" && v.expirationDate.trim() !== "") return false;
+  if (v.retiredAt) return false;
+  if (v.retiredQty && Number(v.retiredQty) > 0) return false;
   return true;
 };
 

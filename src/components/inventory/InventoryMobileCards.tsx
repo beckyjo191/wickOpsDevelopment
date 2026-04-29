@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryRow } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 import { isDiscardableRow } from "./inventoryUtils";
@@ -241,7 +242,7 @@ export function InventoryMobileCards({
                   </div>
                 </div>
                 <span className={`inventory-card-chevron${isExpanded ? " inventory-card-chevron--up" : ""}`} aria-hidden="true">
-                  ▼
+                  <ChevronDown size={14} />
                 </span>
               </div>
 

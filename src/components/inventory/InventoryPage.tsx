@@ -1,6 +1,7 @@
 // ── InventoryPage orchestrator ───────────────────────────────────────────────
 // Wires custom hooks to sub-components. All state lives in hooks.
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown, Plus } from "lucide-react";
 import type { InventoryPageProps } from "./inventoryTypes";
 import { isDiscardableRow, normalizeHeaderKey } from "./inventoryUtils";
 import {
@@ -115,6 +116,23 @@ export function InventoryPage({
     onActiveTabChange?.(filters.activeTab);
   }, [filters.activeTab, onActiveTabChange]);
   filtersRef.current = filters;
+
+  // ── Stale-location auto-sync ──────────────────────────────────────────────
+  // When the saved `selectedLocation` (persisted to localStorage) drops out
+  // of `locationOptions` — e.g. the user discarded the last row in
+  // "Unassigned" — snap the stored value back to whatever the filter is
+  // actually applying so the dropdown trigger, the table, and storage all
+  // agree. Without this the trigger keeps showing the dead location through
+  // page reloads until the user manually picks something.
+  useEffect(() => {
+    if (
+      selectedLocation !== null &&
+      filters.locationOptions.length > 0 &&
+      !filters.locationOptions.includes(selectedLocation)
+    ) {
+      onLocationChange(filters.locationOptions[0]);
+    }
+  }, [selectedLocation, filters.locationOptions, onLocationChange]);
 
   // ── Auto-paginate + scroll to newly selected row (e.g. after Add Row) ─────
   const prevSelectedRowIdRef = useRef(data.selectedRowId);
@@ -270,15 +288,15 @@ export function InventoryPage({
               {filters.showLocationPills && (
                 <details className="inventory-dropdown">
                   <summary className="inventory-dropdown-trigger">
-                    {selectedLocation || "All Locations"}
-                    <svg className="inventory-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                    {filters.effectiveLocationFilter || "All Locations"}
+                    <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                   </summary>
                   <div className="inventory-dropdown-panel">
                     {filters.locationOptions.map((loc) => (
                       <button
                         key={loc}
                         type="button"
-                        className={`inventory-dropdown-option${selectedLocation === loc ? " active" : ""}`}
+                        className={`inventory-dropdown-option${filters.effectiveLocationFilter === loc ? " active" : ""}`}
                         onClick={(e) => {
                           onLocationChange(loc);
                           e.currentTarget.closest("details")?.removeAttribute("open");
@@ -300,7 +318,7 @@ export function InventoryPage({
                             e.currentTarget.closest("details")?.removeAttribute("open");
                           }}
                         >
-                          + Add Location
+                          <Plus size={14} /> Add Location
                         </button>
                       </>
                     )}
@@ -363,15 +381,15 @@ export function InventoryPage({
               {filters.showLocationPills && (
                 <details className="inventory-dropdown">
                   <summary className="inventory-dropdown-trigger">
-                    {selectedLocation || "All Locations"}
-                    <svg className="inventory-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                    {filters.effectiveLocationFilter || "All Locations"}
+                    <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                   </summary>
                   <div className="inventory-dropdown-panel">
                     {filters.locationOptions.map((loc) => (
                       <button
                         key={loc}
                         type="button"
-                        className={`inventory-dropdown-option${selectedLocation === loc ? " active" : ""}`}
+                        className={`inventory-dropdown-option${filters.effectiveLocationFilter === loc ? " active" : ""}`}
                         onClick={(e) => {
                           onLocationChange(loc);
                           e.currentTarget.closest("details")?.removeAttribute("open");
@@ -393,7 +411,7 @@ export function InventoryPage({
                             e.currentTarget.closest("details")?.removeAttribute("open");
                           }}
                         >
-                          + Add Location
+                          <Plus size={14} /> Add Location
                         </button>
                       </>
                     )}
@@ -487,14 +505,12 @@ export function InventoryPage({
                       className="inventory-add-row-btn"
                       onClick={() => data.onAddRow("top")}
                     >
-                      + Add Row
+                      <Plus size={14} /> Add Row
                     </button>
                     {filters.selectedRowIds.size > 0 && (
                       <details className="inventory-add-row-menu">
                         <summary className="inventory-add-row-chevron" aria-label="Add row options">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="6 9 12 15 18 9" />
-                          </svg>
+                          <ChevronDown size={14} aria-hidden="true" />
                         </summary>
                         <div className="inventory-add-row-panel">
                           <button

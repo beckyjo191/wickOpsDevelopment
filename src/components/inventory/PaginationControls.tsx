@@ -1,3 +1,5 @@
+import { ChevronLeft, ChevronRight } from "lucide-react";
+
 export type PaginationControlsProps = {
   currentPage: number;
   totalPages: number;
@@ -32,7 +34,7 @@ export function PaginationControls({
           onClick={() => onPageChange(Math.max(1, safePage - 1))}
           disabled={safePage === 1}
         >
-          ← Prev
+          <ChevronLeft size={14} /> Prev
         </button>
         {totalPages <= 10 ? (
           <span className="inventory-pagination-pages">
@@ -56,7 +58,7 @@ export function PaginationControls({
           onClick={() => onPageChange(Math.min(totalPages, safePage + 1))}
           disabled={safePage === totalPages}
         >
-          Next →
+          Next <ChevronRight size={14} />
         </button>
       </div>
     </div>

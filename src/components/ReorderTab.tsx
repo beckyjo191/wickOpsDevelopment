@@ -426,7 +426,7 @@ function VendorChecklistCard({
                     title={`Open ${line.name} on ${group.label}`}
                   >
                     {line.name}
-                    <ExternalLink size={12} />
+                    <ExternalLink size={14} />
                   </a>
                   {itemData && (
                     <span className="checklist-item-detail">
@@ -440,7 +440,7 @@ function VendorChecklistCard({
                             aria-label={`Remove ${line.name} from reorder`}
                           >
                             Added
-                            <X size={11} />
+                            <X size={14} />
                           </button>
                         ) : (
                           <span className="reorder-item-status reorder-status-extra">
@@ -472,6 +472,7 @@ function VendorChecklistCard({
                     placeholder="Qty"
                     value={line.qty}
                     onChange={(e) => updateLineQty(line.rowId, e.target.value)}
+                    onFocus={(e) => e.currentTarget.select()}
                   />
                   {itemData && itemData.packSize > 0 && (
                     <span className="checklist-qty-unit">
@@ -676,7 +677,7 @@ export function VendorSelect({
             disabled={isDisabled}
             aria-label="Clear vendor"
           >
-            ×
+            <X size={14} />
           </button>
         )}
       </div>
@@ -1016,7 +1017,7 @@ function MissingInfoCard({
                           aria-label={`Remove ${item.itemName} from reorder`}
                         >
                           Added
-                          <X size={11} />
+                          <X size={14} />
                         </button>
                       ) : (
                         <span className="reorder-item-status reorder-status-extra">Added</span>
@@ -1096,6 +1097,7 @@ function MissingInfoCard({
                       aria-label="Pack size (units per box)"
                       value={packSizeValue}
                       onChange={(e) => updateDraft(item.row.id, { packSize: e.target.value })}
+                      onFocus={(e) => e.currentTarget.select()}
                       onBlur={() => void handlePackSizeBlur(item)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
@@ -1682,7 +1684,7 @@ export function ReorderTab({
                   aria-label="Clear search"
                   title="Clear search"
                 >
-                  ×
+                  <X size={14} />
                 </button>
               )}
             </div>

@@ -6538,6 +6538,69 @@ textarea.inventory-card-input {
   }
 }
 
+/* On phones the desktop's three-column grid (checkbox / name / 88px qty)
+ * leaves the qty column too narrow for "boxes (N ea)" to render without
+ * wrapping awkwardly, and the qty input itself is too small to thumb-tap.
+ * Switch to a two-row layout: top row is checkbox + name (with badges
+ * wrapping below the name as usual), bottom row gives the qty input the
+ * full content width under the name column. */
+@media (max-width: 600px) {
+  .checklist-item--form {
+    grid-template-columns: 44px 1fr;
+    grid-template-areas:
+      "checkbox name"
+      ".        qty";
+    row-gap: 0.25rem;
+    padding: 0.4rem 0.6rem 0.5rem;
+  }
+
+  .checklist-item--form > .checklist-cell--checkbox {
+    grid-area: checkbox;
+    border-right: none;
+    padding: 0.4rem 0;
+  }
+
+  .checklist-item--form > .checklist-cell:nth-child(2) {
+    grid-area: name;
+    border-right: none;
+    padding: 0.4rem 0;
+  }
+
+  .checklist-item--form > .checklist-cell:nth-child(3) {
+    grid-area: qty;
+    padding: 0;
+  }
+
+  .checklist-items-header {
+    grid-template-columns: 44px 1fr;
+  }
+
+  .checklist-items-header > .checklist-cell:nth-child(3) {
+    display: none;
+  }
+
+  /* Bump the visual checkbox to 28x28 (was 22) — easier to spot at
+   * arm's length. The 780px breakpoint already extends the tap surface
+   * via a transparent ::before, so total hit area stays well above 44px. */
+  .checklist-checkbox {
+    width: 28px;
+    height: 28px;
+  }
+
+  /* Allow Low: X/Y, Added, and the unit-cost chip to wrap to a second
+   * line when the name is long enough to push them past the row width. */
+  .checklist-item-detail {
+    flex-wrap: wrap;
+  }
+
+  /* Qty input now spans the full content column, so we can give it a
+   * thumb-friendly 44px tap target and a readable type size. */
+  .checklist-qty-field {
+    padding: 0.55rem 0.6rem !important;
+    font-size: 0.95rem !important;
+  }
+}
+
 /* ── Audit Log ──────────────────────────────────────────────────────────────── */
 
 /* ── Orders Page ─────────────────────────────────────────────────────────── */

@@ -15,7 +15,7 @@ import type {
 } from "../types";
 import { ddb } from "../clients";
 import { json } from "../http";
-import { CORE_KEYS, ENABLE_PER_ORG_TABLES } from "../config";
+import { CORE_KEYS } from "../config";
 import { normalizeOrgId, toKey } from "../normalize";
 import { buildAuditEvent, writeAuditEvents } from "../audit";
 import { ensureColumns } from "../columns";
@@ -441,9 +441,6 @@ export const handleDeleteOrganizationStorage = async (ctx: RouteContext) => {
   const { access, query } = ctx;
   if (!access.canManageColumns) {
     return json(403, { error: "Only admins can delete organization storage" });
-  }
-  if (!ENABLE_PER_ORG_TABLES) {
-    return json(400, { error: "Per-organization table mode is disabled" });
   }
   if (String(query.confirm ?? "").toUpperCase() !== "DELETE") {
     return json(400, { error: "Missing confirmation. Use ?confirm=DELETE" });

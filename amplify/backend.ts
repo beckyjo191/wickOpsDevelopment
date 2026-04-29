@@ -1,9 +1,9 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { CustomResource, RemovalPolicy, Stack } from "aws-cdk-lib";
+import { CustomResource, Stack } from "aws-cdk-lib";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { CorsHttpMethod, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
-import { AttributeType, BillingMode, CfnTable, Table } from "aws-cdk-lib/aws-dynamodb";
+import { CfnTable } from "aws-cdk-lib/aws-dynamodb";
 import { PolicyStatement, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Provider } from "aws-cdk-lib/custom-resources";
 import { Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
@@ -162,47 +162,14 @@ billingWebhookHttpApi.addRoutes({
   integration: stripeWebhookIntegration,
 });
 
-const inventoryStack = backend.createStack("inventory-storage");
-
-const inventoryColumnTable = new Table(inventoryStack, "InventoryColumnTable", {
-  partitionKey: { name: "id", type: AttributeType.STRING },
-  billingMode: BillingMode.PAY_PER_REQUEST,
-  pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-  deletionProtection: true,
-  removalPolicy: RemovalPolicy.RETAIN,
-});
-inventoryColumnTable.addGlobalSecondaryIndex({
-  indexName: "ByOrganizationSortOrder",
-  partitionKey: { name: "organizationId", type: AttributeType.STRING },
-  sortKey: { name: "sortOrder", type: AttributeType.NUMBER },
-});
-
-const inventoryItemTable = new Table(inventoryStack, "InventoryItemTable", {
-  partitionKey: { name: "id", type: AttributeType.STRING },
-  billingMode: BillingMode.PAY_PER_REQUEST,
-  pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
-  deletionProtection: true,
-  removalPolicy: RemovalPolicy.RETAIN,
-});
-inventoryItemTable.addGlobalSecondaryIndex({
-  indexName: "ByOrganizationPosition",
-  partitionKey: { name: "organizationId", type: AttributeType.STRING },
-  sortKey: { name: "position", type: AttributeType.NUMBER },
-});
-
+// Inventory data lives in per-org DynamoDB tables (`wickops-inventory-*`)
+// created on demand by the inventoryApi Lambda. The previous static
+// InventoryColumnTable/InventoryItemTable resources were removed once per-org
+// became the only supported mode.
 const inventoryApiLambda = backend.inventoryApi.resources.lambda as any;
 const userSubscriptionLambda = backend.userSubscriptionCheck.resources.lambda as any;
 const inventoryOrgTablePrefix = "wickops-inventory";
 
-inventoryApiLambda.addEnvironment(
-  "INVENTORY_COLUMN_TABLE",
-  inventoryColumnTable.tableName,
-);
-inventoryApiLambda.addEnvironment(
-  "INVENTORY_ITEM_TABLE",
-  inventoryItemTable.tableName,
-);
-inventoryApiLambda.addEnvironment("ENABLE_PER_ORG_INVENTORY_TABLES", "true");
 inventoryApiLambda.addEnvironment("INVENTORY_ORG_TABLE_PREFIX", inventoryOrgTablePrefix);
 
 const userTable = (backend.data.resources as any)?.tables?.user;
@@ -237,10 +204,8 @@ const inventoryApiStack = Stack.of(inventoryApiLambda);
 const inventoryDynamicTableArn = `arn:aws:dynamodb:${inventoryApiStack.region}:${inventoryApiStack.account}:table/${inventoryOrgTablePrefix}-*`;
 
 // Split into two least-privilege policies to stay under the 20KB limit:
-// 1) CRUD on all tables this Lambda touches (static + dynamic)
+// 1) CRUD on all tables this Lambda touches (per-org dynamic + core data)
 const crudResources: string[] = [
-  inventoryColumnTable.tableArn, `${inventoryColumnTable.tableArn}/index/*`,
-  inventoryItemTable.tableArn, `${inventoryItemTable.tableArn}/index/*`,
   inventoryDynamicTableArn, `${inventoryDynamicTableArn}/index/*`,
 ];
 if (userTable) crudResources.push(userTable.tableArn, `${userTable.tableArn}/index/*`);
@@ -256,7 +221,7 @@ inventoryApiLambda.addToRolePolicy(
   }),
 );
 
-// 2) Table management — only on dynamic per-org tables (not user/org/static tables)
+// 2) Table management — only on dynamic per-org tables (not user/org tables)
 inventoryApiLambda.addToRolePolicy(
   new PolicyStatement({
     actions: [

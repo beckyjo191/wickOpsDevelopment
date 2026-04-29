@@ -7,10 +7,6 @@ import type { ModuleKey } from "./types";
 export const USER_TABLE = process.env.USER_TABLE!;
 export const USER_POOL_ID = process.env.USER_POOL_ID ?? "";
 export const ORG_TABLE = process.env.ORG_TABLE!;
-export const DEFAULT_INVENTORY_COLUMN_TABLE = process.env.INVENTORY_COLUMN_TABLE!;
-export const DEFAULT_INVENTORY_ITEM_TABLE = process.env.INVENTORY_ITEM_TABLE!;
-export const ENABLE_PER_ORG_TABLES =
-  String(process.env.ENABLE_PER_ORG_INVENTORY_TABLES ?? "true").trim().toLowerCase() !== "false";
 export const INVENTORY_ORG_TABLE_PREFIX =
   String(process.env.INVENTORY_ORG_TABLE_PREFIX ?? "wickops-inventory").trim() ||
   "wickops-inventory";

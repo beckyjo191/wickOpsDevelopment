@@ -16,9 +16,6 @@ import { rawDdb } from "./clients";
 import {
   AUDIT_BY_TIMESTAMP_INDEX,
   AUDIT_BY_USER_INDEX,
-  DEFAULT_INVENTORY_COLUMN_TABLE,
-  DEFAULT_INVENTORY_ITEM_TABLE,
-  ENABLE_PER_ORG_TABLES,
   INVENTORY_COLUMN_BY_MODULE_INDEX,
   INVENTORY_ITEM_BY_MODULE_INDEX,
   STORAGE_CACHE_TTL_MS,
@@ -247,16 +244,6 @@ export const createOrgAuditTableIfMissing = async (tableName: string): Promise<{
 export const storageCache = new Map<string, { storage: InventoryStorage; checkedAt: number }>();
 
 export const ensureStorageForOrganization = async (organizationId: string): Promise<InventoryStorage> => {
-  if (!ENABLE_PER_ORG_TABLES) {
-    return {
-      columnTable: DEFAULT_INVENTORY_COLUMN_TABLE,
-      itemTable: DEFAULT_INVENTORY_ITEM_TABLE,
-      pendingTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-pending`,
-      auditTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-auditlog`,
-      restockOrdersTable: `${DEFAULT_INVENTORY_ITEM_TABLE}-restock-orders`,
-    };
-  }
-
   const cached = storageCache.get(organizationId);
   const now = Date.now();
   if (cached && now - cached.checkedAt < STORAGE_CACHE_TTL_MS) {
@@ -284,7 +271,6 @@ export const ensureStorageForOrganization = async (organizationId: string): Prom
 };
 
 export const deleteStorageForOrganization = async (organizationId: string): Promise<void> => {
-  if (!ENABLE_PER_ORG_TABLES) return;
   const storage = await ensureStorageForOrganization(organizationId);
   await Promise.all(
     [storage.columnTable, storage.itemTable, storage.pendingTable, storage.auditTable, storage.restockOrdersTable].map(async (tableName) => {

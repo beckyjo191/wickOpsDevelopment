@@ -5,6 +5,7 @@ import {
   DeleteCommand,
   GetCommand,
   PutCommand,
+  QueryCommand,
   ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
@@ -170,7 +171,6 @@ export const handleSubmitUsage = async (ctx: RouteContext) => {
   const byId = new Map(items.map((item) => [String(item.id), item]));
 
   const pendingEntries: PendingEntry[] = [];
-  const usageSnapshotMap = new Map<string, Record<string, unknown>>();
   let itemCounter = 0;
   for (const [itemId, entry] of usageByItemId) {
     itemCounter += 1;
@@ -189,11 +189,6 @@ export const handleSubmitUsage = async (ctx: RouteContext) => {
     if (entry.location && itemLocation && entry.location !== itemLocation) {
       return json(400, { error: `Entry ${itemCounter}: location does not match inventory.` });
     }
-    const snap: Record<string, unknown> = {};
-    if (values.quantity !== undefined && values.quantity !== null) snap.quantity = values.quantity;
-    if (values.minQuantity !== undefined && values.minQuantity !== null) snap.minQuantity = values.minQuantity;
-    if (values.expirationDate !== undefined && values.expirationDate !== null && values.expirationDate !== "") snap.expirationDate = values.expirationDate;
-    usageSnapshotMap.set(itemId, snap);
     pendingEntries.push({
       itemId,
       itemName,
@@ -203,31 +198,38 @@ export const handleSubmitUsage = async (ctx: RouteContext) => {
     });
   }
 
+  // Direct decrement: the previous two-step pending approval flow has been
+  // collapsed into a single submit-and-decrement. Mistakes are recoverable via
+  // the Undo button on the resulting USAGE_APPROVE event in the Activity feed.
+  const applyResult = await applyUsageEntries(storage, access, pendingEntries);
+  if (applyResult.error) {
+    return json(409, { error: applyResult.error });
+  }
+
+  // Group all items from this single submission under one id. Stored on every
+  // resulting audit event's metadata; useful for grouping in analytics and as
+  // a hook for a future "undo whole submission" affordance.
   const submissionId = randomUUID();
-  const submission: PendingSubmission = {
-    id: submissionId,
-    submittedAt: new Date().toISOString(),
-    submittedByUserId: access.userId,
-    submittedByEmail: access.email,
-    submittedByName: access.displayName || access.email,
-    status: "pending",
-    entriesJson: JSON.stringify(pendingEntries),
-  };
+  const notesByItemId = new Map(pendingEntries.map((e) => [e.itemId, e.notes]));
 
-  await ddb.send(new PutCommand({ TableName: storage.pendingTable, Item: submission }));
-
-  // Write per-item audit events so each item's history reflects the pending checkout
-  const submitAuditEvents = pendingEntries.map((e) =>
-    buildAuditEvent(access, "USAGE_SUBMIT", e.itemId, e.itemName, {
+  const auditEvents: Record<string, unknown>[] = [];
+  for (const detail of applyResult.appliedDetails ?? []) {
+    const notes = notesByItemId.get(detail.itemId);
+    auditEvents.push(buildAuditEvent(access, "USAGE_APPROVE", detail.itemId, detail.itemName, {
       submissionId,
-      quantityUsed: e.quantityUsed,
-      ...(e.notes ? { notes: e.notes } : {}),
-      snapshot: usageSnapshotMap.get(e.itemId) ?? {},
-    }),
-  );
-  await writeAuditEvents(storage.auditTable, submitAuditEvents);
+      quantityUsed: detail.quantityUsed,
+      quantityBefore: detail.quantityBefore,
+      quantityAfter: detail.quantityAfter,
+      // Then-current per-unit cost. Lets analytics value historical usage at
+      // the price we paid at the time, not whatever the item costs today.
+      ...(detail.unitCost > 0 ? { unitCost: detail.unitCost } : {}),
+      ...(notes ? { notes } : {}),
+      snapshot: detail.snapshot,
+    }));
+  }
+  await writeAuditEvents(storage.auditTable, auditEvents);
 
-  return json(200, { ok: true, pending: true, submissionId, entryCount: pendingEntries.length });
+  return json(200, { ok: true, submissionId, entryCount: pendingEntries.length });
 };
 
 export const handleListPendingSubmissions = async (ctx: RouteContext) => {
@@ -396,6 +398,142 @@ export const handleRejectSubmission = async (ctx: RouteContext) => {
       submissionId,
       submittedByEmail: submission.submittedByEmail,
       reason: rejectionReason || undefined,
+    }),
+  ]);
+
+  return json(200, { ok: true });
+};
+
+/**
+ * Reverse a previous USAGE_APPROVE: re-add the decremented quantity to the
+ * item, mark the original event as undone, and write a USAGE_UNDO event linked
+ * back to it. The original event keeps its place in the feed; the Undo button
+ * disappears once `details.undone` is set.
+ *
+ * Body: { eventId, itemId } — itemId is required because audit events are
+ * partitioned by ITEM#<itemId>, so we'd otherwise have to scan to find the row.
+ */
+export const handleUndoUsage = async (ctx: RouteContext) => {
+  const { access, storage, body } = ctx;
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can undo usage events." });
+  }
+
+  const eventId = String(body?.eventId ?? "").trim();
+  const itemId = String(body?.itemId ?? "").trim();
+  if (!eventId || !itemId) {
+    return json(400, { error: "eventId and itemId are required." });
+  }
+
+  // Locate the audit event by querying the item's history and matching eventId.
+  // We can't query by eventId directly — pk/sk are (ITEM#<id>, TS#<ts>#<short>).
+  const queryRes = await ddb.send(
+    new QueryCommand({
+      TableName: storage.auditTable,
+      KeyConditionExpression: "pk = :pk",
+      FilterExpression: "eventId = :eid",
+      ExpressionAttributeValues: { ":pk": `ITEM#${itemId}`, ":eid": eventId },
+      Limit: 1,
+    }),
+  );
+  const original = (queryRes.Items ?? [])[0] as Record<string, unknown> | undefined;
+  if (!original) return json(404, { error: "Usage event not found." });
+  if (original.action !== "USAGE_APPROVE") {
+    return json(400, { error: "Only usage events can be undone." });
+  }
+  if (original.undoneAt) {
+    return json(409, { error: "This usage event has already been undone." });
+  }
+
+  let details: Record<string, unknown> = {};
+  try { details = JSON.parse(String(original.detailsJson ?? "{}")); } catch { details = {}; }
+  const quantityUsed = Number(details.quantityUsed ?? 0);
+  if (!Number.isFinite(quantityUsed) || quantityUsed < 0) {
+    return json(400, { error: "Original event metadata is invalid; cannot undo." });
+  }
+
+  const items = await listAllItems(storage, access.organizationId);
+  const item = items.find((i) => String(i.id) === itemId);
+  if (!item) return json(404, { error: "Item no longer exists." });
+
+  let values: Record<string, string | number | boolean | null> = {};
+  try {
+    values = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, string | number | boolean | null>;
+  } catch {
+    values = {};
+  }
+  const itemName = String(values.itemName ?? "").trim() || `Item ${itemId.slice(0, 8)}`;
+  const currentQuantity = Number(values.quantity ?? 0);
+  const restoredQuantity = (Number.isFinite(currentQuantity) ? currentQuantity : 0) + quantityUsed;
+
+  // Order matters: stamp the audit event first with a conditional check, then
+  // restore the item quantity. If two undos race, only one wins the conditional
+  // and only one quantity restore runs. (If the second step fails after the
+  // first succeeds, the event is marked undone but quantity isn't restored —
+  // rare, surfaces as an inventory diff, and the user can adjust manually.)
+  const undoneAt = new Date().toISOString();
+  const undoEventId = randomUUID();
+  const updatedDetails = {
+    ...details,
+    undone: true,
+    undoneAt,
+    undoneByUserId: access.userId,
+    undoneByEventId: undoEventId,
+  };
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: storage.auditTable,
+        Key: { pk: original.pk as string, sk: original.sk as string },
+        UpdateExpression: "SET detailsJson = :d, undoneAt = :ua",
+        ConditionExpression: "attribute_not_exists(undoneAt)",
+        ExpressionAttributeValues: {
+          ":d": JSON.stringify(updatedDetails),
+          ":ua": undoneAt,
+        },
+      }),
+    );
+  } catch (err: any) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return json(409, { error: "This usage event has already been undone." });
+    }
+    throw err;
+  }
+
+  // Re-add the quantity additively so concurrent restocks/usage between the
+  // original decrement and the undo are preserved (we don't restore the exact
+  // prior value, only the delta).
+  const nextValues = { ...values, quantity: restoredQuantity };
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: storage.itemTable,
+        Key: { id: item.id },
+        ConditionExpression: "organizationId = :org AND #module = :module",
+        UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":module": "inventory",
+          ":values": JSON.stringify(nextValues),
+          ":updatedAtCustom": new Date().toISOString(),
+        },
+      }),
+    );
+  } catch (err: any) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return json(409, { error: "Item does not belong to organization." });
+    }
+    throw err;
+  }
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "USAGE_UNDO", itemId, itemName, {
+      undoneEventId: eventId,
+      submissionId: details.submissionId,
+      quantityRestored: quantityUsed,
+      quantityBefore: currentQuantity,
+      quantityAfter: restoredQuantity,
     }),
   ]);
 

@@ -3,8 +3,6 @@ export type {
   ColumnVisibilityOverrides,
   InventoryColumn,
   InventoryRow,
-  PendingEntry,
-  PendingSubmission,
 } from "../../lib/inventoryApi";
 
 export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
@@ -47,22 +45,6 @@ export type InventorySnapshot = {
   deletedRowIds: Set<string>;
   selectedRowIds: Set<string>;
   selectedRowId: string | null;
-};
-
-export type PendingSubmissionCardProps = {
-  submission: import("../../lib/inventoryApi").PendingSubmission;
-  entries: import("../../lib/inventoryApi").PendingEntry[];
-  editedQtys: Record<number, string>;
-  buildLabel: (entry: import("../../lib/inventoryApi").PendingEntry) => string;
-  onEditQty: (entryIndex: number, value: string) => void;
-  onApprove: () => Promise<void>;
-  onDelete: () => Promise<void>;
-};
-
-export type MergedEntry = {
-  entry: import("../../lib/inventoryApi").PendingEntry;
-  origIndex: number;
-  totalQty: number;
 };
 
 export const NUMBER_COLUMN_KEYS = new Set(["quantity", "minQuantity"]);

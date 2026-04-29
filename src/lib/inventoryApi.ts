@@ -378,7 +378,6 @@ export const submitInventoryUsage = async (
   entries: InventoryUsageEntryInput[],
 ): Promise<{
   ok: boolean;
-  pending: boolean;
   submissionId: string;
   entryCount: number;
 }> => {
@@ -394,95 +393,31 @@ export const submitInventoryUsage = async (
   const data = await res.json();
   return {
     ok: !!data?.ok,
-    pending: !!data?.pending,
     submissionId: String(data?.submissionId ?? ""),
     entryCount: Number(data?.entryCount ?? 0),
   };
 };
 
-export type PendingEntry = {
-  itemId: string;
-  itemName: string;
-  quantityUsed: number;
-  notes?: string;
-  location?: string;
-};
-
-export type PendingSubmission = {
-  id: string;
-  submittedAt: string;
-  submittedByUserId: string;
-  submittedByEmail: string;
-  submittedByName: string;
-  status: "pending" | "approved" | "rejected";
-  entriesJson: string;
-  reviewedAt?: string;
-  reviewedByUserId?: string;
-  reviewedByEmail?: string;
-  rejectionReason?: string;
-};
-
-export const listPendingSubmissions = async (): Promise<PendingSubmission[]> => {
-  const base = requireBaseUrl();
-  const res = await authFetch(`${base}/inventory/usage/pending`);
-  if (!res.ok) {
-    throw new Error(await getApiErrorMessage(res, "Failed to load pending submissions."));
-  }
-  const data = await res.json();
-  return (Array.isArray(data.submissions) ? data.submissions : []) as PendingSubmission[];
-};
-
-export const approveUsageSubmission = async (
-  submissionId: string,
-  overrideEntries?: PendingEntry[],
-): Promise<{ ok: boolean; updatedCount: number }> => {
-  const base = requireBaseUrl();
-  const body = overrideEntries && overrideEntries.length > 0
-    ? JSON.stringify({ entries: overrideEntries })
-    : undefined;
-  const res = await authFetch(
-    `${base}/inventory/usage/pending/${encodeURIComponent(submissionId)}/approve`,
-    {
-      method: "POST",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body,
-    },
-  );
-  if (!res.ok) {
-    throw new Error(await getApiErrorMessage(res, "Failed to approve submission."));
-  }
-  const data = await res.json();
-  return { ok: !!data?.ok, updatedCount: Number(data?.updatedCount ?? 0) };
-};
-
-export const deleteUsageSubmission = async (submissionId: string): Promise<void> => {
-  const base = requireBaseUrl();
-  const res = await authFetch(
-    `${base}/inventory/usage/pending/${encodeURIComponent(submissionId)}`,
-    { method: "DELETE" },
-  );
-  if (!res.ok) {
-    throw new Error(await getApiErrorMessage(res, "Failed to delete submission."));
-  }
-};
-
-export const rejectUsageSubmission = async (
-  submissionId: string,
-  reason?: string,
+/**
+ * Reverse a previously logged usage event. The original audit event keeps its
+ * place in the feed but is marked as undone (`details.undone === true`); the
+ * decremented quantity is added back to the item.
+ */
+export const undoUsageEvent = async (
+  eventId: string,
+  itemId: string,
 ): Promise<{ ok: boolean }> => {
   const base = requireBaseUrl();
-  const res = await authFetch(
-    `${base}/inventory/usage/pending/${encodeURIComponent(submissionId)}/reject`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason: reason ?? "" }),
-    },
-  );
+  const res = await authFetch(`${base}/inventory/usage/undo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId, itemId }),
+  });
   if (!res.ok) {
-    throw new Error(await getApiErrorMessage(res, "Failed to reject submission."));
+    throw new Error(await getApiErrorMessage(res, "Failed to undo usage event."));
   }
-  return { ok: true };
+  const data = await res.json();
+  return { ok: !!data?.ok };
 };
 
 export const importInventoryCsv = async (

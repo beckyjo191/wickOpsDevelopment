@@ -12,7 +12,6 @@ import {
   type ColumnVisibilityOverrides,
   type InventoryColumn,
   type InventoryRow,
-  type PendingEntry,
 } from "../../../lib/inventoryApi";
 import { pickLoadingLine } from "../../../lib/loadingLines";
 import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../../lib/currency";
@@ -161,17 +160,7 @@ export function useInventoryData({
     selectedRowIdRef.current = selectedRowId;
   }, [rows, dirtyRowIds, deletedRowIds, selectedRowIds, selectedRowId]);
 
-  // ── rowById for pending entry labels ──
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
-
-  const buildPendingEntryLabel = (entry: PendingEntry): string => {
-    const row = rowById.get(entry.itemId);
-    const exp = row ? toDateInputValue(row.values.expirationDate) : "";
-    const currentQty = row !== undefined ? Number(row.values.quantity ?? 0) : null;
-    const expPart = exp ? ` | exp ${exp}` : "";
-    const qtyPart = currentQty !== null ? ` (${currentQty})` : "";
-    return `${entry.itemName}${expPart}${qtyPart}`;
-  };
 
   // ── Helper: mark rows dirty ──
   const markRowsDirty = (ids: string[]) => {
@@ -1596,8 +1585,6 @@ export function useInventoryData({
     diffRowsAgainstSnapshot,
     // Dirty helpers
     markRowsDirty,
-    // Pending entry labels
-    buildPendingEntryLabel,
     rowById,
     // Derived
     canEditTable,

@@ -441,7 +441,6 @@ export default function App() {
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
-  const canReviewUsageSubmissions = canEditInventory && canAccessInventory;
 
   let content: JSX.Element;
   if (view === "settings") {
@@ -533,7 +532,7 @@ export default function App() {
     content = canAccessInventory ? (
       <AuditLogPage
         canManageColumns={canManageInventoryColumns}
-        canReviewSubmissions={canReviewUsageSubmissions}
+        canEditInventory={canEditInventory}
         onOpenInInventory={(itemName) => {
           // Jump to the Inventory tab with the item pre-filtered via search —
           // works for single and multi-lot items since search matches on name.

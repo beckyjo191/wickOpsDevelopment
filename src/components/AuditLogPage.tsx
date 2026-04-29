@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  approveUsageSubmission,
-  deleteUsageSubmission,
   fetchAuditFeed,
   fetchItemHistory,
   fetchAuditAnalytics,
+  undoUsageEvent,
   type AuditEvent,
   type AuditAnalytics,
 } from "../lib/inventoryApi";
@@ -13,25 +12,24 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
-  CheckSquare,
   Clock,
   Loader2,
   Package,
+  RotateCcw,
   Search,
   User,
 } from "lucide-react";
-import { usePendingSubmissions } from "./inventory/hooks/usePendingSubmissions";
-import { PendingSubmissionsTab } from "./inventory/PendingSubmissionsTab";
-import type { PendingEntry } from "./inventory/inventoryTypes";
 import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
 import { DaySection } from "../lib/dayGroups";
 import { dayGroupLabel } from "../lib/dayGroupLabel";
 
-export type AuditTab = "feed" | "analytics" | "item-history" | "pending";
+export type AuditTab = "feed" | "analytics" | "item-history";
 
 interface AuditLogPageProps {
   canManageColumns: boolean;
-  canReviewSubmissions?: boolean;
+  /** Required for the Undo button on USAGE_APPROVE events. Mirrors the perm
+   *  that lets the user log usage in the first place. */
+  canEditInventory?: boolean;
   /** Called when the user clicks "Open in Inventory" from the item-history
    *  view. Parent handles switching to the Inventory tab and focusing the row.
    *  Passes the item name rather than id because we filter inventory via
@@ -373,6 +371,10 @@ type ActivityRowData = {
   accentColor: string;
   user: string;
   titleAttr?: string;
+  /** Set when the row aggregates exactly one event AND that event is an
+   *  undoable USAGE_APPROVE that hasn't already been undone. The Undo button
+   *  picks up these fields. */
+  undoableEvent?: { eventId: string; itemId: string };
 };
 
 function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
@@ -435,6 +437,16 @@ function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRo
         : userArr.length === 1
           ? userArr[0]
           : `${userArr.length} users`;
+      // Only single-event buckets are eligible for inline Undo. Aggregated
+      // buckets need the user to drill into item history first to pick the
+      // specific event to reverse.
+      const lone = bucket.events.length === 1 ? bucket.events[0] : null;
+      const undoableEvent =
+        lone && lone.action === "USAGE_APPROVE"
+          && !lone.details?.undone
+          && typeof lone.itemId === "string" && lone.itemId
+          ? { eventId: lone.eventId, itemId: lone.itemId }
+          : undefined;
       day.rows.push({
         key: `${d.label}::${rowKey}`,
         timestamp: bucket.lastTimestamp,
@@ -444,6 +456,7 @@ function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRo
         accentColor,
         user: userLabel,
         titleAttr,
+        undoableEvent,
       });
       for (const u of bucket.users) day.users.add(u);
     }
@@ -455,9 +468,13 @@ function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRo
 function FlatActivityFeed({
   events,
   onViewItemHistory,
+  onUndoUsage,
+  undoingEventId,
 }: {
   events: AuditEvent[];
   onViewItemHistory: (itemId: string, name: string) => void;
+  onUndoUsage?: (eventId: string, itemId: string) => void;
+  undoingEventId?: string | null;
 }) {
   const days = aggregateActivityRows(events);
   return (
@@ -481,26 +498,45 @@ function FlatActivityFeed({
               minute: "2-digit",
             });
             const navigable = !!row.itemId && row.itemName !== "—";
+            const showUndo = !!onUndoUsage && !!row.undoableEvent;
+            const isUndoing = showUndo && undoingEventId === row.undoableEvent?.eventId;
             return (
-              <button
+              <div
                 key={row.key}
-                type="button"
-                className="audit-flat-row"
+                className="audit-flat-row audit-flat-row--button-host"
                 style={{ ["--row-accent" as string]: row.accentColor }}
-                onClick={() => navigable && onViewItemHistory(row.itemId!, row.itemName)}
-                disabled={!navigable}
-                title={row.titleAttr ?? (navigable ? `View history for ${row.itemName}` : undefined)}
               >
-                <span className="audit-flat-cell audit-flat-time">{time}</span>
-                <span className="audit-flat-cell audit-flat-content">
-                  <span className="audit-flat-itemname">{row.itemName}</span>
-                  <span className="audit-flat-summary"> — {row.summary}</span>
-                </span>
-                <span className="audit-flat-cell audit-flat-user">
-                  <User size={11} />
-                  {row.user}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className="audit-flat-row-main"
+                  onClick={() => navigable && onViewItemHistory(row.itemId!, row.itemName)}
+                  disabled={!navigable}
+                  title={row.titleAttr ?? (navigable ? `View history for ${row.itemName}` : undefined)}
+                >
+                  <span className="audit-flat-cell audit-flat-time">{time}</span>
+                  <span className="audit-flat-cell audit-flat-content">
+                    <span className="audit-flat-itemname">{row.itemName}</span>
+                    <span className="audit-flat-summary"> — {row.summary}</span>
+                  </span>
+                  <span className="audit-flat-cell audit-flat-user">
+                    <User size={11} />
+                    {row.user}
+                  </span>
+                </button>
+                {showUndo && (
+                  <button
+                    type="button"
+                    className="audit-flat-undo-btn"
+                    onClick={() =>
+                      onUndoUsage?.(row.undoableEvent!.eventId, row.undoableEvent!.itemId)
+                    }
+                    disabled={isUndoing}
+                    title="Undo this usage — restore the decremented quantity"
+                  >
+                    <RotateCcw size={12} /> {isUndoing ? "Undoing…" : "Undo"}
+                  </button>
+                )}
+              </div>
             );
           })}
         </DaySection>
@@ -700,7 +736,15 @@ function CostOverTimeChart({ events }: { events: AuditEvent[] }) {
 /** Item history flat list — single item, so no item name column. Each event
  *  is one inline-summary row; no expansion, no disclosure. Day collapsibility
  *  matches the main feed. */
-function FlatItemHistory({ events }: { events: AuditEvent[] }) {
+function FlatItemHistory({
+  events,
+  onUndoUsage,
+  undoingEventId,
+}: {
+  events: AuditEvent[];
+  onUndoUsage?: (eventId: string, itemId: string) => void;
+  undoingEventId?: string | null;
+}) {
   type HistoryRowData = {
     key: string;
     timestamp: string;
@@ -708,9 +752,16 @@ function FlatItemHistory({ events }: { events: AuditEvent[] }) {
     accentColor: string;
     user: string;
     titleAttr?: string;
+    undoableEvent?: { eventId: string; itemId: string };
   };
   const items: Array<HistoryRowData & { timestamp: string; user: string }> = events.map((e) => {
     const derived = deriveAction(e);
+    const undoable =
+      e.action === "USAGE_APPROVE"
+        && !e.details?.undone
+        && typeof e.itemId === "string" && e.itemId
+        ? { eventId: e.eventId, itemId: e.itemId }
+        : undefined;
     return {
       key: e.eventId,
       timestamp: e.timestamp,
@@ -718,6 +769,7 @@ function FlatItemHistory({ events }: { events: AuditEvent[] }) {
       accentColor: ACTION_COLORS[derived] ?? "var(--text-muted)",
       user: e.userName || e.userEmail || "—",
       titleAttr: eventTitleAttr(e),
+      undoableEvent: undoable,
     };
   });
   const days = groupByDay(items);
@@ -742,6 +794,8 @@ function FlatItemHistory({ events }: { events: AuditEvent[] }) {
               hour: "numeric",
               minute: "2-digit",
             });
+            const showUndo = !!onUndoUsage && !!row.undoableEvent;
+            const isUndoing = showUndo && undoingEventId === row.undoableEvent?.eventId;
             return (
               <div
                 key={row.key}
@@ -757,6 +811,19 @@ function FlatItemHistory({ events }: { events: AuditEvent[] }) {
                   <User size={11} />
                   {row.user}
                 </span>
+                {showUndo && (
+                  <button
+                    type="button"
+                    className="audit-flat-undo-btn"
+                    onClick={() =>
+                      onUndoUsage?.(row.undoableEvent!.eventId, row.undoableEvent!.itemId)
+                    }
+                    disabled={isUndoing}
+                    title="Undo this usage — restore the decremented quantity"
+                  >
+                    <RotateCcw size={12} /> {isUndoing ? "Undoing…" : "Undo"}
+                  </button>
+                )}
               </div>
             );
           })}
@@ -1073,7 +1140,7 @@ function AnalyticsDashboard({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInInventory, onTabChange }: AuditLogPageProps) {
+export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInventory, onTabChange }: AuditLogPageProps) {
   const [tab, setTab] = useState<AuditTab>("feed");
 
   // Notify parent of active sub-tab so subnav-level help can react.
@@ -1099,11 +1166,6 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
   const [analytics, setAnalytics] = useState<AuditAnalytics | null>(null);
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d" | "90d">("30d");
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
-
-  // Pending usage-approval queue (only loaded for reviewers)
-  const pending = usePendingSubmissions(tab === "pending", canReviewSubmissions);
-  const pendingCount = pending.pendingSubmissions.length;
-  const buildPendingEntryLabel = (entry: PendingEntry) => entry.itemName;
 
   const loadFeed = useCallback(async (append = false, cursor?: string | null) => {
     setLoading(true);
@@ -1174,6 +1236,43 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
     }
   }, [historyItemId, historyCursor]);
 
+  // Tracks the in-flight undo so the corresponding row can show a spinner
+  // and avoid double-clicks. Cleared once the refresh completes.
+  const [undoingEventId, setUndoingEventId] = useState<string | null>(null);
+  const [undoError, setUndoError] = useState<string | null>(null);
+
+  const handleUndoUsage = useCallback(
+    async (eventId: string, itemId: string) => {
+      if (undoingEventId) return;
+      const proceed = window.confirm(
+        "Undo this usage? The decremented quantity will be restored to the item.",
+      );
+      if (!proceed) return;
+      setUndoingEventId(eventId);
+      setUndoError(null);
+      try {
+        await undoUsageEvent(eventId, itemId);
+        // Re-fetch so the row picks up `details.undone` from the server. We
+        // refresh both the main feed and the open item history (whichever is
+        // visible), so the Undo button hides immediately without another click.
+        if (tab === "feed") {
+          await loadFeed(false);
+        } else if (tab === "item-history" && historyItemId) {
+          const res = await fetchItemHistory(historyItemId, { limit: 50 });
+          setHistoryEvents(res.events ?? []);
+          setHistoryCursor(res.nextCursor);
+        }
+      } catch (err: unknown) {
+        setUndoError(err instanceof Error ? err.message : "Failed to undo usage.");
+      } finally {
+        setUndoingEventId(null);
+      }
+    },
+    [undoingEventId, tab, historyItemId, loadFeed],
+  );
+
+  const undoCallback = canEditInventory ? handleUndoUsage : undefined;
+
   // Strip system-field-only ITEM_EDIT events before display. Without this, the
   // one-time parentItemId backfill on every legacy row floods the feed with
   // "Parent Item Id: — → {uuid}" rows — pure machine noise.
@@ -1203,18 +1302,6 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
         >
           <Activity size={16} /> Activity
         </button>
-        {canReviewSubmissions && (
-          <button
-            type="button"
-            className={`audit-tab${tab === "pending" ? " active" : ""}`}
-            onClick={() => setTab("pending")}
-          >
-            <CheckSquare size={16} /> Pending
-            {pendingCount > 0 ? (
-              <span className="audit-tab-badge">{pendingCount}</span>
-            ) : null}
-          </button>
-        )}
         {canManageColumns && (
           <button
             type="button"
@@ -1225,51 +1312,6 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
           </button>
         )}
       </div>
-
-      {tab === "pending" && canReviewSubmissions && (
-        <PendingSubmissionsTab
-          submissions={pending.pendingSubmissions}
-          loading={pending.pendingLoading}
-          error={pending.pendingError}
-          mergedItems={pending.mergedPendingItems}
-          approvingAll={pending.approvingAll}
-          approveAllError={pending.approveAllError}
-          editedQtys={pending.editedQtys}
-          onEditQty={(submissionId, entryIndex, value) =>
-            pending.setEditedQtys((prev) => ({
-              ...prev,
-              [submissionId]: { ...(prev[submissionId] ?? {}), [entryIndex]: value },
-            }))
-          }
-          onApprove={async (submissionId, effectiveEntries) => {
-            await approveUsageSubmission(submissionId, effectiveEntries);
-            pending.setPendingSubmissions((prev) =>
-              prev.filter((s) => s.id !== submissionId),
-            );
-          }}
-          onApproveAll={async () => {
-            pending.setApprovingAll(true);
-            pending.setApproveAllError("");
-            try {
-              for (const sub of pending.pendingSubmissions) {
-                await approveUsageSubmission(sub.id);
-              }
-              pending.setPendingSubmissions([]);
-            } catch (err: any) {
-              pending.setApproveAllError(err?.message ?? "Failed to approve all");
-            } finally {
-              pending.setApprovingAll(false);
-            }
-          }}
-          onDelete={async (submissionId) => {
-            await deleteUsageSubmission(submissionId);
-            pending.setPendingSubmissions((prev) =>
-              prev.filter((s) => s.id !== submissionId),
-            );
-          }}
-          buildLabel={buildPendingEntryLabel}
-        />
-      )}
 
       {tab === "feed" && (
         <div className="audit-feed">
@@ -1308,10 +1350,14 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
             </div>
           )}
 
+          {undoError && <p className="audit-error">{undoError}</p>}
+
           {visibleEvents.length > 0 && (
             <FlatActivityFeed
               events={visibleEvents}
               onViewItemHistory={viewItemHistory}
+              onUndoUsage={undoCallback}
+              undoingEventId={undoingEventId}
             />
           )}
 
@@ -1390,8 +1436,16 @@ export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInI
             </div>
           )}
 
+          {historySubTab === "events" && undoError && (
+            <p className="audit-error">{undoError}</p>
+          )}
+
           {historySubTab === "events" && visibleHistoryEvents.length > 0 && (
-            <FlatItemHistory events={visibleHistoryEvents} />
+            <FlatItemHistory
+              events={visibleHistoryEvents}
+              onUndoUsage={undoCallback}
+              undoingEventId={undoingEventId}
+            />
           )}
 
           {historySubTab === "cost" && historyEvents.length > 0 && (

@@ -73,6 +73,9 @@ export type AuditAction =
   | "USAGE_SUBMIT"
   | "USAGE_APPROVE"
   | "USAGE_REJECT"
+  /** Reverses a previous USAGE_APPROVE: re-adds the decremented quantity and
+   *  marks the original event with `undone: true` so the Undo button hides. */
+  | "USAGE_UNDO"
   | "COLUMN_CREATE"
   | "COLUMN_DELETE"
   | "COLUMN_UPDATE"

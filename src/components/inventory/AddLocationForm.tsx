@@ -1,3 +1,5 @@
+import { X } from "lucide-react";
+
 export type AddLocationFormProps = {
   newLocationName: string;
   onNameChange: (name: string) => void;
@@ -55,8 +57,9 @@ export function AddLocationForm({
           type="button"
           className="location-pill-add-cancel"
           onClick={onCancel}
+          aria-label="Cancel"
         >
-          ×
+          <X size={14} />
         </button>
         {error ? (
           <span className="location-pill-add-error">{error}</span>

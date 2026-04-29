@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Package, ClipboardList, ShoppingCart } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, ClipboardList, Package, ShoppingCart } from "lucide-react";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
 import { pickLoadingLine } from "../lib/loadingLines";
@@ -72,6 +72,16 @@ export function DashboardPage({
     }
   }, [validSelection, locations, onLocationChange]);
 
+  // What the dropdown trigger and "No issues at X" text should actually
+  // display. When the saved selectedLocation isn't valid (e.g. user just
+  // emptied "Unassigned"), the auto-sync above will correct the stored
+  // value on the next tick — but in this render we still want the UI to
+  // show the location whose data is actually being shown, not the stale
+  // saved value.
+  const displayedLocation = validSelection
+    ? selectedLocation
+    : (locations[0]?.location ?? null);
+
   // Get alert counts for the selected location
   const activeAlerts = (() => {
     if (!alertSummary) return null;
@@ -110,15 +120,15 @@ export function DashboardPage({
             {showLocationPills && (
               <details className="inventory-dropdown dash-location-dropdown">
                 <summary className="inventory-dropdown-trigger">
-                  {selectedLocation || "All Locations"}
-                  <svg className="inventory-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+                  {displayedLocation || "All Locations"}
+                  <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                 </summary>
                 <div className="inventory-dropdown-panel">
                   {locationBadges.map((loc) => (
                     <button
                       key={loc.location}
                       type="button"
-                      className={`inventory-dropdown-option${selectedLocation === loc.location ? " active" : ""}`}
+                      className={`inventory-dropdown-option${displayedLocation === loc.location ? " active" : ""}`}
                       onClick={(e) => {
                         onLocationChange(loc.location);
                         e.currentTarget.closest("details")?.removeAttribute("open");
@@ -132,10 +142,10 @@ export function DashboardPage({
             )}
           </div>
 
-          {activeAlerts && !hasAlerts && selectedLocation ? (
+          {activeAlerts && !hasAlerts && displayedLocation ? (
             <div className="dash-no-alerts">
-              <span className="dash-no-alerts-icon">✓</span>
-              <span>No issues at {selectedLocation}</span>
+              <span className="dash-no-alerts-icon" aria-hidden="true"><Check size={16} /></span>
+              <span>No issues at {displayedLocation}</span>
             </div>
           ) : null}
 
@@ -145,7 +155,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="app-alert-card app-alert-card--danger"
-                  onClick={() => onNavigateToInventoryWithFilter("expired", selectedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("expired", displayedLocation)}
                 >
                   <span className="app-alert-card__icon">
                     <AlertTriangle size={16} strokeWidth={2} />
@@ -153,14 +163,14 @@ export function DashboardPage({
                   <span className="app-alert-card__text">
                     {activeAlerts.expiredCount} expired item{activeAlerts.expiredCount !== 1 ? "s" : ""}
                   </span>
-                  <span className="app-alert-card__action">View →</span>
+                  <span className="app-alert-card__action">View <ChevronRight size={14} /></span>
                 </button>
               ) : null}
               {activeAlerts.expiringSoonCount > 0 ? (
                 <button
                   type="button"
                   className="app-alert-card app-alert-card--caution"
-                  onClick={() => onNavigateToInventoryWithFilter("exp30", selectedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("exp30", displayedLocation)}
                 >
                   <span className="app-alert-card__icon">
                     <AlertTriangle size={16} strokeWidth={2} />
@@ -168,14 +178,14 @@ export function DashboardPage({
                   <span className="app-alert-card__text">
                     {activeAlerts.expiringSoonCount} item{activeAlerts.expiringSoonCount !== 1 ? "s" : ""} expiring within 30 days
                   </span>
-                  <span className="app-alert-card__action">View →</span>
+                  <span className="app-alert-card__action">View <ChevronRight size={14} /></span>
                 </button>
               ) : null}
               {activeAlerts.lowStockCount > 0 ? (
                 <button
                   type="button"
                   className="app-alert-card app-alert-card--warning"
-                  onClick={() => onNavigateToInventoryWithFilter("lowStock", selectedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("lowStock", displayedLocation)}
                 >
                   <span className="app-alert-card__icon">
                     <Package size={16} strokeWidth={2} />
@@ -183,7 +193,7 @@ export function DashboardPage({
                   <span className="app-alert-card__text">
                     {activeAlerts.lowStockCount} item{activeAlerts.lowStockCount !== 1 ? "s" : ""} low on stock
                   </span>
-                  <span className="app-alert-card__action">View →</span>
+                  <span className="app-alert-card__action">View <ChevronRight size={14} /></span>
                 </button>
               ) : null}
               {(activeAlerts.expiredCount > 0 || activeAlerts.lowStockCount > 0) ? (
@@ -198,7 +208,7 @@ export function DashboardPage({
                   <span className="app-alert-card__text">
                     Reorder items
                   </span>
-                  <span className="app-alert-card__action">Open →</span>
+                  <span className="app-alert-card__action">Open <ChevronRight size={14} /></span>
                 </button>
               ) : null}
             </div>
@@ -210,7 +220,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="dash-action-btn"
-                  onClick={() => onNavigateToInventoryWithFilter("logUsage", selectedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("logUsage", displayedLocation)}
                 >
                   <ClipboardList size={18} strokeWidth={2} />
                   <span>Log Usage</span>

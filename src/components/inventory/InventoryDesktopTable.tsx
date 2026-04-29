@@ -1,4 +1,5 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
@@ -108,7 +109,10 @@ export function InventoryDesktopTable({
                   style={{ minWidth: getColumnMinWidth(column), width: getAppliedColumnWidth(column) }}
                 >
                   <details className="inventory-location-menu">
-                    <summary className="inventory-location-trigger">{column.label}</summary>
+                    <summary className="inventory-location-trigger">
+                      {column.label}
+                      <ChevronDown size={14} aria-hidden="true" />
+                    </summary>
                     <div className="inventory-location-panel">
                       {categoryOptions.map((option) => (
                         <button
@@ -145,13 +149,14 @@ export function InventoryDesktopTable({
                     className={`inventory-sort-trigger${sortState?.key === column.key ? " inventory-sort-active" : ""}`}
                     onClick={() => onSortColumn(column)}
                   >
-                    <span>{column.label}</span>
-                    <span className="inventory-sort-arrow" aria-hidden="true">
-                      {sortState?.key === column.key
-                        ? sortState.direction === "asc"
-                          ? "\u25B2"
-                          : "\u25BC"
-                        : "\u2195"}
+                    <span className="inventory-sort-label">{column.label}</span>
+                    <span
+                      className={`inventory-sort-arrow${sortState?.key === column.key ? "" : " inventory-sort-arrow--placeholder"}`}
+                      aria-hidden="true"
+                    >
+                      {sortState?.key === column.key && sortState.direction === "desc"
+                        ? <ChevronDown size={14} />
+                        : <ChevronUp size={14} />}
                     </span>
                   </button>
                   <span

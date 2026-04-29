@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { HelpCircle, X } from "lucide-react";
+import { HelpModal } from "./shared/HelpModal";
 import type { AuditTab } from "./AuditLogPage";
 
 type HelpSection = {
@@ -76,7 +75,7 @@ function getHelpForTab(activeTab: AuditTab): HelpSection {
         title: "Activity",
         body: (
           <>
-            <p className="orders-help-lead">
+            <p className="help-modal-lead">
               The audit feed — every change that happened across
               inventory, grouped by day. Newest first.
             </p>
@@ -131,59 +130,12 @@ function getHelpForTab(activeTab: AuditTab): HelpSection {
 }
 
 export function ActivityHelp({ activeTab }: { activeTab: AuditTab }) {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
-
   const section = getHelpForTab(activeTab);
-  const labelText = `${section.title} help`;
-
+  // Re-mounting on tab change ensures the modal's title + content stay in
+  // sync if the user happens to swap tabs while the modal is open.
   return (
-    <>
-      <button
-        type="button"
-        className="orders-help-btn"
-        onClick={() => setOpen(true)}
-        aria-label={labelText}
-        title={labelText}
-      >
-        <HelpCircle size={16} />
-      </button>
-      {open && (
-        <div
-          className="orders-help-overlay"
-          onClick={() => setOpen(false)}
-          role="presentation"
-        >
-          <div
-            className="orders-help-modal app-card"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="activity-help-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="orders-help-modal-header">
-              <h3 id="activity-help-title">{section.title}</h3>
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => setOpen(false)}
-                aria-label="Close"
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <div className="orders-help-modal-body">{section.body}</div>
-          </div>
-        </div>
-      )}
-    </>
+    <HelpModal key={activeTab} title={section.title}>
+      {section.body}
+    </HelpModal>
   );
 }

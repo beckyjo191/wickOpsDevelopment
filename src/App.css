@@ -1,3 +1,38 @@
+/* ── Lucide icon size system ─────────────────────────────────────────────
+ * Use the `size` prop on Lucide icons. Pick the smallest token that reads
+ * clearly in context. Stay on the scale.
+ *
+ *   14   sm     Default. Inline-with-text in buttons/links, table row icons,
+ *               autocomplete clears, status badges in compact rows, dropdown
+ *               chevrons, filter pills.
+ *   16   md     Standalone icon-only buttons (modal Close, help trigger),
+ *               settings disclosure chevrons, alert banner icons, sub-tab
+ *               labels.
+ *   18   lg     Toolbar icons (search toggle), prominent tab icons.
+ *   22   xl     Module-header icons (dashboard module label, hero loaders).
+ *   32+  hero   Empty states. Use strokeWidth={1.5} for the lighter look.
+ *
+ * Stroke: default `2`. Override to `1.5` ONLY for hero/empty-state contexts.
+ * Color: rely on `currentColor` — don't set explicit colors on icons.
+ * Decorative icons: add aria-hidden="true". Icon-only buttons: aria-label.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Responsive breakpoints ──────────────────────────────────────────────
+ * Three semantic widths. Don't introduce new breakpoints without a reason.
+ *
+ *   max-width: 480px   Very-small phones. Use only when 600px rules still
+ *                      can't fit (e.g., 2-col grid → 1-col).
+ *   max-width: 600px   Phones (default mobile). Most stack/reflow rules
+ *                      live here.
+ *   max-width: 780px   Tablets and below. Inventory uses 781+ for desktop
+ *                      table, ≤780 for mobile cards.
+ *   min-width: 781px   Desktop-only (paired with the above).
+ *
+ * iOS safe-area: when a fixed/sticky element sits at the top or bottom of
+ * the viewport, pad it with env(safe-area-inset-*) so the notch and home
+ * indicator don't clip content.
+ * ───────────────────────────────────────────────────────────────────────── */
+
 .app-page {
   min-height: 100vh;
   width: 100%;
@@ -717,13 +752,31 @@
   background: var(--surface-active);
 }
 
+/* Neutral ghost button: low-emphasis surface for secondary or
+ * non-destructive actions (close modal, expand row, pagination, etc.).
+ * For genuinely destructive actions (delete, revoke, cancel order, sign
+ * out) use .button-danger instead. */
 .button-ghost {
+  color: var(--text-heading);
+  background: transparent;
+  border-color: var(--border);
+}
+
+.button-ghost:hover:not(:disabled) {
+  background: var(--surface-alt);
+  border-color: var(--border-strong);
+}
+
+/* Destructive ghost button: signals an action with consequences (delete,
+ * revoke, cancel order, sign out). Was previously the default .button-ghost
+ * styling — split out so neutral uses don't read as danger. */
+.button-danger {
   color: var(--danger);
   background: var(--surface);
   border-color: var(--danger-border);
 }
 
-.button-ghost:hover:not(:disabled) {
+.button-danger:hover:not(:disabled) {
   background: var(--danger-surface);
 }
 
@@ -800,14 +853,14 @@
   display: none;
 }
 
-.settings-section-title::after {
-  content: "▸";
-  font-size: 0.8rem;
+.settings-section-chevron {
+  margin-left: auto;
+  flex-shrink: 0;
   color: var(--text-soft);
   transition: transform 150ms ease;
 }
 
-details[open] > .settings-section-title::after {
+details[open] > .settings-section-title .settings-section-chevron {
   transform: rotate(90deg);
 }
 
@@ -2546,6 +2599,9 @@ details[open] > .settings-section-title::after {
 }
 
 .usage-add-note-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   border: none;
   background: none;
   color: var(--primary);
@@ -2606,7 +2662,10 @@ details[open] > .settings-section-title::after {
 
 /* Add line button */
 .usage-add-line-btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
   width: 100%;
   margin-top: 0.5rem;
   padding: 0.55rem;
@@ -2617,7 +2676,6 @@ details[open] > .settings-section-title::after {
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
-  text-align: center;
 }
 
 .usage-add-line-btn:hover:not(:disabled) {
@@ -2648,6 +2706,10 @@ details[open] > .settings-section-title::after {
 }
 
 .usage-add-location-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
   width: 100%;
   height: 44px;
   border-radius: 10px;
@@ -2990,7 +3052,12 @@ details[open] > .settings-section-title::after {
   width: max-content;
   min-width: 100%;
   border-collapse: collapse;
-  table-layout: auto;
+  /* Fixed layout: column widths are determined by the explicit `width` set
+   * on each <th> via getAppliedColumnWidth, NOT by cell content. This stops
+   * sort-driven column-width jumps when rows with longer URLs / item names
+   * bubble to the top. Content overflows (wraps or truncates) instead of
+   * pushing the column wider. */
+  table-layout: fixed;
   max-width: none;
 }
 
@@ -3002,7 +3069,7 @@ details[open] > .settings-section-title::after {
   border-right: 1px solid var(--table-grid-strong);
   max-width: none;
   white-space: normal;
-  overflow-wrap: normal;
+  overflow-wrap: anywhere;
   word-break: normal;
 }
 
@@ -3069,25 +3136,25 @@ details[open] > .settings-section-title::after {
   cursor: pointer;
 }
 
+.inventory-sort-trigger:hover .inventory-sort-label {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .inventory-sort-arrow {
-  font-size: 0.72rem;
-  color: var(--text-soft);
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.inventory-sort-trigger:hover .inventory-sort-arrow {
-  opacity: 1;
-}
-
-.inventory-sort-trigger.inventory-sort-active .inventory-sort-arrow {
-  opacity: 1;
+  display: inline-flex;
+  align-items: center;
   color: var(--primary);
-  font-size: 0.78rem;
 }
 
-.inventory-sort-trigger.inventory-sort-active span:first-child {
-  font-weight: 600;
+/* Reserve space for the chevron even when the column isn't sorted, so
+ * toggling sort doesn't cause the label position to shift. */
+.inventory-sort-arrow--placeholder {
+  visibility: hidden;
+}
+
+.inventory-sort-trigger.inventory-sort-active .inventory-sort-label {
+  color: var(--primary);
 }
 
 .inventory-location-menu {
@@ -3107,12 +3174,6 @@ details[open] > .settings-section-title::after {
 
 .inventory-location-trigger::-webkit-details-marker {
   display: none;
-}
-
-.inventory-location-trigger::after {
-  content: "▾";
-  font-size: 0.78rem;
-  line-height: 1;
 }
 
 .inventory-location-panel {
@@ -3342,12 +3403,14 @@ details[open] > .settings-section-title::after {
 }
 
 .inventory-link-field-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   color: var(--text-soft);
   text-decoration: none;
-  font-size: 0.9rem;
   line-height: 1;
-  padding: 0.1rem;
+  padding: 0.2rem;
   border-radius: 3px;
   opacity: 0.6;
   transition: opacity 0.15s;
@@ -4092,7 +4155,7 @@ textarea.inventory-card-input {
   padding: 1.25rem 0 0.5rem;
 }
 
-@media (max-width: 680px) {
+@media (max-width: 600px) {
   .plan-cards {
     grid-template-columns: 1fr;
   }
@@ -5302,6 +5365,9 @@ textarea.inventory-card-input {
 }
 
 .inventory-add-row-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-muted);
@@ -5345,9 +5411,11 @@ textarea.inventory-card-input {
 }
 
 .inventory-add-row-panel {
+  /* Right-anchored: the chevron lives at the far-right edge of the inventory
+   * toolbar, so opening leftward keeps the menu fully on-screen. */
   position: absolute;
   top: 100%;
-  left: 0;
+  right: 0;
   z-index: 30;
   min-width: 170px;
   background: var(--surface);
@@ -5935,12 +6003,8 @@ textarea.inventory-card-input {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  align-items: flex-end;
+  align-items: center;
   margin-bottom: 0.75rem;
-  padding: 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface-alt);
 }
 
 .closed-orders-filter > input[type="search"] {
@@ -5974,18 +6038,26 @@ textarea.inventory-card-input {
   color: var(--primary);
 }
 
-/* Popover menu — re-uses .audit-filter-menu chrome and just stacks the From /
- *  To labels with the date inputs, plus an inline "Clear dates" button. */
+/* Popover menu — re-uses .audit-filter-menu chrome and lays the From / To
+ *  fields side-by-side, with a separate row below for the Clear button. */
 .closed-orders-daterange-menu {
-  min-width: 220px;
-  padding: 0.65rem;
-  gap: 0.5rem;
+  min-width: 320px;
+  padding: 0.75rem;
+  gap: 0.6rem;
+  flex-direction: column;
+}
+
+.closed-orders-daterange-fields {
+  display: flex;
+  flex-direction: row;
+  gap: 0.6rem;
 }
 
 .closed-orders-daterange-field {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.25rem;
+  flex: 1;
   font-size: 0.7rem;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -5993,8 +6065,7 @@ textarea.inventory-card-input {
 }
 
 .closed-orders-daterange-clear {
-  align-self: flex-start;
-  margin-top: 0.15rem;
+  align-self: flex-end;
 }
 
 /* Day-grouped closed-orders list. Cards inside each day section keep their
@@ -6239,6 +6310,13 @@ textarea.inventory-card-input {
   background: var(--surface) !important;
   color: var(--text-heading) !important;
   box-sizing: border-box;
+  -moz-appearance: textfield;
+}
+
+.checklist-qty-field[type="number"]::-webkit-inner-spin-button,
+.checklist-qty-field[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 /* Wraps the qty input + optional "box(es) (N ea)" hint for pack items. */
@@ -6460,6 +6538,69 @@ textarea.inventory-card-input {
   }
 }
 
+/* On phones the desktop's three-column grid (checkbox / name / 88px qty)
+ * leaves the qty column too narrow for "boxes (N ea)" to render without
+ * wrapping awkwardly, and the qty input itself is too small to thumb-tap.
+ * Switch to a two-row layout: top row is checkbox + name (with badges
+ * wrapping below the name as usual), bottom row gives the qty input the
+ * full content width under the name column. */
+@media (max-width: 600px) {
+  .checklist-item--form {
+    grid-template-columns: 44px 1fr;
+    grid-template-areas:
+      "checkbox name"
+      ".        qty";
+    row-gap: 0.25rem;
+    padding: 0.4rem 0.6rem 0.5rem;
+  }
+
+  .checklist-item--form > .checklist-cell--checkbox {
+    grid-area: checkbox;
+    border-right: none;
+    padding: 0.4rem 0;
+  }
+
+  .checklist-item--form > .checklist-cell:nth-child(2) {
+    grid-area: name;
+    border-right: none;
+    padding: 0.4rem 0;
+  }
+
+  .checklist-item--form > .checklist-cell:nth-child(3) {
+    grid-area: qty;
+    padding: 0;
+  }
+
+  .checklist-items-header {
+    grid-template-columns: 44px 1fr;
+  }
+
+  .checklist-items-header > .checklist-cell:nth-child(3) {
+    display: none;
+  }
+
+  /* Bump the visual checkbox to 28x28 (was 22) — easier to spot at
+   * arm's length. The 780px breakpoint already extends the tap surface
+   * via a transparent ::before, so total hit area stays well above 44px. */
+  .checklist-checkbox {
+    width: 28px;
+    height: 28px;
+  }
+
+  /* Allow Low: X/Y, Added, and the unit-cost chip to wrap to a second
+   * line when the name is long enough to push them past the row width. */
+  .checklist-item-detail {
+    flex-wrap: wrap;
+  }
+
+  /* Qty input now spans the full content column, so we can give it a
+   * thumb-friendly 44px tap target and a readable type size. */
+  .checklist-qty-field {
+    padding: 0.55rem 0.6rem !important;
+    font-size: 0.95rem !important;
+  }
+}
+
 /* ── Audit Log ──────────────────────────────────────────────────────────────── */
 
 /* ── Orders Page ─────────────────────────────────────────────────────────── */
@@ -6502,9 +6643,13 @@ textarea.inventory-card-input {
   border-bottom-color: var(--primary);
 }
 
-/* ── Orders help button + modal ─────────────────────────────────────── */
+/* ── Help modal (shared) ────────────────────────────────────────────────
+ * Used by the <HelpModal> component (src/components/shared/HelpModal.tsx).
+ * Originally lived as `.orders-help-*` because Orders was the first user;
+ * renamed when Dashboard, Activity, and Inventory help modals consolidated
+ * onto the same component. */
 
-.orders-help-btn {
+.help-modal-trigger {
   margin-left: auto;
   align-self: center;
   width: 26px;
@@ -6521,15 +6666,16 @@ textarea.inventory-card-input {
   transition: color 0.15s, background-color 0.15s, border-color 0.15s;
 }
 
-.orders-help-btn:hover {
+.help-modal-trigger:hover {
   color: var(--primary);
   background: var(--surface-active);
   border-color: var(--primary);
 }
 
-.orders-help-overlay {
+.help-modal-overlay {
   position: fixed;
   inset: 0;
+  height: 100dvh;
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;
@@ -6538,17 +6684,46 @@ textarea.inventory-card-input {
   padding: 1.5rem;
 }
 
-.orders-help-modal {
+.help-modal {
   max-width: 640px;
   width: 100%;
-  max-height: calc(100vh - 3rem);
+  max-height: calc(100dvh - 3rem);
   display: flex;
   flex-direction: column;
   padding: 0;
   overflow: hidden;
 }
 
-.orders-help-modal-header {
+/* Mobile: fill the viewport edge-to-edge so help is comfortable to read on
+ * a phone. Header stays sticky so the close button is always thumb-reachable.
+ * iOS safe-area-inset on the header keeps the close button clear of the
+ * notch when the page is in landscape. */
+@media (max-width: 600px) {
+  .help-modal-overlay {
+    padding: 0;
+    align-items: stretch;
+  }
+  .help-modal {
+    max-height: 100dvh;
+    border-radius: 0;
+    width: 100%;
+  }
+  .help-modal-header {
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    z-index: 1;
+    padding-top: max(1rem, env(safe-area-inset-top, 0px));
+    padding-left: max(1.25rem, env(safe-area-inset-left, 0px));
+    padding-right: max(1.25rem, env(safe-area-inset-right, 0px));
+  }
+  .help-modal-body {
+    padding-bottom: max(1.25rem, env(safe-area-inset-bottom, 0px));
+    overscroll-behavior: contain;
+  }
+}
+
+.help-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -6557,14 +6732,14 @@ textarea.inventory-card-input {
   flex-shrink: 0;
 }
 
-.orders-help-modal-header h3 {
+.help-modal-header h3 {
   margin: 0;
   font-size: 1.05rem;
   font-weight: 600;
   color: var(--text-heading);
 }
 
-.orders-help-modal-body {
+.help-modal-body {
   padding: 1rem 1.25rem 1.25rem;
   overflow-y: auto;
   font-size: 0.9rem;
@@ -6572,46 +6747,50 @@ textarea.inventory-card-input {
   color: var(--text);
 }
 
-.orders-help-modal-body h4 {
+.help-modal-body h4 {
   margin: 1rem 0 0.35rem;
   font-size: 0.92rem;
   font-weight: 600;
   color: var(--text-heading);
 }
 
-.orders-help-modal-body p {
+.help-modal-body p {
   margin: 0.4rem 0;
 }
 
-.orders-help-modal-body ul {
+.help-modal-body ul {
   margin: 0.4rem 0 0.6rem;
   padding-left: 1.25rem;
 }
 
-.orders-help-modal-body li {
+.help-modal-body li {
   margin: 0.25rem 0;
 }
 
-.orders-help-modal-body code {
+.help-modal-body code {
   font-size: 0.85em;
   padding: 0.05rem 0.3rem;
   background: var(--surface-alt);
   border-radius: 3px;
 }
 
-.orders-help-lead {
+.help-modal-lead {
   color: var(--text-secondary);
 }
 
-.orders-help-flow {
+.help-modal-flow {
   margin: 0.75rem 0 !important;
   padding: 0.5rem 0.75rem;
   background: var(--surface-alt);
   border-radius: var(--radius-md);
   font-size: 0.88rem;
   color: var(--text-heading);
-  text-align: center;
   letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .orders-content {
@@ -7674,6 +7853,33 @@ textarea.inventory-card-input {
   }
 }
 
+/* Phone-specific tightening — 780px stacks the card; 600px commits to a
+ * full-width action row with touch-friendly (≥44px) hit areas. */
+@media (max-width: 600px) {
+  .order-card-main {
+    padding: 0.625rem 0.75rem;
+  }
+
+  .order-card-actions {
+    width: 100%;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+
+  .order-card-actions > .button {
+    flex: 1 1 0;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+  }
+
+  .closed-orders-day-cards {
+    padding: 0.5rem;
+  }
+}
+
 .audit-page {
   max-width: 900px;
   margin: 0 auto;
@@ -8366,6 +8572,131 @@ textarea.inventory-card-input {
     border-top: 1px dashed var(--table-grid);
     padding-top: 0.4rem;
   }
+}
+
+/* Mobile (≤780px) card view for the activity feed. Each event renders as a
+ * stacked card so timestamp, item link, action description, and undo each
+ * get their own row instead of competing for one cramped grid line. The
+ * accent rail (--row-accent) carries the action-type color, matching the
+ * desktop FlatActivityFeed for at-a-glance type recognition. */
+.audit-mobile-feed {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--table-grid);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.audit-mobile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface);
+  border-left: 3px solid var(--row-accent, var(--text-muted));
+  border-bottom: 1px solid var(--table-grid);
+}
+
+.audit-mobile-card:last-child {
+  border-bottom: none;
+}
+
+.audit-mobile-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.audit-mobile-card-time,
+.audit-mobile-card-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audit-mobile-card-user {
+  min-width: 0;
+}
+
+.audit-mobile-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.25rem 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.audit-mobile-card-body:disabled {
+  cursor: default;
+}
+
+.audit-mobile-card-itemname {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.audit-mobile-card-body:disabled .audit-mobile-card-itemname {
+  color: var(--text-heading);
+}
+
+.audit-mobile-card-summary {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.audit-mobile-card-footer {
+  display: flex;
+}
+
+.audit-mobile-card-undo {
+  flex: 1;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.audit-mobile-card-undo:hover:not(:disabled) {
+  background: var(--surface-alt);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.audit-mobile-card-undo:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .audit-load-more {
@@ -9079,5 +9410,35 @@ textarea.inventory-card-input {
   .inventory-toolbar-action {
     padding: 0.3rem 0.55rem;
     font-size: 0.75rem;
+  }
+}
+
+/* ── Touch target sizing for mobile ─────────────────────────────────────
+ * iOS HIG recommends a minimum hit area of 44x44px. Below 780px we expand
+ * small icon buttons to meet that, either by enlarging the visual control
+ * or by extending the hit area with a ::before pseudo so dense layouts
+ * (e.g. checklist rows) keep their visual rhythm. */
+@media (max-width: 780px) {
+  .help-modal-trigger {
+    width: 40px;
+    height: 40px;
+  }
+
+  .inventory-add-row-chevron {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Checklist checkbox stays visually 22x22 inside the row, but a
+   * transparent ::before extends the tappable surface around it. */
+  .checklist-checkbox {
+    position: relative;
+  }
+
+  .checklist-checkbox::before {
+    content: "";
+    position: absolute;
+    inset: -11px;
+    /* No background — purely a hit-area expansion. */
   }
 }

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 
 /** Collapsible day section. Today's section opens by default; older days
  *  collapse — when collapsed (and as subtle context when open) the header
@@ -25,7 +26,9 @@ export function DaySection({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >
-        <span className="audit-flat-day-chevron">{open ? "▾" : "▸"}</span>
+        <span className="audit-flat-day-chevron" aria-hidden="true">
+          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
         <span className="audit-flat-day-label">{label}</span>
         <span className="audit-flat-day-summary">{summary}</span>
       </button>

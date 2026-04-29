@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, Check, Plus, X } from "lucide-react";
 import {
   isInventoryProvisioningError,
   loadInventoryBootstrap,
@@ -191,7 +192,7 @@ function ItemAutocomplete({
             disabled={disabled}
             aria-label="Clear selection"
           >
-            ×
+            <X size={14} />
           </button>
         )}
       </div>
@@ -227,7 +228,7 @@ function ItemAutocomplete({
   );
 }
 
-/* ── Quantity Stepper ──────────────────────────────────────────────────── */
+/* ── Quantity Input ────────────────────────────────────────────────────── */
 
 function QtyStepper({
   value,
@@ -240,18 +241,8 @@ function QtyStepper({
   onChange: (v: string) => void;
   disabled: boolean;
 }) {
-  const num = Number(value) || 0;
   return (
     <div className="usage-qty-stepper">
-      <button
-        type="button"
-        className="usage-qty-btn"
-        onClick={() => onChange(String(Math.max(0, num - 1)))}
-        disabled={disabled || num <= 0}
-        aria-label="Decrease quantity"
-      >
-        −
-      </button>
       <input
         type="number"
         className="usage-qty-input"
@@ -265,15 +256,6 @@ function QtyStepper({
         disabled={disabled}
         placeholder="0"
       />
-      <button
-        type="button"
-        className="usage-qty-btn"
-        onClick={() => onChange(String(num + 1))}
-        disabled={disabled || num >= max}
-        aria-label="Increase quantity"
-      >
-        +
-      </button>
     </div>
   );
 }
@@ -655,7 +637,9 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
 
         {feedback && (
           <div className={`usage-banner usage-banner--${feedback.type}`} role="status">
-            <span className="usage-banner-icon">{feedback.type === "success" ? "✓" : "!"}</span>
+            <span className="usage-banner-icon">
+              {feedback.type === "success" ? <Check size={16} /> : <AlertCircle size={16} />}
+            </span>
             <span className="usage-banner-text">{feedback.message}</span>
             <button
               type="button"
@@ -663,7 +647,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
               onClick={() => setFeedback(null)}
               aria-label="Dismiss"
             >
-              ×
+              <X size={14} />
             </button>
           </div>
         )}
@@ -709,7 +693,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                         disabled={submitting}
                         aria-label="Remove this location section"
                       >
-                        ×
+                        <X size={14} />
                       </button>
                     )}
                   </div>
@@ -758,7 +742,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                               disabled={submitting}
                               aria-label="Remove line"
                             >
-                              ×
+                              <X size={14} />
                             </button>
                           )}
                         </div>
@@ -772,7 +756,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                                 onClick={() => updateEntry(group.id, entry.id, { notesOpen: true })}
                                 disabled={submitting}
                               >
-                                + Add note
+                                <Plus size={14} /> Add note
                               </button>
                             ) : (
                               <div className="usage-note-input-wrap">
@@ -815,7 +799,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                                     disabled={submitting}
                                     aria-label="Clear note"
                                   >
-                                    ×
+                                    <X size={14} />
                                   </button>
                                 )}
                               </div>
@@ -837,7 +821,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                   onClick={() => addLine(group.id)}
                   disabled={submitting}
                 >
-                  + Add Item
+                  <Plus size={14} /> Add Item
                 </button>
 
                 {showLocationPicker && groupIndex < groups.length - 1 && <hr className="usage-section-divider" />}
@@ -854,7 +838,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
               onClick={addLocationSection}
               disabled={submitting}
             >
-              + Add Location
+              <Plus size={14} /> Add Location
             </button>
           )}
           <button

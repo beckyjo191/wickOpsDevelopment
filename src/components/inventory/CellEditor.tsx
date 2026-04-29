@@ -1,4 +1,5 @@
 import { useState, type ChangeEvent, type FocusEvent } from "react";
+import { ExternalLink, X } from "lucide-react";
 import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../lib/currency";
 import type { InventoryColumn, InventoryRow } from "./inventoryTypes";
 
@@ -173,8 +174,9 @@ export function CellEditor({
             rel="noreferrer"
             onClick={(event) => event.stopPropagation()}
             title="Open link"
+            aria-label="Open link"
           >
-            &#x2197;
+            <ExternalLink size={14} />
           </a>
         </div>
       );
@@ -385,7 +387,7 @@ export function CellEditor({
             aria-label="Clear date"
             title="Clear date"
           >
-            ×
+            <X size={14} />
           </button>
         ) : null}
       </div>

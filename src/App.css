@@ -7674,6 +7674,33 @@ textarea.inventory-card-input {
   }
 }
 
+/* Phone-specific tightening — 780px stacks the card; 600px commits to a
+ * full-width action row with touch-friendly (≥44px) hit areas. */
+@media (max-width: 600px) {
+  .order-card-main {
+    padding: 0.625rem 0.75rem;
+  }
+
+  .order-card-actions {
+    width: 100%;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+  }
+
+  .order-card-actions > .button {
+    flex: 1 1 0;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+  }
+
+  .closed-orders-day-cards {
+    padding: 0.5rem;
+  }
+}
+
 .audit-page {
   max-width: 900px;
   margin: 0 auto;

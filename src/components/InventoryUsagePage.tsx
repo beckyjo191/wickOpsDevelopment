@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Check, Plus, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
+import { useToast } from "./shared/Toast";
+import { LoadingState } from "./shared/LoadingState";
 import {
   isInventoryProvisioningError,
   loadInventoryBootstrap,
@@ -45,7 +47,7 @@ const createUsageEntry = (): UsageEntry => ({
   id: crypto.randomUUID(),
   itemId: "",
   itemSearch: "",
-  quantityUsed: "",
+  quantityUsed: "0",
   notes: "",
   notesOpen: false,
   error: "",
@@ -253,8 +255,9 @@ function QtyStepper({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onFocus={(e) => e.currentTarget.select()}
+        onClick={(e) => e.currentTarget.select()}
+        onBlur={(e) => { if (e.currentTarget.value === "") onChange("0"); }}
         disabled={disabled}
-        placeholder="0"
       />
     </div>
   );
@@ -263,10 +266,10 @@ function QtyStepper({
 /* ── Main component ────────────────────────────────────────────────────── */
 
 export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: string | null }) {
+  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
@@ -440,7 +443,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
           );
           next.entries = next.entries.map((entry) => {
             if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-            return { ...entry, itemId: "", itemSearch: "", quantityUsed: "", notes: "", notesOpen: false, error: "" };
+            return { ...entry, itemId: "", itemSearch: "", quantityUsed: "0", notes: "", notesOpen: false, error: "" };
           });
         }
         return next;
@@ -529,7 +532,10 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
         const itemId = entry.itemId.trim();
         const quantityUsed = Number(entry.quantityUsed);
         const notes = entry.notes.trim();
-        const isEmpty = !itemId && entry.quantityUsed.trim() === "" && notes === "";
+        const isEmpty =
+          !itemId &&
+          (entry.quantityUsed.trim() === "" || Number(entry.quantityUsed) === 0) &&
+          notes === "";
         if (isEmpty) return entry;
 
         let error = "";
@@ -540,7 +546,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
           error = "Enter a valid quantity";
           hasError = true;
         } else if (quantityUsed === 0 && !notes) {
-          error = "Add a note when logging 0 quantity";
+          error = "Enter quantity used";
           hasError = true;
         } else {
           const row = rowById.get(itemId);
@@ -584,19 +590,17 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
     });
 
     setSubmitting(true);
-    setFeedback(null);
     try {
       await submitInventoryUsage(normalized);
       setGroups([createUsageGroup()]);
       const itemList = submittedLines.join(", ");
-      setFeedback({
-        type: "success",
-        message: `Logged: ${itemList} — quantities updated. Undo from the Activity feed if needed.`,
-      });
+      toast.success(
+        `Logged: ${itemList} — quantities updated. Undo from the Activity feed if needed.`,
+      );
       // Re-fetch inventory so the in-form quantities reflect the new totals.
       void refreshInventoryRows({ silent: true });
     } catch (err: any) {
-      setFeedback({ type: "error", message: err?.message ?? "Failed to submit usage" });
+      toast.error(err?.message ?? "Failed to submit usage");
     } finally {
       setSubmitting(false);
     }
@@ -605,10 +609,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
   if (loading) {
     return (
       <section className="app-content">
-        <div className="app-card app-loading-card">
-          <span className="app-spinner" aria-hidden="true" />
-          <span>{loadingMessage}</span>
-        </div>
+        <LoadingState variant="card" message={loadingMessage} />
       </section>
     );
   }
@@ -634,23 +635,6 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
             event has an <strong>Undo</strong> button in the Activity feed.
           </p>
         </header>
-
-        {feedback && (
-          <div className={`usage-banner usage-banner--${feedback.type}`} role="status">
-            <span className="usage-banner-icon">
-              {feedback.type === "success" ? <Check size={16} /> : <AlertCircle size={16} />}
-            </span>
-            <span className="usage-banner-text">{feedback.message}</span>
-            <button
-              type="button"
-              className="usage-banner-dismiss"
-              onClick={() => setFeedback(null)}
-              aria-label="Dismiss"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        )}
 
         {formError && (
           <div className="usage-inline-error usage-form-error" role="alert">{formError}</div>

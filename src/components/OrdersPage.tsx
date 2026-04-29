@@ -14,6 +14,8 @@ import {
   X,
 } from "lucide-react";
 import { HelpModal } from "./shared/HelpModal";
+import { EmptyState } from "./shared/EmptyState";
+import { LoadingState } from "./shared/LoadingState";
 import { DaySection } from "../lib/dayGroups";
 import { dayGroupLabel } from "../lib/dayGroupLabel";
 import {
@@ -65,14 +67,12 @@ function orderTotalCost(items: RestockOrderItem[]): number | null {
 
 function StatusBadge({ status, cancelled }: { status: RestockOrder["status"]; cancelled?: boolean }) {
   if (cancelled) {
-    return (
-      <span className="order-status-badge order-status-badge--cancelled">Cancelled</span>
-    );
+    return <span className="badge badge--uppercase badge--danger">Cancelled</span>;
   }
   const map = {
-    open: { label: "Ordered", className: "order-status-badge order-status-badge--open" },
-    partial: { label: "Partially Received", className: "order-status-badge order-status-badge--partial" },
-    closed: { label: "Completed", className: "order-status-badge order-status-badge--closed" },
+    open: { label: "Ordered", className: "badge badge--uppercase badge--primary" },
+    partial: { label: "Partially Received", className: "badge badge--uppercase badge--warning" },
+    closed: { label: "Completed", className: "badge badge--uppercase badge--neutral" },
   };
   const { label, className } = map[status];
   return <span className={className}>{label}</span>;
@@ -370,10 +370,10 @@ function ReceiveOrderForm({
                 max={line.receivingAsBoxes && line.packSize > 0
                   ? Math.ceil(line.qtyRemaining / line.packSize)
                   : line.qtyRemaining}
-                placeholder="0"
                 value={line.qtyThisReceive}
                 onChange={(e) => updateLine(line.itemId, { qtyThisReceive: e.target.value, error: "" })}
                 onFocus={(e) => e.currentTarget.select()}
+                onBlur={(e) => { if (e.currentTarget.value === "") updateLine(line.itemId, { qtyThisReceive: "0" }); }}
               />
             </div>
             {hasExpirationColumn && (
@@ -788,7 +788,8 @@ export function OrdersHelp() {
       <ul>
         <li>
           Type in the <strong>vendor</strong> field to add a new one
-          on the spot. Picking a vendor pre-fills its low-stock items.
+          on the spot. Build the order by searching inventory or
+          quick-adding freeform lines.
         </li>
         <li>
           <strong>Already received</strong> closes the order
@@ -1125,7 +1126,7 @@ function ComposeOrderPanel({
   };
   const makeEmptyLine = (): ComposeLine => ({
     itemName: "",
-    qty: "1",
+    qty: "0",
     expanded: false,
     ...blankLineExtras,
   });
@@ -1241,8 +1242,8 @@ function ComposeOrderPanel({
       <div className="compose-order-intro">
         <h3 className="compose-order-title">New Order</h3>
         <p className="compose-order-hint">
-          Pick a vendor — low-stock items pre-fill. Add more by searching
-          inventory or quick-adding a freeform line.
+          Pick a vendor (or add a new one), then build the order by
+          searching inventory or quick-adding freeform lines.
         </p>
       </div>
         <div className="manual-order-fields">
@@ -1297,10 +1298,11 @@ function ComposeOrderPanel({
                       className="field compose-order-line-qty-input"
                       type="number"
                       min="1"
-                      placeholder="0"
                       value={l.qty}
                       onChange={(e) => updateLine(idx, { qty: e.target.value })}
                       onFocus={(e) => e.currentTarget.select()}
+                      onClick={(e) => e.currentTarget.select()}
+                      onBlur={(e) => { if (e.currentTarget.value === "") updateLine(idx, { qty: "0" }); }}
                       disabled={submitting || !filled}
                       aria-label="Quantity"
                     />
@@ -1794,11 +1796,7 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
       <div className="orders-content">
         {error && <p className="orders-error">{error}</p>}
 
-        {loading && (
-          <div className="orders-loading">
-            <Loader2 size={22} className="spin" />
-          </div>
-        )}
+        {loading && <LoadingState />}
 
         {!loading && (
           <>
@@ -1884,13 +1882,11 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
             {activeTab === "pending" && (
               <div className="orders-section">
                 {openOrders.length === 0 ? (
-                  <p className="orders-empty">
-                    <PackageCheck size={32} strokeWidth={1.5} />
-                    <span>No orders waiting to be received.</span>
-                    <span className="orders-empty-hint">
-                      Place an order from the Reorder or New Order tab and it'll show up here.
-                    </span>
-                  </p>
+                  <EmptyState
+                    icon={PackageCheck}
+                    title="No orders waiting to be received"
+                    hint="Place an order from the Reorder or New Order tab and it'll show up here."
+                  />
                 ) : (
                   openOrders.map((order) => (
                     <OrderCard
@@ -1908,12 +1904,11 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
             {activeTab === "closed" && (
               <div className="orders-section">
                 {closedOrders.length === 0 ? (
-                  <p className="orders-empty">
-                    <span>No closed orders yet.</span>
-                    <span className="orders-empty-hint">
-                      Orders move here once they're fully received or cancelled.
-                    </span>
-                  </p>
+                  <EmptyState
+                    icon={CheckCircle}
+                    title="No closed orders yet"
+                    hint="Orders move here once they're fully received or cancelled."
+                  />
                 ) : (
                   <>
                     {/* Search + compact "Date range" popover. Mirrors Activity's

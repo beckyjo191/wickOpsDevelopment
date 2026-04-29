@@ -1,7 +1,8 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
+import { isDeletableRow } from "./inventoryUtils";
 
 export type InventoryDesktopTableProps = {
   paginatedRows: { row: InventoryRow; index: number }[];
@@ -42,6 +43,9 @@ export type InventoryDesktopTableProps = {
   setEditingDateCell: (cell: { rowId: string; columnKey: string } | null) => void;
   activeTab?: ActiveTab;
   onRetireRow?: (rowId: string) => void;
+  /** Selects the row then triggers the bulk-delete confirm flow. Mirrors the
+   *  mobile per-row delete path. */
+  onDeleteRow?: (rowId: string) => void;
 };
 
 /**
@@ -80,8 +84,10 @@ export function InventoryDesktopTable({
   setEditingDateCell,
   activeTab,
   onRetireRow,
+  onDeleteRow,
 }: InventoryDesktopTableProps) {
   const showRetire = activeTab === "expired" && !!onRetireRow;
+  const showDelete = canEditTable && !!onDeleteRow;
   return (
     <div className="inventory-table-wrap">
       <table className="inventory-table">
@@ -169,6 +175,7 @@ export function InventoryDesktopTable({
                 </th>
               ),
             )}
+            {showDelete ? <th className="inventory-col-delete" aria-label="Delete" /> : null}
           </tr>
         </thead>
         <tbody>
@@ -249,6 +256,21 @@ export function InventoryDesktopTable({
                 </td>
                 );
               })}
+              {showDelete ? (
+                <td className="inventory-col-delete" onClick={(e) => e.stopPropagation()}>
+                  {isDeletableRow(row) ? (
+                    <button
+                      type="button"
+                      className="inventory-row-delete-btn"
+                      onClick={() => onDeleteRow!(row.id)}
+                      title="Delete this item"
+                      aria-label="Delete row"
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>

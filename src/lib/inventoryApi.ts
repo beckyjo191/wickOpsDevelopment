@@ -84,9 +84,8 @@ export const isInventoryProvisioningError = (
 ): value is InventoryProvisioningError => value instanceof InventoryProvisioningError;
 
 /**
- * Thrown when the server rejects a delete because the item has operational
- * history (edits, usage, restocks, retirements). Callers should offer the user
- * the option to retire the protected rows instead.
+ * Thrown when the server rejects a delete because the item still has stock on
+ * hand. Callers should prompt the user to log usage or retire stock first.
  */
 export class DeleteBlockedError extends Error {
   readonly protectedRows: Array<{ id: string; itemName: string }>;
@@ -273,9 +272,9 @@ export const saveInventoryItems = async (
           error?: string;
           protectedRows?: Array<{ id: string; itemName: string }>;
         };
-        if (parsed.code === "DELETE_BLOCKED_HAS_HISTORY" && Array.isArray(parsed.protectedRows)) {
+        if (parsed.code === "DELETE_BLOCKED_HAS_STOCK" && Array.isArray(parsed.protectedRows)) {
           throw new DeleteBlockedError(
-            parsed.error ?? "Some items have history and cannot be deleted.",
+            parsed.error ?? "Some items still have stock and can't be deleted.",
             parsed.protectedRows,
           );
         }

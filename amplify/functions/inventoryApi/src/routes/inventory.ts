@@ -1,12 +1,12 @@
 // ── Route handlers: inventory ───────────────────────────────────────────────
-import { BatchGetCommand, UpdateCommand, DeleteCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { BatchGetCommand, UpdateCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
 import type { RetireReason, RouteContext } from "../types";
 import { RETIRE_REASONS } from "../types";
 import { ddb } from "../clients";
 import { json, parseNextToken } from "../http";
 import { getParentItemId, listAllItems, listItemsPage, validateNonNegativeField } from "../items";
-import { buildAuditEvent, writeAuditEvents, writeAuditEventsCoalesced, computeValuesDiff, hasProtectedHistory } from "../audit";
+import { buildAuditEvent, findAuditEventByEventId, writeAuditEvents, writeAuditEventsCoalesced, computeValuesDiff } from "../audit";
 
 // Machine-managed fields in valuesJson. Changes to these shouldn't produce
 // ITEM_EDIT audit events — they're either identity (parentItemId) or state
@@ -222,26 +222,26 @@ export const handleSaveItems = async (ctx: RouteContext) => {
     }
   }
 
-  // Delete guard: block deletion of items that have operational history (edits,
-  // usage, restocks, retirements). Those must go through the retire flow so
-  // their history stays attached to a surviving row.
+  // Delete guard: block deletion of items that still have stock on hand. The
+  // user must consume (Log Usage) or retire that stock first so loss analytics
+  // stay accurate. Once qty == 0 the SKU is fair game to delete — the audit
+  // events live in their own table keyed by ITEM#<id> and survive the row.
   if (deletedRowIds.length > 0) {
-    const protectionChecks = await Promise.all(
-      deletedRowIds.map(async (id: string) => ({
-        id,
-        protected: await hasProtectedHistory(storage.auditTable, id),
-      })),
-    );
-    const protectedRows = protectionChecks
-      .filter((r) => r.protected)
-      .map(({ id }) => ({
-        id,
-        itemName: String(oldValuesMap.get(id)?.itemName ?? "").trim() || `Item ${id.slice(0, 8)}`,
-      }));
+    const protectedRows = deletedRowIds
+      .map((id: string) => {
+        const vals = oldValuesMap.get(id);
+        const qty = Number(vals?.quantity ?? 0);
+        if (!Number.isFinite(qty) || qty <= 0) return null;
+        return {
+          id,
+          itemName: String(vals?.itemName ?? "").trim() || `Item ${id.slice(0, 8)}`,
+        };
+      })
+      .filter((r: { id: string; itemName: string } | null): r is { id: string; itemName: string } => r !== null);
     if (protectedRows.length > 0) {
       return json(409, {
-        error: "Some items have operational history and must be retired instead of deleted.",
-        code: "DELETE_BLOCKED_HAS_HISTORY",
+        error: "Some items still have stock and can't be deleted. Log usage or retire first.",
+        code: "DELETE_BLOCKED_HAS_STOCK",
         protectedRows,
       });
     }
@@ -267,9 +267,8 @@ export const handleSaveItems = async (ctx: RouteContext) => {
       );
       // Suppress ITEM_DELETE for rows that were never populated — a blank row
       // created and then cleaned up is accidental noise, not activity worth
-      // logging. The delete guard above already ensures anything with real
-      // history is forced through retire, so a blank-defaults oldValues here
-      // means the row genuinely never had content.
+      // logging. Rows with any populated value get a delete event so the audit
+      // log captures the SKU's removal even after its row is gone.
       const isBlankRow = !oldValues || isAllDefaults(oldValues);
       if (!isBlankRow) {
         auditEvents.push(buildAuditEvent(access, "ITEM_DELETE", deletedId, deletedName, {
@@ -320,16 +319,11 @@ export const handleUndoRetire = async (ctx: RouteContext) => {
     return json(400, { error: "eventId and itemId are required." });
   }
 
-  const queryRes = await ddb.send(
-    new QueryCommand({
-      TableName: storage.auditTable,
-      KeyConditionExpression: "pk = :pk",
-      FilterExpression: "eventId = :eid",
-      ExpressionAttributeValues: { ":pk": `ITEM#${itemId}`, ":eid": eventId },
-      Limit: 1,
-    }),
+  const original = await findAuditEventByEventId(
+    storage.auditTable,
+    `ITEM#${itemId}`,
+    eventId,
   );
-  const original = (queryRes.Items ?? [])[0] as Record<string, unknown> | undefined;
   if (!original) return json(404, { error: "Retire event not found." });
   if (original.action !== "ITEM_RETIRE") {
     return json(400, { error: "Only retire events can be undone." });

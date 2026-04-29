@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useToast } from "./shared/Toast";
 
 type InviteRole = "ADMIN" | "EDITOR" | "VIEWER";
 
@@ -19,6 +20,7 @@ export function InviteUsersPage({
   seatsUsed,
   onContinue,
 }: InviteUsersPageProps) {
+  const toast = useToast();
   const seatsRemaining = maxUsers - seatsUsed;
   const [invites, setInvites] = useState<InviteEntry[]>([
     { name: "", email: "", role: "VIEWER" },
@@ -59,9 +61,13 @@ export function InviteUsersPage({
           role: invite.role,
         }))
         .filter((invite) => invite.email.length > 0);
-      if (!validInvites.length) return alert("Please enter at least one email");
+      if (!validInvites.length) {
+        toast.error("Please enter at least one email");
+        return;
+      }
       if (validInvites.some((invite) => invite.name.length === 0)) {
-        return alert("Please enter a name for each invited user");
+        toast.error("Please enter a name for each invited user");
+        return;
       }
 
       await onContinue(validInvites);
@@ -69,9 +75,9 @@ export function InviteUsersPage({
       console.error(err);
       const msg = err?.message ?? "";
       if (msg.includes("UsernameExistsException")) {
-        alert("That email address is already registered. The user may already have an account.");
+        toast.error("That email address is already registered. The user may already have an account.");
       } else {
-        alert("Failed to send invites.");
+        toast.error("Failed to send invites.");
       }
     } finally {
       setLoading(false);

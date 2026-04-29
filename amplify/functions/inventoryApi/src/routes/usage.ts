@@ -5,7 +5,6 @@ import {
   DeleteCommand,
   GetCommand,
   PutCommand,
-  QueryCommand,
   ScanCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
@@ -18,7 +17,7 @@ import type {
 } from "../types";
 import { ddb } from "../clients";
 import { json } from "../http";
-import { buildAuditEvent, writeAuditEvents } from "../audit";
+import { buildAuditEvent, findAuditEventByEventId, writeAuditEvents } from "../audit";
 import { listAllItems } from "../items";
 
 /** Effective per-unit cost from an item's valuesJson. Prefers packCost /
@@ -426,17 +425,16 @@ export const handleUndoUsage = async (ctx: RouteContext) => {
   }
 
   // Locate the audit event by querying the item's history and matching eventId.
-  // We can't query by eventId directly — pk/sk are (ITEM#<id>, TS#<ts>#<short>).
-  const queryRes = await ddb.send(
-    new QueryCommand({
-      TableName: storage.auditTable,
-      KeyConditionExpression: "pk = :pk",
-      FilterExpression: "eventId = :eid",
-      ExpressionAttributeValues: { ":pk": `ITEM#${itemId}`, ":eid": eventId },
-      Limit: 1,
-    }),
+  // We can't Get by eventId directly — pk/sk are (ITEM#<id>, TS#<ts>#<short>).
+  // findAuditEventByEventId paginates the partition; a naive Query with
+  // Limit:1 + FilterExpression is broken because Limit applies before the
+  // filter (you'd only see the matching event when it happens to be the first
+  // item DynamoDB scans).
+  const original = await findAuditEventByEventId(
+    storage.auditTable,
+    `ITEM#${itemId}`,
+    eventId,
   );
-  const original = (queryRes.Items ?? [])[0] as Record<string, unknown> | undefined;
   if (!original) return json(404, { error: "Usage event not found." });
   if (original.action !== "USAGE_APPROVE") {
     return json(400, { error: "Only usage events can be undone." });

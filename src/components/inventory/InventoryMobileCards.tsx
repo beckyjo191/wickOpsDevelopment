@@ -1,7 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryRow } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
-import { isDiscardableRow } from "./inventoryUtils";
+import { isDeletableRow } from "./inventoryUtils";
 
 export type InventoryMobileCardsProps = {
   paginatedRows: { row: InventoryRow; index: number }[];
@@ -25,6 +25,9 @@ export type InventoryMobileCardsProps = {
   onSetSelectedRowId: (rowId: string | null) => void;
   onMoveSelectedRows: (location: string) => void;
   onRequestDelete: () => void;
+  /** Scope selection to one row + open delete confirm. Used by per-card
+   *  inline Delete buttons so other selected rows don't get caught up. */
+  onRequestDeleteRow: (rowId: string) => void;
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
   getReadOnlyCellText: (column: InventoryColumn, value: unknown) => string;
   toDateInputValue: (raw: unknown) => string;
@@ -62,6 +65,7 @@ export function InventoryMobileCards({
   onSetSelectedRowId,
   onMoveSelectedRows,
   onRequestDelete,
+  onRequestDeleteRow,
   onCellChange,
   getReadOnlyCellText,
   toDateInputValue,
@@ -75,14 +79,13 @@ export function InventoryMobileCards({
   onRetireRow,
 }: InventoryMobileCardsProps) {
   const showRetire = activeTab === "expired" && !!onRetireRow;
-  // Selection-level discard eligibility: only show the bulk Discard button
-  // when every selected row is blank (no operational history). Anything with
-  // content needs to go through Retire.
-  const allSelectedDiscardable =
+  // Bulk Delete shows when every selected row has zero on-hand quantity. Rows
+  // with stock have to be drained (Log Usage) or retired first.
+  const allSelectedDeletable =
     selectedRowIds.size > 0 &&
     rows
       .filter((r) => selectedRowIds.has(r.id))
-      .every(isDiscardableRow);
+      .every(isDeletableRow);
   return (
     <div className="inventory-cards-wrap">
       {selectMode && canEditTable && selectedRowIds.size > 0 && rows.length > 1 && (
@@ -112,14 +115,14 @@ export function InventoryMobileCards({
               </div>
             </details>
           ) : null}
-          {allSelectedDiscardable ? (
+          {allSelectedDeletable ? (
             <button
               type="button"
               className="button button-secondary button-sm"
               onClick={onRequestDelete}
-              title="Discard the selected blank rows"
+              title="Delete the selected rows"
             >
-              Discard ({selectedRowIds.size})
+              Delete ({selectedRowIds.size})
             </button>
           ) : null}
           <button
@@ -292,17 +295,14 @@ export function InventoryMobileCards({
                         Retire Item
                       </button>
                     )}
-                    {canEditTable && isDiscardableRow(row) && (
+                    {canEditTable && isDeletableRow(row) && (
                       <button
                         type="button"
                         className="inventory-card-delete-btn"
-                        onClick={() => {
-                          onToggleRowSelection(row.id);
-                          onRequestDelete();
-                        }}
-                        title="Discard this blank row"
+                        onClick={() => onRequestDeleteRow(row.id)}
+                        title="Delete this item"
                       >
-                        Discard
+                        Delete
                       </button>
                     )}
                     <button

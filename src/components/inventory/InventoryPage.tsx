@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus } from "lucide-react";
 import type { InventoryPageProps } from "./inventoryTypes";
-import { isDiscardableRow, normalizeHeaderKey } from "./inventoryUtils";
+import { isDeletableRow, normalizeHeaderKey } from "./inventoryUtils";
 import {
   addInventoryLocation,
   generateAndDownloadInventoryTemplate,
@@ -23,8 +23,9 @@ import { InventoryUsagePage } from "../InventoryUsagePage";
 import { InventoryMobileCards } from "./InventoryMobileCards";
 import { InventoryDesktopTable } from "./InventoryDesktopTable";
 import { ImportDialogs } from "./ImportDialogs";
-import { DiscardConfirmDialog } from "./DiscardConfirmDialog";
+import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { PaginationControls } from "./PaginationControls";
+import { LoadingState } from "../shared/LoadingState";
 import { ROWS_PER_PAGE } from "./inventoryTypes";
 
 export function InventoryPage({
@@ -119,7 +120,7 @@ export function InventoryPage({
 
   // ── Stale-location auto-sync ──────────────────────────────────────────────
   // When the saved `selectedLocation` (persisted to localStorage) drops out
-  // of `locationOptions` — e.g. the user discarded the last row in
+  // of `locationOptions` — e.g. the user deleted the last row in
   // "Unassigned" — snap the stored value back to whatever the filter is
   // actually applying so the dropdown trigger, the table, and storage all
   // agree. Without this the trigger keeps showing the dead location through
@@ -231,10 +232,11 @@ export function InventoryPage({
   if (data.loading) {
     return (
       <section className="app-content">
-        <div className="app-card app-card--inventory app-loading-card">
-          <span className="app-spinner" aria-hidden="true" />
-          <span>{data.loadingMessage}</span>
-        </div>
+        <LoadingState
+          variant="card"
+          className="app-card--inventory"
+          message={data.loadingMessage}
+        />
       </section>
     );
   }
@@ -478,22 +480,20 @@ export function InventoryPage({
                         </div>
                       </details>
                     ) : null}
-                    {/* Discard is shown only when every selected row is blank
-                     *  (no operational history, no content). Anything with data
-                     *  routes through Retire so the loss reason and history are
-                     *  preserved. The button hides entirely when the selection
-                     *  contains touched rows — Retire stays available via the
-                     *  per-row affordance and the Expired tab's Retire All. */}
+                    {/* Delete is shown only when every selected row has zero
+                     *  on-hand quantity. Rows with stock must go through
+                     *  Log Usage or Retire first. Retire stays available via
+                     *  the per-row affordance and the Expired tab's Retire All. */}
                     {data.rows
                       .filter((r) => filters.selectedRowIds.has(r.id))
-                      .every(isDiscardableRow) ? (
+                      .every(isDeletableRow) ? (
                       <button
                         type="button"
                         className="inventory-toolbar-action inventory-toolbar-action--danger"
                         onClick={data.onRequestDeleteSelectedRows}
-                        title="Discard the selected blank rows"
+                        title="Delete the selected rows"
                       >
-                        Discard ({filters.selectedRowIds.size})
+                        Delete ({filters.selectedRowIds.size})
                       </button>
                     ) : null}
                   </>
@@ -604,6 +604,7 @@ export function InventoryPage({
                 onSetSelectedRowId={() => {}}
                 onMoveSelectedRows={data.onMoveSelectedRows}
                 onRequestDelete={data.onRequestDeleteSelectedRows}
+                onRequestDeleteRow={data.onRequestDeleteRow}
                 onCellChange={data.onCellChange}
                 getReadOnlyCellText={data.getReadOnlyCellText}
                 toDateInputValue={filters.toDateInputValue}
@@ -659,6 +660,7 @@ export function InventoryPage({
                 setEditingDateCell={data.setEditingDateCell}
                 activeTab={filters.activeTab}
                 onRetireRow={canEditInventory ? (rowId) => void data.onRetireRows([rowId]) : undefined}
+                onDeleteRow={canEditInventory ? data.onRequestDeleteRow : undefined}
               />
             )}
 
@@ -697,7 +699,7 @@ export function InventoryPage({
         />
 
         {data.pendingDeleteRows ? (
-          <DiscardConfirmDialog
+          <DeleteConfirmDialog
             count={filters.selectedRowIds.size}
             onConfirm={data.onConfirmDeleteSelectedRows}
             onCancel={() => data.setPendingDeleteRows(false)}

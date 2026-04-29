@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check } from "lucide-react";
 import { useAuthenticator } from "@aws-amplify/ui-react";
 import { authFetch } from "../lib/authFetch";
+import { useToast } from "./shared/Toast";
 import {
   PLAN_REGISTRY,
   ANNUAL_SAVINGS_PCT,
@@ -13,6 +14,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string | undefined;
 
 export default function SubscriptionPage() {
   const { signOut } = useAuthenticator() as { signOut: () => void };
+  const toast = useToast();
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>("monthly");
   const [loadingPlan, setLoadingPlan] = useState<PlanKey | null>(null);
 
@@ -37,7 +39,7 @@ export default function SubscriptionPage() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("Checkout error:", err);
-      alert(`Checkout failed: ${message}`);
+      toast.error(`Checkout failed: ${message}`);
       setLoadingPlan(null);
     }
   };

@@ -15,6 +15,8 @@ import { OrdersPage, OrdersHelp } from "./components/OrdersPage";
 import { InventoryHelp } from "./components/inventory/InventoryHelp";
 import { DashboardHelp } from "./components/DashboardHelp";
 import { ActivityHelp } from "./components/ActivityHelp";
+import { ToastProvider } from "./components/shared/Toast";
+import { LoadingState } from "./components/shared/LoadingState";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -48,6 +50,16 @@ const isAppView = (value: unknown): value is AppView =>
   value === "settings";
 
 export default function App() {
+  // ToastProvider lives at the top of the tree so any descendant — including
+  // the early-return branches below (loading, sub-error) — can fire toasts.
+  return (
+    <ToastProvider>
+      <AppInner />
+    </ToastProvider>
+  );
+}
+
+function AppInner() {
   const { user, authStatus, signOut: rawSignOut } = useAuthenticator() as any;
   const signOut = () => {
     try { localStorage.removeItem("wickops.selectedLocation"); } catch { /* noop */ }
@@ -390,12 +402,7 @@ export default function App() {
   }, [view, subState.allowedModules]);
 
   if (authStatus === "configuring" || (subState.status === "loading" && !subState.loadError)) {
-    return (
-      <div className="app-loading-fullscreen">
-        <span className="app-spinner" aria-hidden="true" />
-        <span>{loadingLine}</span>
-      </div>
-    );
+    return <LoadingState variant="fullscreen" message={loadingLine} />;
   }
 
   if (subState.loadError) {

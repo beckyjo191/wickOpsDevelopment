@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryRow } from "../lib/inventoryApi";
 import { formatCurrency, parseCurrency } from "../lib/currency";
 import { Check, ExternalLink, Link2Off, Minus, Package, X } from "lucide-react";
+import { EmptyState } from "./shared/EmptyState";
 
 // ── Reorder-selection persistence ───────────────────────────────────────
 // Stored in localStorage so a reload mid-cart doesn't wipe the user's
@@ -434,7 +435,7 @@ function VendorChecklistCard({
                         onRemoveExtra ? (
                           <button
                             type="button"
-                            className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
+                            className="badge badge--primary reorder-status-extra--removable"
                             onClick={() => onRemoveExtra(line.rowId)}
                             title="Remove from reorder list"
                             aria-label={`Remove ${line.name} from reorder`}
@@ -443,12 +444,10 @@ function VendorChecklistCard({
                             <X size={14} />
                           </button>
                         ) : (
-                          <span className="reorder-item-status reorder-status-extra">
-                            Added
-                          </span>
+                          <span className="badge badge--primary">Added</span>
                         )
                       ) : (
-                        <span className="reorder-item-status reorder-status-lowStock">
+                        <span className="badge badge--warning">
                           Low: {itemData.activeQty}/{itemData.minQuantity}
                         </span>
                       )}
@@ -1011,7 +1010,7 @@ function MissingInfoCard({
                       onRemoveExtra ? (
                         <button
                           type="button"
-                          className="reorder-item-status reorder-status-extra reorder-status-extra--removable"
+                          className="badge badge--primary reorder-status-extra--removable"
                           onClick={() => onRemoveExtra(item.row.id)}
                           title="Remove from reorder list"
                           aria-label={`Remove ${item.itemName} from reorder`}
@@ -1020,10 +1019,10 @@ function MissingInfoCard({
                           <X size={14} />
                         </button>
                       ) : (
-                        <span className="reorder-item-status reorder-status-extra">Added</span>
+                        <span className="badge badge--primary">Added</span>
                       )
                     ) : (
-                      <span className="reorder-item-status reorder-status-lowStock">
+                      <span className="badge badge--warning">
                         Low: {item.activeQty}/{item.minQuantity}
                       </span>
                     )}
@@ -1693,11 +1692,12 @@ export function ReorderTab({
       </div>
 
       {isEmpty && (
-        <div className="reorder-empty">
-          <Package size={48} strokeWidth={1.5} />
-          <h3>Nothing to reorder</h3>
-          <p>All items are stocked and up to date.</p>
-        </div>
+        <EmptyState
+          icon={Package}
+          iconSize={48}
+          title="Nothing to reorder"
+          hint="All items are stocked and up to date."
+        />
       )}
 
       {hasFilterActive && filteredTotalItems === 0 && !isEmpty && (

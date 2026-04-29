@@ -40,6 +40,47 @@ export const buildAuditEvent = (
   };
 };
 
+/**
+ * Find an audit event in a single partition by its eventId. The table's
+ * primary key is (pk, sk) with sk = `TS#<timestamp>#<shortId>`, so we can't
+ * Get by eventId directly without a GSI.
+ *
+ * Why this isn't just `Query` with `Limit: 1` and a `FilterExpression`:
+ * DynamoDB applies `Limit` BEFORE `FilterExpression`. With Limit 1 the engine
+ * scans exactly one item from the partition, then applies the filter — so
+ * unless the matching eventId happens to be the first item scanned, the
+ * query returns nothing even though the event exists. This helper paginates
+ * through the partition, letting the server-side filter run on every page,
+ * until a match is found or the partition is exhausted.
+ *
+ * Capped at 100 pages × 1MB per page so a runaway partition can never pin
+ * the Lambda. That's far more audit data than any single inventory item or
+ * org should accumulate inside the audit retention window.
+ */
+export const findAuditEventByEventId = async (
+  auditTable: string,
+  pk: string,
+  eventId: string,
+): Promise<Record<string, unknown> | undefined> => {
+  let lastKey: Record<string, unknown> | undefined;
+  for (let page = 0; page < 100; page += 1) {
+    const res = await ddb.send(
+      new QueryCommand({
+        TableName: auditTable,
+        KeyConditionExpression: "pk = :pk",
+        FilterExpression: "eventId = :eid",
+        ExpressionAttributeValues: { ":pk": pk, ":eid": eventId },
+        ExclusiveStartKey: lastKey,
+      }),
+    );
+    const found = (res.Items ?? [])[0] as Record<string, unknown> | undefined;
+    if (found) return found;
+    if (!res.LastEvaluatedKey) return undefined;
+    lastKey = res.LastEvaluatedKey as Record<string, unknown>;
+  }
+  return undefined;
+};
+
 export const writeAuditEvents = async (
   auditTable: string,
   events: Record<string, unknown>[],
@@ -268,34 +309,3 @@ export const writeAuditEventsCoalesced = async (
   if (passthrough.length > 0) await writeAuditEvents(auditTable, passthrough);
 };
 
-/**
- * Returns true if the item has any audit event beyond ITEM_CREATE — meaning real
- * operational history (edits, usage, restocks, retirements). Such items must be
- * retired instead of deleted so their history stays attached.
- */
-export const hasProtectedHistory = async (
-  auditTable: string,
-  itemId: string,
-): Promise<boolean> => {
-  try {
-    const result = await ddb.send(
-      new QueryCommand({
-        TableName: auditTable,
-        KeyConditionExpression: "pk = :pk",
-        FilterExpression: "#action <> :create",
-        ExpressionAttributeNames: { "#action": "action" },
-        ExpressionAttributeValues: {
-          ":pk": `ITEM#${itemId}`,
-          ":create": "ITEM_CREATE",
-        },
-        Limit: 1,
-      }),
-    );
-    return (result.Items?.length ?? 0) > 0;
-  } catch (err) {
-    // Fail closed: if the audit table can't be queried, allow delete rather than
-    // blocking the user indefinitely — the audit log still captures ITEM_DELETE.
-    console.error("hasProtectedHistory query failed", err);
-    return false;
-  }
-};

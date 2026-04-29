@@ -14,7 +14,7 @@ import { handleAddLocation, handleRemoveLocation, handleRenameLocation } from ".
 import { handleAddVendor, handleRemoveVendor, handleRenameVendor } from "./routes/vendors";
 import { handleAlertSummary, handleBootstrap } from "./routes/dashboard";
 import { handleListItems, handleSaveItems } from "./routes/inventory";
-import { handleSubmitUsage, handleListPendingSubmissions, handleApproveSubmission, handleRejectSubmission, handleDeleteSubmission } from "./routes/usage";
+import { handleSubmitUsage, handleListPendingSubmissions, handleApproveSubmission, handleRejectSubmission, handleDeleteSubmission, handleUndoUsage } from "./routes/usage";
 import { handleImportCsv } from "./routes/csv-import";
 import { handleCreateColumn, handleDeleteColumn, handleUpdateColumnVisibility, handleUpdateColumnLabel, handleUpdateColumnType, handleReorderColumns, handleDeleteOrganizationStorage } from "./routes/column-mgmt";
 
@@ -76,6 +76,11 @@ const routes: Route[] = [
 
   // Usage (feature within the inventory module; role-based gating applies inside handlers)
   { method: "POST",   pattern: "/inventory/usage/submit",              needsStorage: true, module: "inventory", handler: handleSubmitUsage },
+  { method: "POST",   pattern: "/inventory/usage/undo",                needsStorage: true, module: "inventory", handler: handleUndoUsage },
+  // The pending approval flow has been replaced by direct decrement + undo.
+  // These routes remain so any pending submissions queued before deploy can be
+  // drained manually; they are unreferenced from the frontend and will be
+  // removed in a follow-up once the queue is empty.
   { method: "GET",    pattern: "/inventory/usage/pending",             needsStorage: true, module: "inventory", handler: handleListPendingSubmissions },
   { method: "POST",   pattern: /\/inventory\/usage\/pending\/[^/]+\/approve$/, needsStorage: true, module: "inventory", handler: handleApproveSubmission },
   { method: "POST",   pattern: /\/inventory\/usage\/pending\/[^/]+\/reject$/,  needsStorage: true, module: "inventory", handler: handleRejectSubmission },

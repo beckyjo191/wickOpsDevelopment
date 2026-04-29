@@ -384,6 +384,9 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     if (!itemKey) continue;
 
     if (action === "USAGE_APPROVE") {
+      // Skip events that have been undone — the decrement was reversed, so
+      // counting them would double-spend the analytics totals.
+      if (details.undone) continue;
       const qty = Number(details.quantityUsed ?? 0);
       if (!Number.isFinite(qty) || qty <= 0) continue;
 

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isInventoryProvisioningError,
-  listPendingSubmissions,
   loadInventoryBootstrap,
   submitInventoryUsage,
   type InventoryColumn,
@@ -28,20 +27,6 @@ type UsageGroup = {
 
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
 import { pickLoadingLine } from "../lib/loadingLines";
-
-const formatActivityTime = (isoString: string): string => {
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return "";
-  const diffMs = Date.now() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 7) return `${diffDay}d ago`;
-  return date.toLocaleDateString();
-};
 
 const normalizeLooseKey = (value: string): string =>
   value.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -304,7 +289,6 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup(selectedLocation ?? "")]);
-  const [recentSubmissions, setRecentSubmissions] = useState<import("../lib/inventoryApi").PendingSubmission[]>([]);
   const [formError, setFormError] = useState("");
 
   const refreshInventoryRows = useCallback(
@@ -351,16 +335,6 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
   useEffect(() => {
     void refreshInventoryRows({ initial: true });
   }, [refreshInventoryRows]);
-
-  const refreshSubmissions = useCallback(() => {
-    listPendingSubmissions()
-      .then((subs) => setRecentSubmissions(subs))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    refreshSubmissions();
-  }, [refreshSubmissions]);
 
   useEffect(() => {
     if (loading) return;
@@ -633,8 +607,12 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
       await submitInventoryUsage(normalized);
       setGroups([createUsageGroup()]);
       const itemList = submittedLines.join(", ");
-      setFeedback({ type: "success", message: `Submitted: ${itemList} — pending approval.` });
-      refreshSubmissions();
+      setFeedback({
+        type: "success",
+        message: `Logged: ${itemList} — quantities updated. Undo from the Activity feed if needed.`,
+      });
+      // Re-fetch inventory so the in-form quantities reflect the new totals.
+      void refreshInventoryRows({ silent: true });
     } catch (err: any) {
       setFeedback({ type: "error", message: err?.message ?? "Failed to submit usage" });
     } finally {
@@ -661,10 +639,6 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
     );
   }
 
-  const recentActivity = recentSubmissions
-    .filter((s) => s.status !== "rejected")
-    .slice(0, 5);
-
   return (
     <section className="app-content">
       <div className="app-card usage-card">
@@ -674,8 +648,8 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
             {showLocationPicker && <>Select a <strong>location</strong>, then </>}
             Search for an item, enter the quantity used, and hit <strong>Submit Usage</strong>.
             {" "}Need to log more? Tap <strong>+ Add Item</strong> to add another line.
-            {" "}Use the <strong>note</strong> field to flag anything the inventory manager should know —
-            a count discrepancy, a damaged item, or why something was used differently than expected.
+            {" "}Submitting decrements inventory immediately — if you make a mistake, the
+            event has an <strong>Undo</strong> button in the Activity feed.
           </p>
         </header>
 
@@ -892,27 +866,6 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
             {submitting ? "Submitting..." : "Submit Usage"}
           </button>
         </div>
-
-        {recentActivity.length > 0 && (
-          <div className="usage-activity">
-            <h3 className="usage-activity-title">Recent Usage</h3>
-            <ul className="usage-activity-list">
-              {recentActivity.map((sub) => {
-                let entries: import("../lib/inventoryApi").PendingEntry[] = [];
-                try { entries = JSON.parse(sub.entriesJson); } catch { entries = []; }
-                const label = entries.map((e) => `${e.itemName} -${e.quantityUsed}`).join(", ");
-                const when = formatActivityTime(sub.submittedAt);
-                return (
-                  <li key={sub.id} className="usage-activity-row">
-                    <span className="usage-activity-who">{sub.submittedByName || sub.submittedByEmail}</span>
-                    <span className="usage-activity-items">{label}</span>
-                    <span className="usage-activity-when">{when}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
       </div>
     </section>
   );

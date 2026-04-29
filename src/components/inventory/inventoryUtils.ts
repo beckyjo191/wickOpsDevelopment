@@ -1,4 +1,4 @@
-import type { InventoryColumn, InventoryRow, PendingEntry } from "./inventoryTypes";
+import type { InventoryColumn, InventoryRow } from "./inventoryTypes";
 
 export const normalizeHeaderKey = (value: string): string => value.trim().toLowerCase();
 
@@ -29,27 +29,6 @@ export const buildRowsSignature = (rows: InventoryRow[]): string =>
       ),
     })),
   );
-
-export const formatPendingTime = (isoString: string): string => {
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) return "";
-  const diffMs = Date.now() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-  if (diffMin < 1) return "just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  return `${Math.floor(diffHr / 24)}d ago`;
-};
-
-/** Wraps the repeated `try { JSON.parse(entriesJson) } catch { [] }` pattern */
-export const parseSubmissionEntries = (entriesJson: string): PendingEntry[] => {
-  try {
-    return JSON.parse(entriesJson);
-  } catch {
-    return [];
-  }
-};
 
 /**
  * Logical-item identity across lots. Falls back to the row's own id for rows

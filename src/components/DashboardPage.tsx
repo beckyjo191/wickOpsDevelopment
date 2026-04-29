@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, ClipboardList, Package, ShoppingCart } from "lucide-react";
+import { LoadingState } from "./shared/LoadingState";
 import type { AppModuleKey } from "../lib/moduleRegistry";
 import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
 import { pickLoadingLine } from "../lib/loadingLines";
@@ -102,10 +103,7 @@ export function DashboardPage({
   if (loading) {
     return (
       <section className="app-content">
-        <div className="app-card app-loading-card">
-          <span className="app-spinner" aria-hidden="true" />
-          <span>{loadingMessage}</span>
-        </div>
+        <LoadingState variant="card" message={loadingMessage} />
       </section>
     );
   }

@@ -104,9 +104,17 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
             </p>
             <ul>
               <li>
-                Search for an item, set how many were used, and submit. The
-                matching lots decrement automatically — oldest expiration
-                first.
+                Search for an item, set how many were used, and submit.
+                When the same item has multiple lots, each appears
+                separately in the dropdown with its quantity and expiration
+                date — pick the lot you're drawing from (usually the
+                soonest to expire).
+              </li>
+              <li>
+                Add an optional <strong>note</strong> per line (job, room,
+                reason). When inventory spans multiple locations, use
+                <strong> + Add Location</strong> to log usage from another
+                location in the same submission.
               </li>
               <li>
                 Usage is recorded in Activity, so you can see who used what
@@ -175,9 +183,10 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
               </li>
               <li>
                 Use the row checkboxes for bulk
-                <strong> Move to…</strong>. Blank rows can be discarded; rows
-                with content are <strong>Retired</strong> instead so their
-                history sticks around.
+                <strong> Move to…</strong> or <strong> Delete</strong> (any
+                zero-quantity row). Use <strong>Retire</strong> for expired
+                or lost stock — that path tracks loss reason for analytics and
+                is a different verb from Delete.
               </li>
             </ul>
             <p>

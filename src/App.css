@@ -33,6 +33,62 @@
  * indicator don't clip content.
  * ───────────────────────────────────────────────────────────────────────── */
 
+/* ── Form-field convention ───────────────────────────────────────────────
+ * Standard shape for a labelled input + error message:
+ *
+ *   <label className="field-label" htmlFor="my-field">Display Name</label>
+ *   <input
+ *     id="my-field"
+ *     className={`field${error ? " field--error" : ""}`}
+ *     aria-invalid={!!error || undefined}
+ *     aria-describedby={error ? "my-field-error" : undefined}
+ *     ...
+ *   />
+ *   {error && <p id="my-field-error" className="field-error">{error}</p>}
+ *
+ * - Use sibling `<label>` (not label-wrapped) so click handlers stay on
+ *   the input alone and ARIA wiring is unambiguous.
+ * - `.field` is the base input style. `.field--error` adds the red border.
+ * - `.field-error` is the standardized error message style.
+ *
+ * The codebase still has legacy variants (`.usage-inline-error`,
+ * `.settings-field-error`, `.settings-banner-error`, `.settings-field-row`,
+ * etc.) that predate this convention. New code should use the convention
+ * above; legacy uses get migrated incrementally as files are touched.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Keyboard focus rings ───────────────────────────────────────────────
+ * Single source of truth for keyboard focus indicators across buttons,
+ * links, summaries, and other interactive elements. Mouse/touch focus
+ * (e.g. clicking a button) does NOT show the ring — only keyboard nav
+ * (Tab key, programmatic focus) does, courtesy of `:focus-visible`.
+ *
+ * Inputs are intentionally excluded: they have their own focus-state
+ * treatments (border-color + box-shadow) defined alongside each input
+ * class, which work for both mouse and keyboard focus.
+ *
+ * The outline-offset gives a small breathing room so the ring sits
+ * outside rounded corners cleanly. */
+button:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
+[role="option"]:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Suppress the browser-default focus ring on mouse clicks so we don't
+ * double up with our own indicators on input fields, and clicked
+ * buttons don't keep a stale ring after the click resolves. */
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible),
+summary:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .app-page {
   min-height: 100vh;
   width: 100%;
@@ -875,6 +931,88 @@ details[open] > .settings-section-title .settings-section-chevron {
   border-color: var(--danger) !important;
 }
 
+/* Standard label + error message pair for the .field convention. See the
+ * "Form-field convention" comment near the top of this file. */
+.field-label {
+  display: block;
+  margin: 0 0 0.3rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-soft);
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.field-error {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--danger);
+}
+
+/* ── Status badges ──────────────────────────────────────────────────────
+ * Unified pill component used for order status, reorder status, low-stock
+ * markers, etc. Replaces .order-status-badge, .reorder-item-status, and
+ * friends with a single shape and a small set of semantic colour variants.
+ *
+ *   <span className="badge badge--warning">Low: 2/5</span>
+ *   <span className="badge badge--uppercase badge--primary">ORDERED</span>
+ *
+ * Add `badge--uppercase` for the small-caps "category label" treatment
+ * (used in the order status badges, where we want OPEN / PARTIAL /
+ * COMPLETED / CANCELLED to read as labels rather than inline text). */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+}
+
+.badge--neutral {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.badge--primary {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+  color: var(--primary);
+  border-color: color-mix(in oklab, var(--primary) 25%, transparent);
+}
+
+.badge--success {
+  background: var(--success-surface);
+  color: var(--success);
+  border-color: var(--success-border);
+}
+
+.badge--warning {
+  background: var(--warning-surface);
+  color: var(--warning);
+  border-color: var(--warning-border);
+}
+
+.badge--danger {
+  background: var(--danger-surface);
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.badge--uppercase {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+  font-size: 0.7rem;
+}
+
 .settings-section-copy {
   margin: 0.45rem 0 0.7rem;
   color: var(--text-muted);
@@ -1323,160 +1461,81 @@ details[open] > .settings-section-title .settings-section-chevron {
 .settings-delete-confirm p { display: none; }
 .settings-delete-confirm-actions { display: none; }
 
-/* ── Destructive confirmation sheet (overlay + card) ── */
-.settings-destructive-overlay {
+/* ── Confirm dialog ─────────────────────────────────────────────────────
+ * Used by <ConfirmDialog> in src/components/shared/ConfirmDialog.tsx.
+ * Replaces the previous .settings-destructive-sheet-* block — same visual
+ * treatment (centered modal, fade-in, bordered actions footer), but uses
+ * the standard .button .button-secondary / .button-danger classes for the
+ * action buttons instead of bespoke styling. */
+.confirm-dialog-overlay {
   position: fixed;
   inset: 0;
   z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: settings-overlay-in 150ms ease;
-}
-
-.settings-destructive-backdrop {
-  position: absolute;
-  inset: 0;
+  padding: 1rem;
   background: rgba(0, 0, 0, 0.45);
+  animation: confirm-dialog-overlay-in 150ms ease;
 }
 
-@keyframes settings-overlay-in {
+@keyframes confirm-dialog-overlay-in {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 
-.settings-destructive-sheet {
+.confirm-dialog {
   position: relative;
-  z-index: 1;
-  width: min(380px, calc(100% - 2rem));
+  width: min(420px, 100%);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-raised);
   overflow: hidden;
-  animation: settings-sheet-in 200ms ease;
+  animation: confirm-dialog-in 200ms ease;
 }
 
-@keyframes settings-sheet-in {
-  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+@keyframes confirm-dialog-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 
-.settings-destructive-sheet-body {
+.confirm-dialog-body {
   padding: 1.25rem 1.25rem 1rem;
   text-align: center;
 }
 
-.settings-destructive-sheet-title {
+.confirm-dialog-title {
   margin: 0 0 0.35rem;
   font-size: 1rem;
   font-weight: 700;
   color: var(--text-heading);
 }
 
-.settings-destructive-sheet-msg {
+.confirm-dialog-message {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.875rem;
   color: var(--text-soft);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
-.settings-destructive-sheet-list {
-  margin: 0.75rem 0 0;
-  padding: 0.5rem 0.75rem;
-  list-style: none;
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  text-align: left;
-  font-size: 0.8rem;
-  color: var(--text-soft);
-  max-height: 140px;
-  overflow-y: auto;
-}
-
-.settings-destructive-sheet-list li {
-  padding: 0.2rem 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.settings-destructive-sheet-list li:last-child {
-  border-bottom: none;
-}
-
-.settings-destructive-sheet-label {
+/* Both buttons stretch to equal width so they balance the centered title
+ * and message above. Cancel on the left, confirm on the right — matches
+ * the typical destructive-confirmation reading order. */
+.confirm-dialog-actions {
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-top: 0.9rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-soft);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  text-align: left;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 1rem;
 }
 
-.settings-destructive-sheet-select {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 100%;
-  padding: 0.55rem 2rem 0.55rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background-color: var(--surface-alt);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='none' stroke='%2394A3B8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5L6 7.5L9 4.5'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 0.65rem center;
-  color: var(--text);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  text-transform: none;
-  letter-spacing: normal;
-}
-
-.settings-destructive-sheet-select:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
-}
-
-.settings-destructive-sheet-actions {
-  display: flex;
-  border-top: 1px solid var(--border);
-}
-
-.settings-destructive-sheet-actions button {
+.confirm-dialog-actions .button {
   flex: 1;
-  padding: 0.75rem 0.5rem;
-  border: none;
-  background: transparent;
-  font-size: 0.9rem;
-  font-weight: 600;
-  cursor: pointer;
 }
 
-.settings-destructive-sheet-actions button:first-child {
-  color: var(--text-soft);
-  border-right: 1px solid var(--border);
-}
-
-.settings-destructive-sheet-actions button:first-child:hover {
-  background: var(--surface-hover);
-}
-
-.settings-destructive-sheet-actions button:last-child {
-  color: var(--danger);
-}
-
-.settings-destructive-sheet-actions button:last-child:hover {
-  background: color-mix(in srgb, var(--danger) 8%, transparent);
-}
-
-.settings-destructive-sheet-actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
+@media (max-width: 600px) {
+  .confirm-dialog-actions {
+    flex-direction: column-reverse;
+  }
 }
 
 .inventory-table-wrap {
@@ -4979,12 +5038,6 @@ textarea.inventory-card-input {
   min-width: 0;
 }
 
-/* "Added" badge for extras (non-low items added via the panel) */
-.reorder-item-status.reorder-status-extra {
-  background: color-mix(in oklab, var(--primary) 14%, transparent);
-  color: var(--primary);
-}
-
 /* Subtle left accent on extras — "you added this" marker. Keeps the
  * regular 3-column grid intact; the remove control lives inside the
  * "Added" chip itself (see .reorder-status-extra--removable). */
@@ -4996,18 +5049,13 @@ textarea.inventory-card-input {
   box-shadow: inset 3px 0 0 0 color-mix(in oklab, var(--primary) 55%, transparent);
 }
 
-/* Dismissible "Added × " chip. The whole chip is the click target and
- * removes the extra from the reorder list. */
+/* Dismissible "Added × " chip. Inherits visual styling from .badge.badge--primary;
+ * this rule layers on the interactive button chrome (cursor, hover state, icon
+ * fade) while leaving colour and shape to the unified badge system. */
 .reorder-status-extra--removable {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2rem;
-  border: none;
   cursor: pointer;
   font: inherit;
   font-weight: 600;
-  padding: 0.1rem 0.4rem;
-  line-height: 1.2;
 }
 
 .reorder-status-extra--removable:hover {
@@ -5199,33 +5247,6 @@ textarea.inventory-card-input {
   font-size: 0.9rem;
   color: var(--text);
   font-weight: 500;
-}
-
-.reorder-item-status {
-  font-size: 0.78rem;
-  font-weight: 500;
-  white-space: nowrap;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-}
-
-.reorder-status-expired {
-  background: var(--danger-surface);
-  color: var(--danger);
-  border: 1px solid var(--danger-border);
-}
-
-.reorder-status-lowStock {
-  background: var(--warning-surface);
-  color: var(--warning);
-  border: 1px solid var(--warning-border);
-}
-
-
-.reorder-status-stock {
-  background: var(--surface-alt);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
 }
 
 /* ── Controls row (dropdowns + add-row + search) ────────────────────────── */
@@ -5502,6 +5523,32 @@ textarea.inventory-card-input {
 .inventory-retire-btn:hover {
   background: var(--danger);
   color: #fff;
+}
+
+.inventory-col-delete {
+  width: 36px;
+  min-width: 36px;
+  text-align: center;
+}
+
+.inventory-row-delete-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.inventory-row-delete-btn:hover {
+  background: var(--danger-surface);
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
 
 .inventory-card-actions {
@@ -6818,10 +6865,21 @@ textarea.inventory-card-input {
   border-bottom: 1px solid var(--border);
 }
 
-.orders-loading {
+/* Section-level loading indicator. Used by <LoadingState variant="inline">
+ * (e.g. "fetching more orders" / "loading audit feed" / "loading history").
+ * The inline variant gets its color from the parent text color so it works
+ * against any surface. */
+.loading-inline {
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 0.5rem;
   padding: 2rem;
+  color: var(--text-muted);
+}
+
+.loading-inline-text {
+  font-size: 0.875rem;
 }
 
 /* Top-level Reorder / Pending Receipt / Closed Orders tabs. Reuses the
@@ -6892,6 +6950,27 @@ textarea.inventory-card-input {
   .compose-order-line-qty {
     grid-column: 1 / -1;
     width: auto;
+  }
+  .compose-order-line-qty-input {
+    height: 44px;
+  }
+  .compose-order-line .manual-order-more-toggle {
+    align-self: stretch;
+    width: 100%;
+    min-height: 44px;
+    margin-top: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    border-top: 1px solid var(--border);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    font-size: 0.82rem;
+  }
+  .compose-order-line .usage-autocomplete-option {
+    min-height: 44px;
+    padding: 0.7rem 0.85rem;
+    font-size: 0.95rem;
   }
 }
 
@@ -7144,37 +7223,9 @@ textarea.inventory-card-input {
   max-width: 380px;
 }
 
-/* Status badges */
-.order-status-badge {
-  display: inline-block;
-  font-size: 0.7rem;
-  font-weight: 700;
-  padding: 0.15rem 0.45rem;
-  border-radius: var(--radius-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.order-status-badge--open {
-  background: color-mix(in srgb, var(--primary) 15%, transparent);
-  color: var(--primary);
-}
-
-.order-status-badge--partial {
-  background: color-mix(in srgb, var(--warning) 15%, transparent);
-  color: var(--warning);
-}
-
-.order-status-badge--closed {
-  background: var(--surface-alt);
-  color: var(--text-muted);
-}
-
-.order-status-badge--cancelled {
-  background: var(--danger-surface);
-  color: var(--danger);
-  border: 1px solid var(--danger-border);
-}
+/* Order status badges now use the unified .badge / .badge--uppercase /
+ * .badge--{primary,warning,neutral,danger} system defined near the top of
+ * this file. */
 
 /* Order cards */
 .order-card {
@@ -8332,11 +8383,8 @@ textarea.inventory-card-input {
   font-size: 0.78125rem;
 }
 
-.audit-loading {
-  display: flex;
-  justify-content: center;
-  padding: 1.5rem;
-}
+/* .audit-loading retired in favour of .loading-inline (used by
+ * <LoadingState variant="inline">). */
 
 /* ── Flat activity feed (Option B) ─────────────────────────────────────── */
 /* One row per (day, item). Inventory-table chrome (alt rows, dividers,
@@ -9440,5 +9488,186 @@ textarea.inventory-card-input {
     position: absolute;
     inset: -11px;
     /* No background — purely a hit-area expansion. */
+  }
+}
+
+/* ── Toast notifications ────────────────────────────────────────────────
+ * Used by <ToastProvider> / useToast() in src/components/shared/Toast.tsx.
+ * Replaces ad-hoc alert() calls and the bespoke .usage-banner pattern with
+ * a single transient-feedback affordance.
+ *
+ * Desktop: top-right corner, fixed-width column, slides in from the right.
+ * Mobile: bottom of the viewport, full-width, above the safe-area inset. */
+
+.toast-container {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(380px, calc(100vw - 2rem));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-heading);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  animation: toast-in 180ms ease-out;
+}
+
+.toast--success {
+  border-color: var(--success-border);
+  background: var(--success-surface);
+}
+
+.toast--success .toast-icon {
+  color: var(--success);
+}
+
+.toast--error {
+  border-color: var(--danger-border);
+  background: var(--danger-surface);
+}
+
+.toast--error .toast-icon {
+  color: var(--danger);
+}
+
+.toast--info .toast-icon {
+  color: var(--text-soft);
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  margin-top: 1px;
+}
+
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  word-wrap: break-word;
+}
+
+.toast-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -4px -2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+
+.toast-dismiss:hover {
+  color: var(--text-heading);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (max-width: 600px) {
+  .toast-container {
+    top: auto;
+    right: 0.75rem;
+    bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+    left: 0.75rem;
+    width: auto;
+  }
+
+  /* On mobile the toasts stack from the bottom, so flip the entry
+   * direction to a slight upward slide. */
+  .toast {
+    animation: toast-in-mobile 180ms ease-out;
+  }
+}
+
+@keyframes toast-in-mobile {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Empty state ────────────────────────────────────────────────────────
+ * Used by <EmptyState> in src/components/shared/EmptyState.tsx. Replaces
+ * .orders-empty, .reorder-empty, .audit-empty-state, .closed-orders-empty
+ * with a single consistent layout. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty-state-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-soft);
+  margin-bottom: 0.15rem;
+}
+
+.empty-state-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-heading);
+}
+
+.empty-state-hint {
+  margin: 0;
+  font-size: 0.875rem;
+  max-width: 380px;
+  line-height: 1.45;
+}
+
+.empty-state-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+/* Mobile readability: bump content text (errors, notes, hints, descriptions)
+ * up to ~14px on small screens. Badges, table headers, status pills, and
+ * layout-constrained cells stay at their compact desktop sizes — only text
+ * the user actually reads is touched here. */
+@media (max-width: 600px) {
+  .location-pill-add-error,
+  .usage-inline-error,
+  .order-form-line-error,
+  .inventory-pending-entry-note,
+  .usage-review-entry-notes,
+  .inventory-card-exp,
+  .onboarding-template-desc,
+  .reorder-item-unitcost,
+  .reorder-vendor-unassigned-hint,
+  .checklist-item-detail,
+  .order-receive-packinfo {
+    font-size: 0.875rem;
   }
 }

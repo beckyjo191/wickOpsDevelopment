@@ -16,7 +16,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  Loader2,
   Package,
   RotateCcw,
   Search,
@@ -25,6 +24,8 @@ import {
 } from "lucide-react";
 import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
 import { DaySection } from "../lib/dayGroups";
+import { EmptyState } from "./shared/EmptyState";
+import { LoadingState } from "./shared/LoadingState";
 import { dayGroupLabel } from "../lib/dayGroupLabel";
 import { useMobileDetect } from "./inventory/hooks/useMobileDetect";
 import { AuditMobileFeed } from "./AuditMobileFeed";
@@ -585,8 +586,17 @@ function FlatActivityFeed({
                 >
                   <span className="audit-flat-cell audit-flat-time">{time}</span>
                   <span className="audit-flat-cell audit-flat-content">
-                    <span className="audit-flat-itemname">{row.itemName}</span>
-                    <span className="audit-flat-summary"> — {row.summary}</span>
+                    {row.itemName && row.itemName !== "—" ? (
+                      <>
+                        <span className="audit-flat-itemname">{row.itemName}</span>
+                        <span className="audit-flat-summary"> — {row.summary}</span>
+                      </>
+                    ) : (
+                      // Column-level events (no item attached) skip the
+                      // itemName + leading separator so we don't render
+                      // "— — Column deleted (Notes)".
+                      <span className="audit-flat-summary">{row.summary}</span>
+                    )}
                   </span>
                   <span className="audit-flat-cell audit-flat-user">
                     <User size={14} />
@@ -1520,11 +1530,11 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           {error && <p className="audit-error">{error}</p>}
 
           {!loading && events.length === 0 && (
-            <div className="audit-empty-state">
-              <Clock size={32} />
-              <p>No activity recorded yet.</p>
-              <p className="audit-empty-hint">Changes to inventory, usage approvals, and column edits will appear here.</p>
-            </div>
+            <EmptyState
+              icon={Clock}
+              title="No activity recorded yet"
+              hint="Changes to inventory, usage approvals, and column edits will appear here."
+            />
           )}
 
           {undoError && <p className="audit-error">{undoError}</p>}
@@ -1547,11 +1557,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
             )
           )}
 
-          {loading && (
-            <div className="audit-loading">
-              <Loader2 size={22} className="spin" />
-            </div>
-          )}
+          {loading && <LoadingState />}
 
           {!loading && nextCursor && events.length >= LOAD_MORE_THRESHOLD && (
             <button
@@ -1611,15 +1617,10 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
             </button>
           </div>
 
-          {historyLoading && historyEvents.length === 0 && (
-            <div className="audit-loading"><Loader2 size={22} className="spin" /></div>
-          )}
+          {historyLoading && historyEvents.length === 0 && <LoadingState />}
 
           {!historyLoading && historyEvents.length === 0 && (
-            <div className="audit-empty-state">
-              <Clock size={32} />
-              <p>No history for this item.</p>
-            </div>
+            <EmptyState icon={Clock} title="No history for this item" />
           )}
 
           {historySubTab === "events" && undoError && (
@@ -1668,9 +1669,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
             ))}
           </div>
 
-          {analyticsLoading && (
-            <div className="audit-loading"><Loader2 size={22} className="spin" /></div>
-          )}
+          {analyticsLoading && <LoadingState />}
 
           {!analyticsLoading && analytics && (
             <AnalyticsDashboard analytics={analytics} onViewItemHistory={viewItemHistory} />

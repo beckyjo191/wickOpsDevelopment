@@ -28,6 +28,7 @@ import {
   UNDO_HISTORY_LIMIT,
 } from "../inventoryTypes";
 import { buildRowsSignature, createBlankInventoryRow, normalizeHeaderKey } from "../inventoryUtils";
+import { useToast } from "../../shared/Toast";
 
 interface UseInventoryDataParams {
   canEditInventory: boolean;
@@ -83,6 +84,7 @@ export function useInventoryData({
   toDateInputValue,
   setCurrentPage,
 }: UseInventoryDataParams) {
+  const toast = useToast();
   const canEditTable = canEditInventory && activeTab !== "logUsage";
 
   // ── Core state ──
@@ -636,6 +638,15 @@ export function useInventoryData({
     setPendingDeleteRows(true);
   };
 
+  /** Per-row delete: scope selection to exactly this row, then open the
+   *  confirm. Avoids the toggle-and-bulk-delete pattern which mis-fires when
+   *  the user already had other rows selected. */
+  const onRequestDeleteRow = (rowId: string) => {
+    if (!canEditTable) return;
+    setSelectedRowIds(new Set([rowId]));
+    setPendingDeleteRows(true);
+  };
+
   const onConfirmDeleteSelectedRows = () => {
     setPendingDeleteRows(false);
     if (!canEditTable || selectedRowIds.size === 0) return;
@@ -886,10 +897,10 @@ export function useInventoryData({
       window.setTimeout(() => setShowSaved(false), 2000);
     } catch (err: any) {
       if (isDeleteBlockedError(err)) {
-        // Defensive: the Discard affordance is gated client-side to blank rows
-        // only, so the server's protected-history rejection should be
-        // unreachable now. If it ever fires (stricter server rule, race), surface
-        // a plain error and reload so the discarded rows reappear in the grid.
+        // The server rejects deletes for any row that still has stock on hand.
+        // Client gates with isDeletableRow, but a race between a fresh restock
+        // and a stale view can still trigger this. Restore the would-be-deleted
+        // rows from the latest bootstrap so the user sees current state.
         const blockedIds = new Set(err.protectedRows.map((r) => r.id));
         setDeletedRowIds((prev) => {
           const next = new Set(prev);
@@ -902,12 +913,12 @@ export function useInventoryData({
           applyBootstrap(bootstrap);
         } catch { /* non-critical: rows reappear on next load */ }
         if (!silent) {
-          alert(
-            "Some rows could not be discarded — they have operational history. Use Retire instead.",
+          toast.error(
+            "Some items still have stock — log usage or retire first, then delete.",
           );
         }
       } else if (!silent) {
-        alert(err?.message ?? "Failed to save inventory");
+        toast.error(err?.message ?? "Failed to save inventory");
       }
     } finally {
       savingRef.current = false;
@@ -946,7 +957,7 @@ export function useInventoryData({
         selectedHeaders: [...headers],
       });
     } catch (err: any) {
-      alert(err?.message ?? "Failed to import file");
+      toast.error(err?.message ?? "Failed to import file");
     }
   };
 
@@ -979,12 +990,12 @@ export function useInventoryData({
     if (!pasteImportDialog) return;
     const rawText = pasteImportDialog.rawText.trim();
     if (!rawText) {
-      alert("Paste your CSV or tab-delimited data first.");
+      toast.info("Paste your CSV or tab-delimited data first.");
       return;
     }
     const headers = extractCsvHeaders(rawText);
     if (headers.length === 0) {
-      alert("Could not detect headers from pasted data.");
+      toast.error("Could not detect headers from pasted data.");
       return;
     }
     setCsvImportDialog({
@@ -999,7 +1010,7 @@ export function useInventoryData({
     if (!csvImportDialog) return;
     const selectedHeaders = csvImportDialog.selectedHeaders;
     if (selectedHeaders.length === 0) {
-      alert("Select at least one column to import.");
+      toast.info("Select at least one column to import.");
       return;
     }
 
@@ -1026,9 +1037,9 @@ export function useInventoryData({
       }
       applyBootstrap(bootstrap);
       setCsvImportDialog(null);
-      alert("Import complete.");
+      toast.success("Import complete.");
     } catch (err: any) {
-      alert(err?.message ?? "Import failed. Please verify your file headers and row values.");
+      toast.error(err?.message ?? "Import failed. Please verify your file headers and row values.");
     } finally {
       setImportingCsv(false);
     }
@@ -1434,7 +1445,7 @@ export function useInventoryData({
       setShowSaved(true);
       window.setTimeout(() => setShowSaved(false), 2000);
     } catch (err: any) {
-      alert(err?.message ?? "Failed to retire items");
+      toast.error(err?.message ?? "Failed to retire items");
     } finally {
       savingRef.current = false;
       setSaving(false);
@@ -1535,6 +1546,7 @@ export function useInventoryData({
     onCopySelectedRow,
     onPasteToSelectedRow,
     onRequestDeleteSelectedRows,
+    onRequestDeleteRow,
     onConfirmDeleteSelectedRows,
     onMoveSelectedRows,
     onRetireRows,

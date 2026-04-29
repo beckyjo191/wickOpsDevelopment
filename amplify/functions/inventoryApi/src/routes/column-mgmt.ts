@@ -5,7 +5,6 @@ import {
   DeleteCommand,
   GetCommand,
   PutCommand,
-  QueryCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type {
@@ -17,7 +16,7 @@ import { ddb } from "../clients";
 import { json } from "../http";
 import { CORE_KEYS, ENABLE_PER_ORG_TABLES } from "../config";
 import { normalizeOrgId, toKey } from "../normalize";
-import { buildAuditEvent, writeAuditEvents } from "../audit";
+import { buildAuditEvent, findAuditEventByEventId, writeAuditEvents } from "../audit";
 import { ensureColumns } from "../columns";
 import { deleteStorageForOrganization } from "../storage";
 
@@ -135,16 +134,11 @@ export const handleRestoreColumn = async (ctx: RouteContext) => {
   const eventId = String(body?.eventId ?? "").trim();
   if (!eventId) return json(400, { error: "eventId is required." });
 
-  const queryRes = await ddb.send(
-    new QueryCommand({
-      TableName: storage.auditTable,
-      KeyConditionExpression: "pk = :pk",
-      FilterExpression: "eventId = :eid",
-      ExpressionAttributeValues: { ":pk": `ORG#${access.organizationId}`, ":eid": eventId },
-      Limit: 1,
-    }),
+  const original = await findAuditEventByEventId(
+    storage.auditTable,
+    `ORG#${access.organizationId}`,
+    eventId,
   );
-  const original = (queryRes.Items ?? [])[0] as Record<string, unknown> | undefined;
   if (!original) return json(404, { error: "Column delete event not found." });
   if (original.action !== "COLUMN_DELETE") {
     return json(400, { error: "Only column-delete events can be restored." });

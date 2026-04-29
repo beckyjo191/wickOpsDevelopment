@@ -57,6 +57,8 @@ import {
   type PendingInvite,
 } from "../lib/invitesApi";
 import { AlertTriangle, ChevronRight, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { useToast } from "./shared/Toast";
+import { ConfirmDialog } from "./shared/ConfirmDialog";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
 type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "vendors" | "inventoryColumns" | "importData" | "exportData" | "helpSupport";
@@ -122,6 +124,7 @@ export function SettingsPage({
   userName,
   onLogout,
 }: SettingsPageProps) {
+  const toast = useToast();
   const normalizeEmail = (value: string): string => value.trim().toLowerCase();
   const nonEditableKeys = new Set(["itemName", "quantity", "minQuantity", "expirationDate"]);
   const isLockedColumn = (column: InventoryColumn): boolean =>
@@ -541,7 +544,7 @@ export function SettingsPage({
       setColumns((prev) => [...prev, created].sort((a, b) => a.sortOrder - b.sortOrder));
       setNewColumnName("");
     } catch (err: any) {
-      alert(err?.message ?? "Failed to add column");
+      toast.error(err?.message ?? "Failed to add column");
     } finally {
       setSavingColumn(false);
     }
@@ -555,7 +558,7 @@ export function SettingsPage({
       setColumns((prev) => prev.filter((item) => item.id !== columnId));
       setPendingDeleteColumnId(null);
     } catch (err: any) {
-      alert(err?.message ?? "Failed to remove column");
+      toast.error(err?.message ?? "Failed to remove column");
     } finally {
       setSavingColumn(false);
     }
@@ -579,7 +582,7 @@ export function SettingsPage({
       await saveUserColumnVisibility(newOverrides);
     } catch (err: any) {
       setUserColumnOverrides(userColumnOverrides);
-      alert(err?.message ?? "Failed to update column visibility");
+      toast.error(err?.message ?? "Failed to update column visibility");
     } finally {
       setSavingColumn(false);
     }
@@ -611,7 +614,7 @@ export function SettingsPage({
       );
       onCancelEditColumn();
     } catch (err: any) {
-      alert(err?.message ?? "Failed to update column label");
+      toast.error(err?.message ?? "Failed to update column label");
     } finally {
       setSavingColumn(false);
     }
@@ -628,7 +631,7 @@ export function SettingsPage({
         ),
       );
     } catch (err: any) {
-      alert(err?.message ?? "Failed to update column type");
+      toast.error(err?.message ?? "Failed to update column type");
     } finally {
       setSavingColumn(false);
     }
@@ -680,7 +683,7 @@ export function SettingsPage({
       next.delete(moduleKey);
     }
     if (next.size === 0) {
-      alert("Users must have access to at least one module. Use \"Revoke Access\" to remove a user entirely.");
+      toast.error("Users must have access to at least one module. Use \"Revoke Access\" to remove a user entirely.");
       return;
     }
     const nextAllowedModules = Array.from(next) as AppModuleKey[];
@@ -703,7 +706,7 @@ export function SettingsPage({
           item.userId === targetUserId ? { ...item, allowedModules: user.allowedModules } : item,
         ),
       );
-      alert(err?.message ?? "Failed to update module access");
+      toast.error(err?.message ?? "Failed to update module access");
     } finally {
       setSavingModuleAccessUserId(null);
     }
@@ -767,7 +770,7 @@ export function SettingsPage({
   const onSaveDisplayName = async () => {
     const nextDisplayName = displayNameInput.trim();
     if (!nextDisplayName) {
-      alert("Name is required.");
+      toast.error("Name is required.");
       return;
     }
     if (nextDisplayName === currentDisplayName.trim()) return;
@@ -777,7 +780,7 @@ export function SettingsPage({
       onCurrentUserDisplayNameChange(nextDisplayName);
       setEditingDisplayName(false);
     } catch (err: any) {
-      alert(err?.message ?? "Failed to update your name");
+      toast.error(err?.message ?? "Failed to update your name");
     } finally {
       setSavingDisplayName(false);
     }
@@ -807,7 +810,7 @@ export function SettingsPage({
   const onSendEmailVerification = async () => {
     const nextEmail = normalizeEmail(emailInput);
     if (!isValidEmail(nextEmail)) {
-      alert("Please enter a valid email address.");
+      toast.error("Please enter a valid email address.");
       return;
     }
     if (nextEmail === normalizeEmail(currentUserEmail)) {
@@ -833,7 +836,7 @@ export function SettingsPage({
       }
       setPendingEmailVerification(true);
     } catch (err: any) {
-      alert(err?.message ?? "Failed to start email update.");
+      toast.error(err?.message ?? "Failed to start email update.");
     } finally {
       setSavingEmail(false);
     }
@@ -842,7 +845,7 @@ export function SettingsPage({
   const onConfirmEmailVerification = async () => {
     const code = emailVerificationCode.trim();
     if (!code) {
-      alert("Enter the verification code.");
+      toast.error("Enter the verification code.");
       return;
     }
     setVerifyingEmail(true);
@@ -858,7 +861,7 @@ export function SettingsPage({
       setPendingEmailVerification(false);
       setEmailVerificationCode("");
     } catch (err: any) {
-      alert(err?.message ?? "Failed to verify email code.");
+      toast.error(err?.message ?? "Failed to verify email code.");
     } finally {
       setVerifyingEmail(false);
     }
@@ -909,7 +912,7 @@ export function SettingsPage({
         window.location.href = url;
       })
       .catch((err: any) => {
-        alert(err?.message ?? "Could not open billing portal. Please try again.");
+        toast.error(err?.message ?? "Could not open billing portal. Please try again.");
         setPortalLoading(false);
       });
   };
@@ -1372,37 +1375,21 @@ export function SettingsPage({
             {pendingCancelInviteEmail ? (() => {
               const email = pendingCancelInviteEmail;
               return (
-                <div className="settings-destructive-overlay">
-                  <div
-                    className="settings-destructive-backdrop"
-                    onClick={() => setPendingCancelInviteEmail(null)}
-                  />
-                  <div
-                    className="settings-destructive-sheet"
-                    role="dialog"
-                    aria-label="Confirm cancel invite"
-                  >
-                    <div className="settings-destructive-sheet-body">
-                      <p className="settings-destructive-sheet-title">Cancel Invite</p>
-                      <p className="settings-destructive-sheet-msg">
-                        Cancel the invite for {email}? Their seat will be freed and the email
-                        link will stop working.
-                      </p>
-                    </div>
-                    <div className="settings-destructive-sheet-actions">
-                      <button type="button" onClick={() => setPendingCancelInviteEmail(null)}>
-                        Keep Invite
-                      </button>
-                      <button
-                        type="button"
-                        disabled={cancellingInviteEmail === email}
-                        onClick={() => { void onCancelInvite(email); }}
-                      >
-                        {cancellingInviteEmail === email ? "Cancelling…" : "Cancel Invite"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <ConfirmDialog
+                  title="Cancel Invite"
+                  message={
+                    <>
+                      Cancel the invite for {email}? Their seat will be freed and the email
+                      link will stop working.
+                    </>
+                  }
+                  confirmLabel="Cancel Invite"
+                  cancelLabel="Keep Invite"
+                  loading={cancellingInviteEmail === email}
+                  loadingLabel="Cancelling…"
+                  onConfirm={() => { void onCancelInvite(email); }}
+                  onCancel={() => setPendingCancelInviteEmail(null)}
+                />
               );
             })() : null}
           </details>
@@ -1518,29 +1505,19 @@ export function SettingsPage({
                 const locName = pendingDeleteLocation;
                 const deleteLocItemCount = getItemCountForLocation(locName);
                 return (
-                  <div className="settings-destructive-overlay">
-                    <div className="settings-destructive-backdrop" onClick={() => setPendingDeleteLocation(null)} />
-                    <div className="settings-destructive-sheet" role="dialog" aria-label="Confirm remove">
-                      <div className="settings-destructive-sheet-body">
-                        <p className="settings-destructive-sheet-title">Remove Location</p>
-                        <p className="settings-destructive-sheet-msg">
-                          {deleteLocItemCount > 0
-                            ? `"${locName}" has ${deleteLocItemCount} item${deleteLocItemCount !== 1 ? "s" : ""} that will become unassigned.`
-                            : `Remove "${locName}"?`}
-                        </p>
-                      </div>
-                      <div className="settings-destructive-sheet-actions">
-                        <button type="button" onClick={() => setPendingDeleteLocation(null)}>Cancel</button>
-                        <button
-                          type="button"
-                          disabled={savingLocation}
-                          onClick={() => { void onRemoveLocation(locName); }}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  <ConfirmDialog
+                    title="Remove Location"
+                    message={
+                      deleteLocItemCount > 0
+                        ? `"${locName}" has ${deleteLocItemCount} item${deleteLocItemCount !== 1 ? "s" : ""} that will become unassigned.`
+                        : `Remove "${locName}"?`
+                    }
+                    confirmLabel="Remove"
+                    loading={savingLocation}
+                    loadingLabel="Removing…"
+                    onConfirm={() => { void onRemoveLocation(locName); }}
+                    onCancel={() => setPendingDeleteLocation(null)}
+                  />
                 );
               })() : null}
             </>
@@ -1661,29 +1638,19 @@ export function SettingsPage({
                 const vendorName = pendingDeleteVendor;
                 const deleteVendorItemCount = getItemCountForVendor(vendorName);
                 return (
-                  <div className="settings-destructive-overlay">
-                    <div className="settings-destructive-backdrop" onClick={() => setPendingDeleteVendor(null)} />
-                    <div className="settings-destructive-sheet" role="dialog" aria-label="Confirm remove">
-                      <div className="settings-destructive-sheet-body">
-                        <p className="settings-destructive-sheet-title">Remove Vendor</p>
-                        <p className="settings-destructive-sheet-msg">
-                          {deleteVendorItemCount > 0
-                            ? `"${vendorName}" has ${deleteVendorItemCount} item${deleteVendorItemCount !== 1 ? "s" : ""} that will become unassigned.`
-                            : `Remove "${vendorName}"?`}
-                        </p>
-                      </div>
-                      <div className="settings-destructive-sheet-actions">
-                        <button type="button" onClick={() => setPendingDeleteVendor(null)}>Cancel</button>
-                        <button
-                          type="button"
-                          disabled={savingVendor}
-                          onClick={() => { void onRemoveVendor(vendorName); }}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  <ConfirmDialog
+                    title="Remove Vendor"
+                    message={
+                      deleteVendorItemCount > 0
+                        ? `"${vendorName}" has ${deleteVendorItemCount} item${deleteVendorItemCount !== 1 ? "s" : ""} that will become unassigned.`
+                        : `Remove "${vendorName}"?`
+                    }
+                    confirmLabel="Remove"
+                    loading={savingVendor}
+                    loadingLabel="Removing…"
+                    onConfirm={() => { void onRemoveVendor(vendorName); }}
+                    onCancel={() => setPendingDeleteVendor(null)}
+                  />
                 );
               })() : null}
             </>
@@ -1788,27 +1755,19 @@ export function SettingsPage({
                 const colId = pendingDeleteColumnId;
                 const colToDelete = columns.find((c) => c.id === colId);
                 return (
-                  <div className="settings-destructive-overlay">
-                    <div className="settings-destructive-backdrop" onClick={() => setPendingDeleteColumnId(null)} />
-                    <div className="settings-destructive-sheet" role="dialog" aria-label="Confirm delete">
-                      <div className="settings-destructive-sheet-body">
-                        <p className="settings-destructive-sheet-title">Delete Column</p>
-                        <p className="settings-destructive-sheet-msg">
-                          {colToDelete ? `Delete "${colToDelete.label}"? This cannot be undone.` : "Delete this column? This cannot be undone."}
-                        </p>
-                      </div>
-                      <div className="settings-destructive-sheet-actions">
-                        <button type="button" onClick={() => setPendingDeleteColumnId(null)}>Cancel</button>
-                        <button
-                          type="button"
-                          disabled={savingColumn}
-                          onClick={() => { void onDeleteColumn(colId); }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                  <ConfirmDialog
+                    title="Delete Column"
+                    message={
+                      colToDelete
+                        ? `Delete "${colToDelete.label}"? This cannot be undone.`
+                        : "Delete this column? This cannot be undone."
+                    }
+                    confirmLabel="Delete"
+                    loading={savingColumn}
+                    loadingLabel="Deleting…"
+                    onConfirm={() => { void onDeleteColumn(colId); }}
+                    onCancel={() => setPendingDeleteColumnId(null)}
+                  />
                 );
               })() : null}
             </>

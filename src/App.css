@@ -8368,6 +8368,131 @@ textarea.inventory-card-input {
   }
 }
 
+/* Mobile (≤780px) card view for the activity feed. Each event renders as a
+ * stacked card so timestamp, item link, action description, and undo each
+ * get their own row instead of competing for one cramped grid line. The
+ * accent rail (--row-accent) carries the action-type color, matching the
+ * desktop FlatActivityFeed for at-a-glance type recognition. */
+.audit-mobile-feed {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--table-grid);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.audit-mobile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--surface);
+  border-left: 3px solid var(--row-accent, var(--text-muted));
+  border-bottom: 1px solid var(--table-grid);
+}
+
+.audit-mobile-card:last-child {
+  border-bottom: none;
+}
+
+.audit-mobile-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.audit-mobile-card-time,
+.audit-mobile-card-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audit-mobile-card-user {
+  min-width: 0;
+}
+
+.audit-mobile-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.25rem 0;
+  background: transparent;
+  border: none;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.audit-mobile-card-body:disabled {
+  cursor: default;
+}
+
+.audit-mobile-card-itemname {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--primary);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.audit-mobile-card-body:disabled .audit-mobile-card-itemname {
+  color: var(--text-heading);
+}
+
+.audit-mobile-card-summary {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.audit-mobile-card-footer {
+  display: flex;
+}
+
+.audit-mobile-card-undo {
+  flex: 1;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.audit-mobile-card-undo:hover:not(:disabled) {
+  background: var(--surface-alt);
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.audit-mobile-card-undo:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .audit-load-more {
   align-self: center;
 }

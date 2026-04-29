@@ -6,4 +6,5 @@ export const postConfirmationLambda = defineFunction({
   name: "postConfirmationLambda",
   entry: "./src/handler.ts",
   resourceGroupName: "data",
+  runtime: 22,
 });

@@ -392,7 +392,7 @@ postConfirmLambda.addToRolePolicy(
 // UpdateUserPool resets any field not explicitly included, so we must
 // pass through all critical settings from DescribeUserPool.
 const triggerSetterFn = new LambdaFunction(wiringStack, "TriggerSetterFn", {
-  runtime: Runtime.NODEJS_20_X,
+  runtime: Runtime.NODEJS_22_X,
   handler: "index.handler",
   code: Code.fromInline(`
 const { CognitoIdentityProviderClient, DescribeUserPoolCommand, UpdateUserPoolCommand } = require("@aws-sdk/client-cognito-identity-provider");

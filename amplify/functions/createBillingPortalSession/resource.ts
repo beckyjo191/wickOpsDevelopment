@@ -8,4 +8,6 @@ export const createBillingPortalSession = defineFunction({
     STRIPE_SECRET_KEY: secret("STRIPE_SECRET_KEY"),
     FRONTEND_URL: secret("FRONTEND_URL"),
   },
+  runtime: 22,
+  timeoutSeconds: 30,
 });

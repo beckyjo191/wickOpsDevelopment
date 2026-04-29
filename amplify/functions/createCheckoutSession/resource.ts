@@ -17,4 +17,6 @@ export const createCheckoutSession = defineFunction({
   layers: {
     "stripe": "stripe-layer:1"
   },
+  runtime: 22,
+  timeoutSeconds: 30,
 });

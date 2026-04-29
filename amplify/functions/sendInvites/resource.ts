@@ -4,4 +4,5 @@ export const sendInvites = defineFunction({
   name: "sendInvites",
   entry: "./src/handler.ts",
   resourceGroupName: "data",
+  runtime: 22,
 });

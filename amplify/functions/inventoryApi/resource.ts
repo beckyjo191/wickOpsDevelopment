@@ -5,4 +5,5 @@ export const inventoryApi = defineFunction({
   entry: "./src/handler.ts",
   resourceGroupName: "data",
   timeoutSeconds: 30,
+  runtime: 22,
 });

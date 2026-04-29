@@ -111,7 +111,8 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
               </li>
               <li>
                 Usage is recorded in Activity, so you can see who used what
-                and when.
+                and when. Each row has an <strong>Undo</strong> button if
+                you logged something by mistake.
               </li>
               <li>
                 For brand-new stock arriving, use

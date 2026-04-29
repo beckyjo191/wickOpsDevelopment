@@ -9,41 +9,6 @@ type HelpSection = {
 
 function getHelpForTab(activeTab: AuditTab): HelpSection {
   switch (activeTab) {
-    case "pending":
-      return {
-        title: "Pending",
-        body: (
-          <>
-            <p>
-              Usage submissions waiting for a reviewer to approve before
-              quantities are deducted from inventory. Only users with
-              review permission see this tab.
-            </p>
-            <ul>
-              <li>
-                <strong>Approve</strong> — applies the submission and
-                decrements the matching lots. A
-                <strong> USAGE_APPROVE</strong> event is written to the
-                Activity feed for audit.
-              </li>
-              <li>
-                <strong>Edit qty</strong> — adjust per-line quantities
-                before approving (e.g. someone logged 3 but you can see
-                only 2 were really used).
-              </li>
-              <li>
-                <strong>Delete</strong> — reject the submission. Nothing
-                is decremented; the submission is discarded.
-              </li>
-              <li>
-                Submissions stay here until acted on, so check back if
-                someone else won't.
-              </li>
-            </ul>
-          </>
-        ),
-      };
-
     case "analytics":
       return {
         title: "Analytics",
@@ -70,8 +35,8 @@ function getHelpForTab(activeTab: AuditTab): HelpSection {
               </li>
             </ul>
             <p>
-              Numbers come from approved usage and closed orders — items
-              still in Pending don't count yet.
+              Numbers come from logged usage and closed orders. Undone
+              usage events are excluded automatically.
             </p>
           </>
         ),
@@ -120,7 +85,7 @@ function getHelpForTab(activeTab: AuditTab): HelpSection {
             <ul>
               <li>Inventory edits (qty, min, expiration, vendor, etc.)</li>
               <li>Rows added, deleted, moved between locations</li>
-              <li>Usage submissions and approvals</li>
+              <li>Usage logged (and undone, if reversed)</li>
               <li>Order events (placed, received, cancelled)</li>
               <li>Column adds / removes / renames</li>
             </ul>
@@ -133,6 +98,14 @@ function getHelpForTab(activeTab: AuditTab): HelpSection {
               event type at a glance.
             </p>
 
+            <h4>Undo</h4>
+            <p>
+              Logged-usage rows have an <strong>Undo</strong> button on
+              the right. Clicking it restores the decremented quantity
+              and writes a <strong>USAGE_UNDO</strong> event. Already-
+              undone events hide the button.
+            </p>
+
             <h4>Search</h4>
             <p>
               The search box matches against item name and user name
@@ -141,12 +114,10 @@ function getHelpForTab(activeTab: AuditTab): HelpSection {
               picks up the new events too.
             </p>
 
-            <h4>Other tabs</h4>
+            <h4>Analytics tab</h4>
             <p>
-              <strong>Pending</strong> — usage submissions awaiting
-              approval (reviewers only).
-              <strong> Analytics</strong> — usage spend, loss reasons,
-              and top items/vendors. Open this help while on either tab
+              <strong>Analytics</strong> — usage spend, loss reasons,
+              and top items/vendors. Open this help while on that tab
               for details.
             </p>
           </>

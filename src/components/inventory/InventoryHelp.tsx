@@ -176,7 +176,9 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
               </li>
               <li>
                 Use the row checkboxes for bulk
-                <strong> Move to…</strong> or <strong>Delete</strong>.
+                <strong> Move to…</strong>. Blank rows can be discarded; rows
+                with content are <strong>Retired</strong> instead so their
+                history sticks around.
               </li>
             </ul>
             <p>

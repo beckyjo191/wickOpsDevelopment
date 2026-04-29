@@ -101,6 +101,18 @@ export const handler = async (event: any) => {
       ? subscription.customer
       : subscription.customer?.id ?? "";
 
+    // Stripe API: current_period_end lives on the Subscription object up to API
+    // version 2024-10, then moved to subscription.items.data[i].current_period_end
+    // in 2025-04+. Read defensively from both locations.
+    const subAny = subscription as any;
+    const cancelAtPeriodEnd = !!subAny.cancel_at_period_end;
+    const subscriptionPeriodEnd: number | undefined =
+      typeof subAny.current_period_end === "number"
+        ? subAny.current_period_end
+        : typeof subAny.items?.data?.[0]?.current_period_end === "number"
+          ? subAny.items.data[0].current_period_end
+          : undefined;
+
     if (!resolvedPlan) {
       // Price IDs not mapped — likely missing env vars. Activate the org but do NOT
       // overwrite plan or seatLimit with wrong defaults. Log for investigation.
@@ -115,11 +127,13 @@ export const handler = async (event: any) => {
           TableName: ORG_TABLE,
           Key: { id: organizationId },
           UpdateExpression:
-            "SET paymentStatus = :active, stripeSubscriptionId = :sid, stripeCustomerId = :cid",
+            "SET paymentStatus = :active, stripeSubscriptionId = :sid, stripeCustomerId = :cid, cancelAtPeriodEnd = :cape, currentPeriodEnd = :cpe",
           ExpressionAttributeValues: {
             ":active": "Active",
             ":sid": subscription.id,
             ":cid": stripeCustomerId,
+            ":cape": cancelAtPeriodEnd,
+            ":cpe": subscriptionPeriodEnd ?? 0,
           },
         })
       );
@@ -136,7 +150,9 @@ export const handler = async (event: any) => {
               #plan = :plan,
               seatLimit = :seats,
               stripeSubscriptionId = :sid,
-              stripeCustomerId = :cid
+              stripeCustomerId = :cid,
+              cancelAtPeriodEnd = :cape,
+              currentPeriodEnd = :cpe
         `,
         ExpressionAttributeNames: {
           "#plan": "plan",
@@ -147,6 +163,8 @@ export const handler = async (event: any) => {
           ":seats": seatLimit,
           ":sid": subscription.id,
           ":cid": stripeCustomerId,
+          ":cape": cancelAtPeriodEnd,
+          ":cpe": subscriptionPeriodEnd ?? 0,
         },
       })
     );
@@ -293,7 +311,8 @@ export const handler = async (event: any) => {
         new UpdateCommand({
           TableName: ORG_TABLE,
           Key: { id: organizationId },
-          UpdateExpression: "SET paymentStatus = :canceled",
+          UpdateExpression:
+            "SET paymentStatus = :canceled REMOVE cancelAtPeriodEnd, currentPeriodEnd",
           ExpressionAttributeValues: { ":canceled": "Canceled" },
         })
       );

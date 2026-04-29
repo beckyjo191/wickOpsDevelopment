@@ -70,6 +70,9 @@ export type AuditAction =
   | "ITEM_DELETE"
   /** Quantity decrement with a loss reason (expired/damaged/lost/recalled). */
   | "ITEM_RETIRE"
+  /** Reverses a previous ITEM_RETIRE: clears the retire markers and marks the
+   *  original event as undone. Soft-delete becomes "still in service" again. */
+  | "ITEM_UNRETIRE"
   | "USAGE_SUBMIT"
   | "USAGE_APPROVE"
   | "USAGE_REJECT"
@@ -78,6 +81,10 @@ export type AuditAction =
   | "USAGE_UNDO"
   | "COLUMN_CREATE"
   | "COLUMN_DELETE"
+  /** Reverses a previous COLUMN_DELETE: recreates the column from the snapshot
+   *  stamped on the original event. Existing item values for that column are
+   *  preserved (delete only removes the column metadata, not per-row values). */
+  | "COLUMN_RESTORE"
   | "COLUMN_UPDATE"
   | "CSV_IMPORT"
   | "TEMPLATE_APPLY"

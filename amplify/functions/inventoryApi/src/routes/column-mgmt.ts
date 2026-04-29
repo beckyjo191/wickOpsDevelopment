@@ -5,6 +5,7 @@ import {
   DeleteCommand,
   GetCommand,
   PutCommand,
+  QueryCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import type {
@@ -102,10 +103,136 @@ export const handleDeleteColumn = async (ctx: RouteContext) => {
       columnId,
       columnKey: column.key,
       columnLabel: column.label,
+      // Full row snapshot so the column can be recreated faithfully if the
+      // user undoes the delete from the activity feed.
+      columnSnapshot: column,
     }),
   ]);
 
   return json(200, { ok: true });
+};
+
+/**
+ * Reverse a previous COLUMN_DELETE: recreates the column row from the snapshot
+ * stamped on the original event. Per-row values for that column were never
+ * scrubbed from items' valuesJson, so the data reappears automatically once
+ * the column metadata is back.
+ *
+ * Body: { eventId } — column events live under ORG#<orgId> so we don't need
+ * an extra partition hint. We rely on the audit row carrying the snapshot.
+ *
+ * Edge cases:
+ *  - If a same-key column has been recreated since the delete, we 409.
+ *  - Old delete events without `columnSnapshot` are recoverable using the
+ *    stamped key/label/columnId (type/sortOrder fall back to defaults).
+ */
+export const handleRestoreColumn = async (ctx: RouteContext) => {
+  const { access, storage, body } = ctx;
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can manage inventory columns" });
+  }
+
+  const eventId = String(body?.eventId ?? "").trim();
+  if (!eventId) return json(400, { error: "eventId is required." });
+
+  const queryRes = await ddb.send(
+    new QueryCommand({
+      TableName: storage.auditTable,
+      KeyConditionExpression: "pk = :pk",
+      FilterExpression: "eventId = :eid",
+      ExpressionAttributeValues: { ":pk": `ORG#${access.organizationId}`, ":eid": eventId },
+      Limit: 1,
+    }),
+  );
+  const original = (queryRes.Items ?? [])[0] as Record<string, unknown> | undefined;
+  if (!original) return json(404, { error: "Column delete event not found." });
+  if (original.action !== "COLUMN_DELETE") {
+    return json(400, { error: "Only column-delete events can be restored." });
+  }
+  if (original.undoneAt) {
+    return json(409, { error: "This column has already been restored." });
+  }
+
+  let details: Record<string, unknown> = {};
+  try { details = JSON.parse(String(original.detailsJson ?? "{}")); } catch { details = {}; }
+  const snapshot = (details.columnSnapshot && typeof details.columnSnapshot === "object")
+    ? (details.columnSnapshot as Partial<InventoryColumn>)
+    : null;
+  const columnId = String(snapshot?.id ?? details.columnId ?? "").trim();
+  const key = String(snapshot?.key ?? details.columnKey ?? "").trim();
+  const label = String(snapshot?.label ?? details.columnLabel ?? "").trim();
+  if (!columnId || !key || !label) {
+    return json(400, { error: "Original event is missing column metadata; cannot restore." });
+  }
+
+  // Reject restore if a column with the same key was recreated after the
+  // original delete. Restoring would shadow the new column or steal its values.
+  const existingColumns = await ensureColumns(access.organizationId);
+  if (existingColumns.some((c) => c.key === key)) {
+    return json(409, {
+      error: `A column with the key "${key}" already exists. Rename or delete it before restoring this one.`,
+    });
+  }
+
+  const restored: InventoryColumn = {
+    id: columnId,
+    organizationId: access.organizationId,
+    module: "inventory",
+    key,
+    label,
+    type: (snapshot?.type as InventoryColumnType | undefined) ?? "text",
+    isCore: snapshot?.isCore ?? false,
+    isRequired: snapshot?.isRequired ?? false,
+    isVisible: snapshot?.isVisible ?? true,
+    isEditable: snapshot?.isEditable ?? true,
+    sortOrder: typeof snapshot?.sortOrder === "number"
+      ? snapshot.sortOrder
+      : (existingColumns[existingColumns.length - 1]?.sortOrder ?? 0) + 10,
+    createdAt: typeof snapshot?.createdAt === "string" ? snapshot.createdAt : new Date().toISOString(),
+  };
+
+  await ddb.send(new PutCommand({ TableName: storage.columnTable, Item: restored }));
+
+  // Mark the original delete event as undone so the Undo button hides.
+  const undoneAt = new Date().toISOString();
+  const undoEventId = randomUUID();
+  const updatedDetails = {
+    ...details,
+    undone: true,
+    undoneAt,
+    undoneByUserId: access.userId,
+    undoneByEventId: undoEventId,
+  };
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: storage.auditTable,
+        Key: { pk: original.pk as string, sk: original.sk as string },
+        UpdateExpression: "SET detailsJson = :d, undoneAt = :ua",
+        ConditionExpression: "attribute_not_exists(undoneAt)",
+        ExpressionAttributeValues: {
+          ":d": JSON.stringify(updatedDetails),
+          ":ua": undoneAt,
+        },
+      }),
+    );
+  } catch (err: any) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return json(409, { error: "This column has already been restored." });
+    }
+    throw err;
+  }
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_RESTORE", null, null, {
+      undoneEventId: eventId,
+      columnId,
+      columnKey: key,
+      columnLabel: label,
+    }),
+  ]);
+
+  return json(200, { column: restored });
 };
 
 export const handleUpdateColumnVisibility = async (ctx: RouteContext) => {

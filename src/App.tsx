@@ -147,6 +147,8 @@ export default function App() {
     orgAvailableModules: AppModuleKey[];
     orgEnabledModules: AppModuleKey[];
     onboardingCompleted: boolean;
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd: number | null;
     loadError: boolean;
   }>({
     status: "loading",
@@ -162,6 +164,8 @@ export default function App() {
     orgAvailableModules: [],
     orgEnabledModules: [],
     onboardingCompleted: true,
+    cancelAtPeriodEnd: false,
+    currentPeriodEnd: null,
     loadError: false,
   });
 
@@ -215,6 +219,8 @@ export default function App() {
           orgAvailableModules: normalizeModuleKeys(data.orgAvailableModules),
           orgEnabledModules: normalizeModuleKeys(data.orgEnabledModules),
           onboardingCompleted: data.onboardingCompleted !== false,
+          cancelAtPeriodEnd: !!data.cancelAtPeriodEnd,
+          currentPeriodEnd: typeof data.currentPeriodEnd === "number" ? data.currentPeriodEnd : null,
           loadError: false,
         });
 
@@ -253,6 +259,8 @@ export default function App() {
           orgAvailableModules: [],
           orgEnabledModules: [],
           onboardingCompleted: true,
+          cancelAtPeriodEnd: false,
+          currentPeriodEnd: null,
           loadError: true,
         });
       }
@@ -452,6 +460,8 @@ export default function App() {
         seatsRemaining={seatsRemaining}
         seatLimit={subState.seatLimit}
         seatsUsed={subState.seatsUsed}
+        cancelAtPeriodEnd={subState.cancelAtPeriodEnd}
+        currentPeriodEnd={subState.currentPeriodEnd}
         canManageInventoryColumns={canManageInventoryColumns}
         themePreference={themePreference}
         onThemePreferenceChange={setThemePreference}

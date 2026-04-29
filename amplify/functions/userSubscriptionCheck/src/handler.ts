@@ -632,7 +632,69 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
       }
     }
 
-    const paymentStatus = String(org.paymentStatus ?? "").toLowerCase();
+    // Self-heal: if subscription was set to cancel at period end and the deadline
+    // has passed (with grace) but the customer.subscription.deleted webhook never
+    // fired, recover by marking the org Canceled here. Surfaces a webhook miss
+    // in CloudWatch so we know to investigate.
+    const SELF_HEAL_GRACE_SECONDS = 24 * 60 * 60;
+    const nowSec = Math.floor(Date.now() / 1000);
+    let effectivePaymentStatus = String(org.paymentStatus ?? "");
+    let effectiveCancelAtPeriodEnd = !!org.cancelAtPeriodEnd;
+    let effectiveCurrentPeriodEnd = Number(org.currentPeriodEnd ?? 0) || undefined;
+
+    const subscriptionExpiredViaCancel =
+      isPaidStatus(effectivePaymentStatus) &&
+      effectiveCancelAtPeriodEnd &&
+      effectiveCurrentPeriodEnd !== undefined &&
+      effectiveCurrentPeriodEnd + SELF_HEAL_GRACE_SECONDS < nowSec;
+
+    if (subscriptionExpiredViaCancel) {
+      console.warn(
+        `[userSubscriptionCheck] Self-healing canceled subscription for org ${user.organizationId}: ` +
+        `paymentStatus was "${effectivePaymentStatus}", currentPeriodEnd=${effectiveCurrentPeriodEnd} ` +
+        `(grace=${SELF_HEAL_GRACE_SECONDS}s, now=${nowSec}). ` +
+        `customer.subscription.deleted webhook likely missed — investigate Stripe webhook delivery.`
+      );
+      try {
+        await ddb.send(
+          new UpdateCommand({
+            TableName: ORG_TABLE,
+            Key: { id: user.organizationId },
+            UpdateExpression:
+              "SET paymentStatus = :canceled REMOVE cancelAtPeriodEnd, currentPeriodEnd",
+            ExpressionAttributeValues: { ":canceled": "Canceled" },
+          })
+        );
+        // Suspend non-owner users to converge state with what the webhook would have done.
+        const usersRes = await ddb.send(
+          new ScanCommand({
+            TableName: USER_TABLE,
+            FilterExpression: "organizationId = :orgId",
+            ExpressionAttributeValues: { ":orgId": user.organizationId },
+          })
+        );
+        for (const u of usersRes.Items ?? []) {
+          const uRole = String(u.role ?? "").toUpperCase();
+          if (uRole === "OWNER" || uRole === "ACCOUNT_OWNER") continue;
+          if (u.accessSuspended === true) continue;
+          await ddb.send(
+            new UpdateCommand({
+              TableName: USER_TABLE,
+              Key: { id: u.id },
+              UpdateExpression: "SET accessSuspended = :true",
+              ExpressionAttributeValues: { ":true": true },
+            })
+          );
+        }
+      } catch (selfHealErr) {
+        console.warn("[userSubscriptionCheck] self-heal write failed", selfHealErr);
+      }
+      effectivePaymentStatus = "Canceled";
+      effectiveCancelAtPeriodEnd = false;
+      effectiveCurrentPeriodEnd = undefined;
+    }
+
+    const paymentStatus = effectivePaymentStatus.toLowerCase();
     const plan = String(org.plan ?? "");
     const subscribed = isPaidStatus(paymentStatus);
     const normalizedRole = normalizeRole(user.role);
@@ -674,13 +736,15 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
       plan,
       seatLimit: org.seatLimit ?? 1,
       seatsUsed,
-      paymentStatus: org.paymentStatus ?? "Free",
+      paymentStatus: effectivePaymentStatus || "Free",
       role: normalizedRole,
       canInviteUsers,
       orgAvailableModules,
       orgEnabledModules,
       allowedModules,
       onboardingCompleted,
+      cancelAtPeriodEnd: effectiveCancelAtPeriodEnd,
+      currentPeriodEnd: effectiveCurrentPeriodEnd ?? null,
     });
   } catch (err) {
     if (err instanceof InventoryStorageProvisioningError || isResourceInUse(err)) {

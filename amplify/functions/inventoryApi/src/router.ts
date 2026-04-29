@@ -13,10 +13,10 @@ import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestock
 import { handleAddLocation, handleRemoveLocation, handleRenameLocation } from "./routes/locations";
 import { handleAddVendor, handleRemoveVendor, handleRenameVendor } from "./routes/vendors";
 import { handleAlertSummary, handleBootstrap } from "./routes/dashboard";
-import { handleListItems, handleSaveItems } from "./routes/inventory";
+import { handleListItems, handleSaveItems, handleUndoRetire } from "./routes/inventory";
 import { handleSubmitUsage, handleListPendingSubmissions, handleApproveSubmission, handleRejectSubmission, handleDeleteSubmission, handleUndoUsage } from "./routes/usage";
 import { handleImportCsv } from "./routes/csv-import";
-import { handleCreateColumn, handleDeleteColumn, handleUpdateColumnVisibility, handleUpdateColumnLabel, handleUpdateColumnType, handleReorderColumns, handleDeleteOrganizationStorage } from "./routes/column-mgmt";
+import { handleCreateColumn, handleDeleteColumn, handleRestoreColumn, handleUpdateColumnVisibility, handleUpdateColumnLabel, handleUpdateColumnType, handleReorderColumns, handleDeleteOrganizationStorage } from "./routes/column-mgmt";
 
 type RouteHandler = (ctx: RouteContext) => Promise<ReturnType<typeof json>>;
 
@@ -73,6 +73,7 @@ const routes: Route[] = [
   // Items
   { method: "GET",    pattern: "/inventory/items",                      needsStorage: true, module: "inventory", handler: handleListItems },
   { method: "POST",   pattern: "/inventory/items/save",                 needsStorage: true, module: "inventory", handler: handleSaveItems },
+  { method: "POST",   pattern: "/inventory/items/undo-retire",          needsStorage: true, module: "inventory", handler: handleUndoRetire },
 
   // Usage (feature within the inventory module; role-based gating applies inside handlers)
   { method: "POST",   pattern: "/inventory/usage/submit",              needsStorage: true, module: "inventory", handler: handleSubmitUsage },
@@ -94,6 +95,7 @@ const routes: Route[] = [
   { method: "POST",   pattern: /\/inventory\/columns\/[^/]+\/label$/,      needsStorage: true, module: "inventory", handler: handleUpdateColumnLabel },
   { method: "POST",   pattern: /\/inventory\/columns\/[^/]+\/type$/,       needsStorage: true, module: "inventory", handler: handleUpdateColumnType },
   { method: "POST",   pattern: "/inventory/columns/reorder",              needsStorage: true, module: "inventory", handler: handleReorderColumns },
+  { method: "POST",   pattern: "/inventory/columns/restore",              needsStorage: true, module: "inventory", handler: handleRestoreColumn },
   { method: "POST",   pattern: "/inventory/columns",                      needsStorage: true, module: "inventory", handler: handleCreateColumn },
   { method: "DELETE",  pattern: /\/inventory\/columns\/[^/]+$/,            needsStorage: true, module: "inventory", handler: handleDeleteColumn },
 

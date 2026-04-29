@@ -1,5 +1,6 @@
 import type { ActiveTab, InventoryColumn, InventoryRow } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
+import { isDiscardableRow } from "./inventoryUtils";
 
 export type InventoryMobileCardsProps = {
   paginatedRows: { row: InventoryRow; index: number }[];
@@ -73,6 +74,14 @@ export function InventoryMobileCards({
   onRetireRow,
 }: InventoryMobileCardsProps) {
   const showRetire = activeTab === "expired" && !!onRetireRow;
+  // Selection-level discard eligibility: only show the bulk Discard button
+  // when every selected row is blank (no operational history). Anything with
+  // content needs to go through Retire.
+  const allSelectedDiscardable =
+    selectedRowIds.size > 0 &&
+    rows
+      .filter((r) => selectedRowIds.has(r.id))
+      .every(isDiscardableRow);
   return (
     <div className="inventory-cards-wrap">
       {selectMode && canEditTable && selectedRowIds.size > 0 && rows.length > 1 && (
@@ -102,13 +111,16 @@ export function InventoryMobileCards({
               </div>
             </details>
           ) : null}
-          <button
-            type="button"
-            className="button button-secondary button-sm"
-            onClick={onRequestDelete}
-          >
-            Delete ({selectedRowIds.size})
-          </button>
+          {allSelectedDiscardable ? (
+            <button
+              type="button"
+              className="button button-secondary button-sm"
+              onClick={onRequestDelete}
+              title="Discard the selected blank rows"
+            >
+              Discard ({selectedRowIds.size})
+            </button>
+          ) : null}
           <button
             type="button"
             className="button button-ghost button-sm"
@@ -279,7 +291,7 @@ export function InventoryMobileCards({
                         Retire Item
                       </button>
                     )}
-                    {canEditTable && (
+                    {canEditTable && isDiscardableRow(row) && (
                       <button
                         type="button"
                         className="inventory-card-delete-btn"
@@ -287,8 +299,9 @@ export function InventoryMobileCards({
                           onToggleRowSelection(row.id);
                           onRequestDelete();
                         }}
+                        title="Discard this blank row"
                       >
-                        Delete
+                        Discard
                       </button>
                     )}
                     <button

@@ -395,6 +395,7 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     auditEvents.push(buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, {
       orderId,
       closedManually: true,
+      ...(orderVendor ? { vendor: orderVendor } : {}),
     }));
   }
 
@@ -416,6 +417,10 @@ export const handleCloseRestockOrder = async (ctx: RouteContext) => {
   if (result.Item.status === "closed") {
     return json(409, { error: "Order is already closed." });
   }
+
+  const orderVendor = typeof result.Item.vendor === "string" && result.Item.vendor.trim()
+    ? String(result.Item.vendor).trim()
+    : "";
 
   // Optional cancellation note appended to existing notes (or set if empty).
   const rawNote = String(body?.note ?? "").trim();
@@ -448,6 +453,7 @@ export const handleCloseRestockOrder = async (ctx: RouteContext) => {
     buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, {
       orderId,
       closedManually: true,
+      ...(orderVendor ? { vendor: orderVendor } : {}),
       ...(rawNote ? { note: rawNote } : {}),
     }),
   ]);

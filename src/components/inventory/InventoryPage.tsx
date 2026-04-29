@@ -2,7 +2,7 @@
 // Wires custom hooks to sub-components. All state lives in hooks.
 import { useEffect, useRef, useState } from "react";
 import type { InventoryPageProps } from "./inventoryTypes";
-import { normalizeHeaderKey } from "./inventoryUtils";
+import { isDiscardableRow, normalizeHeaderKey } from "./inventoryUtils";
 import {
   addInventoryLocation,
   generateAndDownloadInventoryTemplate,
@@ -22,8 +22,7 @@ import { InventoryUsagePage } from "../InventoryUsagePage";
 import { InventoryMobileCards } from "./InventoryMobileCards";
 import { InventoryDesktopTable } from "./InventoryDesktopTable";
 import { ImportDialogs } from "./ImportDialogs";
-import { DeleteBlockedDialog } from "./DeleteBlockedDialog";
-import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
+import { DiscardConfirmDialog } from "./DiscardConfirmDialog";
 import { PaginationControls } from "./PaginationControls";
 import { ROWS_PER_PAGE } from "./inventoryTypes";
 
@@ -461,13 +460,24 @@ export function InventoryPage({
                         </div>
                       </details>
                     ) : null}
-                    <button
-                      type="button"
-                      className="inventory-toolbar-action inventory-toolbar-action--danger"
-                      onClick={data.onRequestDeleteSelectedRows}
-                    >
-                      Delete ({filters.selectedRowIds.size})
-                    </button>
+                    {/* Discard is shown only when every selected row is blank
+                     *  (no operational history, no content). Anything with data
+                     *  routes through Retire so the loss reason and history are
+                     *  preserved. The button hides entirely when the selection
+                     *  contains touched rows — Retire stays available via the
+                     *  per-row affordance and the Expired tab's Retire All. */}
+                    {data.rows
+                      .filter((r) => filters.selectedRowIds.has(r.id))
+                      .every(isDiscardableRow) ? (
+                      <button
+                        type="button"
+                        className="inventory-toolbar-action inventory-toolbar-action--danger"
+                        onClick={data.onRequestDeleteSelectedRows}
+                        title="Discard the selected blank rows"
+                      >
+                        Discard ({filters.selectedRowIds.size})
+                      </button>
+                    ) : null}
                   </>
                 ) : null}
                 {canEditInventory && data.canEditTable && (
@@ -671,18 +681,10 @@ export function InventoryPage({
         />
 
         {data.pendingDeleteRows ? (
-          <DeleteConfirmDialog
+          <DiscardConfirmDialog
             count={filters.selectedRowIds.size}
             onConfirm={data.onConfirmDeleteSelectedRows}
             onCancel={() => data.setPendingDeleteRows(false)}
-          />
-        ) : null}
-
-        {data.deleteBlockedRows.length > 0 ? (
-          <DeleteBlockedDialog
-            blockedRows={data.deleteBlockedRows}
-            onRetire={(reason) => void data.onRetireDeleteBlocked(reason)}
-            onCancel={data.onDismissDeleteBlocked}
           />
         ) : null}
       </div>

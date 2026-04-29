@@ -420,6 +420,48 @@ export const undoUsageEvent = async (
   return { ok: !!data?.ok };
 };
 
+/**
+ * Reverse a previous ITEM_RETIRE: clears the retire markers on the row and
+ * additively restores the retired quantity.
+ */
+export const undoRetireEvent = async (
+  eventId: string,
+  itemId: string,
+): Promise<{ ok: boolean }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/items/undo-retire`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId, itemId }),
+  });
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to undo retire event."));
+  }
+  const data = await res.json();
+  return { ok: !!data?.ok };
+};
+
+/**
+ * Reverse a previous COLUMN_DELETE: recreates the column row from the snapshot
+ * stamped on the original event. Per-row values for that column were never
+ * scrubbed, so the data reappears once the column metadata is back.
+ */
+export const undoColumnDeleteEvent = async (
+  eventId: string,
+): Promise<{ ok: boolean }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/columns/restore`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventId }),
+  });
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to restore column."));
+  }
+  const data = await res.json();
+  return { ok: !!data?.column };
+};
+
 export const importInventoryCsv = async (
   csvText: string,
   selectedHeaders?: string[],

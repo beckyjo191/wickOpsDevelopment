@@ -1,11 +1,11 @@
 // ── Route handlers: inventory ───────────────────────────────────────────────
-import { BatchGetCommand, UpdateCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
+import { BatchGetCommand, UpdateCommand, DeleteCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
 import type { RetireReason, RouteContext } from "../types";
 import { RETIRE_REASONS } from "../types";
 import { ddb } from "../clients";
 import { json, parseNextToken } from "../http";
-import { getParentItemId, listItemsPage, validateNonNegativeField } from "../items";
+import { getParentItemId, listAllItems, listItemsPage, validateNonNegativeField } from "../items";
 import { buildAuditEvent, writeAuditEvents, writeAuditEventsCoalesced, computeValuesDiff, hasProtectedHistory } from "../audit";
 
 // Machine-managed fields in valuesJson. Changes to these shouldn't produce
@@ -295,5 +295,139 @@ export const handleSaveItems = async (ctx: RouteContext) => {
     writeAuditEventsCoalesced(storage.auditTable, coalescibleEvents),
     writeAuditEvents(storage.auditTable, otherEvents),
   ]);
+  return json(200, { ok: true });
+};
+
+/**
+ * Reverse a previous ITEM_RETIRE event: clear the retire markers on the row,
+ * additively restore the retired quantity, and mark the original event as
+ * undone so the Undo button stops appearing for it. Mirrors the USAGE_UNDO
+ * shape (audit update is conditional, then row update — order matters under
+ * concurrent undos so only one wins).
+ *
+ * Body: { eventId, itemId } — itemId is required because audit events are
+ * partitioned by ITEM#<itemId>.
+ */
+export const handleUndoRetire = async (ctx: RouteContext) => {
+  const { access, storage, body } = ctx;
+  if (!access.canEditInventory) {
+    return json(403, { error: "Only editors and admins can undo retire events." });
+  }
+
+  const eventId = String(body?.eventId ?? "").trim();
+  const itemId = String(body?.itemId ?? "").trim();
+  if (!eventId || !itemId) {
+    return json(400, { error: "eventId and itemId are required." });
+  }
+
+  const queryRes = await ddb.send(
+    new QueryCommand({
+      TableName: storage.auditTable,
+      KeyConditionExpression: "pk = :pk",
+      FilterExpression: "eventId = :eid",
+      ExpressionAttributeValues: { ":pk": `ITEM#${itemId}`, ":eid": eventId },
+      Limit: 1,
+    }),
+  );
+  const original = (queryRes.Items ?? [])[0] as Record<string, unknown> | undefined;
+  if (!original) return json(404, { error: "Retire event not found." });
+  if (original.action !== "ITEM_RETIRE") {
+    return json(400, { error: "Only retire events can be undone." });
+  }
+  if (original.undoneAt) {
+    return json(409, { error: "This retire event has already been undone." });
+  }
+
+  let details: Record<string, unknown> = {};
+  try { details = JSON.parse(String(original.detailsJson ?? "{}")); } catch { details = {}; }
+  const retiredQty = Number(details.qty ?? 0);
+  if (!Number.isFinite(retiredQty) || retiredQty < 0) {
+    return json(400, { error: "Original event metadata is invalid; cannot undo." });
+  }
+
+  const items = await listAllItems(storage, access.organizationId);
+  const item = items.find((i) => String(i.id) === itemId);
+  if (!item) return json(404, { error: "Item no longer exists." });
+
+  let values: Record<string, string | number | boolean | null> = {};
+  try {
+    values = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, string | number | boolean | null>;
+  } catch {
+    values = {};
+  }
+  const itemName = String(values.itemName ?? "").trim() || `Item ${itemId.slice(0, 8)}`;
+  const currentQuantity = Number(values.quantity ?? 0);
+  const restoredQuantity = (Number.isFinite(currentQuantity) ? currentQuantity : 0) + retiredQty;
+
+  const undoneAt = new Date().toISOString();
+  const undoEventId = randomUUID();
+  const updatedDetails = {
+    ...details,
+    undone: true,
+    undoneAt,
+    undoneByUserId: access.userId,
+    undoneByEventId: undoEventId,
+  };
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: storage.auditTable,
+        Key: { pk: original.pk as string, sk: original.sk as string },
+        UpdateExpression: "SET detailsJson = :d, undoneAt = :ua",
+        ConditionExpression: "attribute_not_exists(undoneAt)",
+        ExpressionAttributeValues: {
+          ":d": JSON.stringify(updatedDetails),
+          ":ua": undoneAt,
+        },
+      }),
+    );
+  } catch (err: any) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return json(409, { error: "This retire event has already been undone." });
+    }
+    throw err;
+  }
+
+  // Strip retire markers and restore quantity. We delete the marker keys rather
+  // than set them empty so the row leaves the "retired" filter cleanly.
+  const nextValues: Record<string, string | number | boolean | null> = { ...values };
+  delete nextValues.retiredAt;
+  delete nextValues.retiredQty;
+  delete nextValues.retirementReason;
+  nextValues.quantity = restoredQuantity;
+
+  try {
+    await ddb.send(
+      new UpdateCommand({
+        TableName: storage.itemTable,
+        Key: { id: item.id },
+        ConditionExpression: "organizationId = :org AND #module = :module",
+        UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":module": "inventory",
+          ":values": JSON.stringify(nextValues),
+          ":updatedAtCustom": new Date().toISOString(),
+        },
+      }),
+    );
+  } catch (err: any) {
+    if (err?.name === "ConditionalCheckFailedException") {
+      return json(409, { error: "Item does not belong to organization." });
+    }
+    throw err;
+  }
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "ITEM_UNRETIRE", itemId, itemName, {
+      undoneEventId: eventId,
+      reason: details.reason,
+      quantityRestored: retiredQty,
+      quantityBefore: currentQuantity,
+      quantityAfter: restoredQuantity,
+    }),
+  ]);
+
   return json(200, { ok: true });
 };

@@ -103,10 +103,6 @@ export function useInventoryData({
   const [saving, setSaving] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
   const [importingCsv, setImportingCsv] = useState(false);
-  // When the server rejects a delete for rows with operational history, we
-  // surface them here so the UI can offer "Retire instead" instead of silently
-  // losing the delete action.
-  const [deleteBlockedRows, setDeleteBlockedRows] = useState<Array<{ id: string; itemName: string }>>([]);
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
   const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
@@ -890,9 +886,10 @@ export function useInventoryData({
       window.setTimeout(() => setShowSaved(false), 2000);
     } catch (err: any) {
       if (isDeleteBlockedError(err)) {
-        // Server blocked delete because these rows have operational history.
-        // Un-mark them from the pending-delete set, reload to restore row data
-        // in the UI, and surface a dialog so the user can retire instead.
+        // Defensive: the Discard affordance is gated client-side to blank rows
+        // only, so the server's protected-history rejection should be
+        // unreachable now. If it ever fires (stricter server rule, race), surface
+        // a plain error and reload so the discarded rows reappear in the grid.
         const blockedIds = new Set(err.protectedRows.map((r) => r.id));
         setDeletedRowIds((prev) => {
           const next = new Set(prev);
@@ -903,10 +900,12 @@ export function useInventoryData({
         try {
           const bootstrap = await loadInventoryBootstrap();
           applyBootstrap(bootstrap);
-        } catch {
-          // Non-critical: the user will see blocked rows re-appear on next load.
+        } catch { /* non-critical: rows reappear on next load */ }
+        if (!silent) {
+          alert(
+            "Some rows could not be discarded — they have operational history. Use Retire instead.",
+          );
         }
-        setDeleteBlockedRows(err.protectedRows);
       } else if (!silent) {
         alert(err?.message ?? "Failed to save inventory");
       }
@@ -918,15 +917,6 @@ export function useInventoryData({
 
   // Keep a stable ref to onSave so the interval always calls the latest version.
   onSaveRef.current = onSave;
-
-  const onDismissDeleteBlocked = () => setDeleteBlockedRows([]);
-  const onRetireDeleteBlocked = async (
-    reason: "expired" | "damaged" | "lost" | "recalled" = "expired",
-  ) => {
-    const ids = deleteBlockedRows.map((r) => r.id);
-    setDeleteBlockedRows([]);
-    if (ids.length > 0) await onRetireRows(ids, reason);
-  };
 
   // ── Import handlers ──
   const onChooseCsvImport = () => {
@@ -1515,9 +1505,6 @@ export function useInventoryData({
     // Delete
     pendingDeleteRows,
     setPendingDeleteRows,
-    deleteBlockedRows,
-    onDismissDeleteBlocked,
-    onRetireDeleteBlocked,
     // Refs
     importInputRef,
     selectAllCheckboxRef,

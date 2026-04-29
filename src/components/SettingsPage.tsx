@@ -56,10 +56,10 @@ import {
   resendInvite,
   type PendingInvite,
 } from "../lib/invitesApi";
-import { GripVertical, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, GripVertical, Pencil, Trash2 } from "lucide-react";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
-type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "vendors" | "inventoryColumns" | "importData" | "exportData";
+type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "vendors" | "inventoryColumns" | "importData" | "exportData" | "helpSupport";
 type DisclosureState = Record<DisclosureKey, boolean>;
 const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   appearance: true,
@@ -70,7 +70,10 @@ const DEFAULT_DISCLOSURE_STATE: DisclosureState = {
   inventoryColumns: false,
   importData: false,
   exportData: false,
+  helpSupport: false,
 };
+
+const SUPPORT_EMAIL = "support@wickops.com";
 
 interface SettingsPageProps {
   currentDisplayName: string;
@@ -79,6 +82,8 @@ interface SettingsPageProps {
   seatsRemaining: number;
   seatLimit: number;
   seatsUsed: number;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: number | null;
   canManageInventoryColumns: boolean;
   canManageModuleAccess: boolean;
   currentUserId: string;
@@ -101,6 +106,8 @@ export function SettingsPage({
   seatsRemaining,
   seatLimit,
   seatsUsed,
+  cancelAtPeriodEnd,
+  currentPeriodEnd,
   canManageInventoryColumns,
   canManageModuleAccess,
   currentUserId,
@@ -171,6 +178,8 @@ export function SettingsPage({
   const [pendingDeleteVendor, setPendingDeleteVendor] = useState<string | null>(null);
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
+  const [contactSubject, setContactSubject] = useState("");
+  const [contactMessage, setContactMessage] = useState("");
   const [loadedDisclosureKey, setLoadedDisclosureKey] = useState<string>("");
   const disclosureStorageKey = `${SETTINGS_DISCLOSURES_STORAGE_KEY}.${currentUserId || "anonymous"}`;
 
@@ -306,6 +315,10 @@ export function SettingsPage({
           typeof parsed.exportData === "boolean"
             ? parsed.exportData
             : DEFAULT_DISCLOSURE_STATE.exportData,
+        helpSupport:
+          typeof parsed.helpSupport === "boolean"
+            ? parsed.helpSupport
+            : DEFAULT_DISCLOSURE_STATE.helpSupport,
       });
       setLoadedDisclosureKey(disclosureStorageKey);
     } catch {
@@ -861,6 +874,18 @@ export function SettingsPage({
     }
   };
 
+  const onSendContactEmail = () => {
+    const trimmedSubject = contactSubject.trim();
+    const trimmedMessage = contactMessage.trim();
+    if (!trimmedMessage) return;
+    const senderLine = currentDisplayName
+      ? `${currentDisplayName} <${currentUserEmail}>`
+      : currentUserEmail;
+    const subject = encodeURIComponent(trimmedSubject || "WickOps support request");
+    const body = encodeURIComponent(`${trimmedMessage}\n\n---\nFrom: ${senderLine}`);
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+  };
+
   const onDisclosureToggle = (key: DisclosureKey, isOpen: boolean) => {
     if (loadedDisclosureKey !== disclosureStorageKey) return;
     setDisclosures((prev) => {
@@ -876,6 +901,34 @@ export function SettingsPage({
     const key = String(column.key ?? "").toLowerCase();
     return label.includes(normalizedInventoryColumnSearch) || key.includes(normalizedInventoryColumnSearch);
   });
+
+  const openBillingPortal = () => {
+    setPortalLoading(true);
+    createBillingPortalSession()
+      .then((url) => {
+        window.location.href = url;
+      })
+      .catch((err: any) => {
+        alert(err?.message ?? "Could not open billing portal. Please try again.");
+        setPortalLoading(false);
+      });
+  };
+
+  const cancellationCountdown = (() => {
+    if (!cancelAtPeriodEnd) return null;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (typeof currentPeriodEnd === "number" && currentPeriodEnd > 0) {
+      const daysLeft = Math.max(0, Math.ceil((currentPeriodEnd - nowSec) / 86400));
+      const endDate = new Date(currentPeriodEnd * 1000);
+      const endDateLabel = endDate.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+      return { daysLeft, endDateLabel };
+    }
+    return { daysLeft: null as number | null, endDateLabel: null as string | null };
+  })();
 
   return (
     <section className="app-content">
@@ -893,6 +946,30 @@ export function SettingsPage({
             </div>
           )}
         </div>
+
+        {cancellationCountdown && canManageModuleAccess ? (
+          <button
+            type="button"
+            className="app-alert-card app-alert-card--caution"
+            disabled={portalLoading}
+            onClick={openBillingPortal}
+          >
+            <span className="app-alert-card__icon">
+              <AlertTriangle size={16} strokeWidth={2} />
+            </span>
+            <span className="app-alert-card__text">
+              {cancellationCountdown.daysLeft === null
+                ? "Your subscription is set to cancel at the end of the current period."
+                : cancellationCountdown.daysLeft === 0
+                  ? `Your subscription cancels today (${cancellationCountdown.endDateLabel}).`
+                  : `Your subscription cancels in ${cancellationCountdown.daysLeft} day${cancellationCountdown.daysLeft === 1 ? "" : "s"} (${cancellationCountdown.endDateLabel}).`}
+              {" "}Reactivate to keep your team's access.
+            </span>
+            <span className="app-alert-card__action">
+              {portalLoading ? "Opening\u2026" : "Reactivate \u2192"}
+            </span>
+          </button>
+        ) : null}
 
         <div className="settings-account-bar">
           <span className="settings-account-seats">
@@ -912,17 +989,7 @@ export function SettingsPage({
                 className="button button-secondary button-sm"
                 type="button"
                 disabled={portalLoading}
-                onClick={() => {
-                  setPortalLoading(true);
-                  createBillingPortalSession()
-                    .then((url) => {
-                      window.location.href = url;
-                    })
-                    .catch((err: any) => {
-                      alert(err?.message ?? "Could not open billing portal. Please try again.");
-                      setPortalLoading(false);
-                    });
-                }}
+                onClick={openBillingPortal}
               >
                 {portalLoading ? "Opening…" : "Billing"}
               </button>
@@ -1725,6 +1792,49 @@ export function SettingsPage({
               Only administrators can manage inventory columns.
             </p>
           )}
+        </details>
+
+        <details
+          className="settings-section"
+          open={disclosures.helpSupport}
+          onToggle={(event) => onDisclosureToggle("helpSupport", event.currentTarget.open)}
+        >
+          <summary className="settings-section-title">Help &amp; Support</summary>
+          <p className="settings-section-copy">
+            Have a question, bug report, or feature request? Send us a message and we'll get back to you.
+          </p>
+          <div className="settings-field-group">
+            <label className="settings-field-label" htmlFor="contact-subject">Subject</label>
+            <input
+              id="contact-subject"
+              className="field"
+              type="text"
+              placeholder="Briefly, what's this about?"
+              value={contactSubject}
+              onChange={(event) => setContactSubject(event.target.value)}
+            />
+          </div>
+          <div className="settings-field-group">
+            <label className="settings-field-label" htmlFor="contact-message">Message</label>
+            <textarea
+              id="contact-message"
+              className="settings-contact-textarea"
+              placeholder="Tell us what's going on..."
+              value={contactMessage}
+              onChange={(event) => setContactMessage(event.target.value)}
+              rows={6}
+            />
+          </div>
+          <div className="settings-import-actions">
+            <button
+              type="button"
+              className="button button-primary button-sm"
+              onClick={onSendContactEmail}
+              disabled={!contactMessage.trim()}
+            >
+              Send Email
+            </button>
+          </div>
         </details>
 
       </div>

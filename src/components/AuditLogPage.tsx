@@ -3,6 +3,8 @@ import {
   fetchAuditFeed,
   fetchItemHistory,
   fetchAuditAnalytics,
+  undoColumnDeleteEvent,
+  undoRetireEvent,
   undoUsageEvent,
   type AuditEvent,
   type AuditAnalytics,
@@ -48,11 +50,14 @@ const ACTION_LABELS: Record<string, string> = {
   ITEM_RESTOCK: "Restocked",
   ITEM_QTY_ADJUST: "Adjusted qty",
   ITEM_RETIRE: "Retired",
+  ITEM_UNRETIRE: "Retire undone",
   USAGE_SUBMIT: "Usage logged",
   USAGE_APPROVE: "Usage approved",
   USAGE_REJECT: "Usage rejected",
+  USAGE_UNDO: "Usage undone",
   COLUMN_CREATE: "Column added",
   COLUMN_DELETE: "Column deleted",
+  COLUMN_RESTORE: "Column restored",
   COLUMN_UPDATE: "Column updated",
   CSV_IMPORT: "CSV import",
   TEMPLATE_APPLY: "Template applied",
@@ -186,11 +191,14 @@ const ACTION_COLORS: Record<string, string> = {
   ITEM_QTY_ADJUST: "var(--warning)",
   ITEM_DELETE: "var(--danger)",
   ITEM_RETIRE: "var(--danger)",
+  ITEM_UNRETIRE: "var(--text-muted)",
   USAGE_SUBMIT: "var(--warning)",
   USAGE_APPROVE: "var(--success)",
   USAGE_REJECT: "var(--danger)",
+  USAGE_UNDO: "var(--text-muted)",
   COLUMN_CREATE: "var(--primary)",
   COLUMN_DELETE: "var(--danger)",
+  COLUMN_RESTORE: "var(--text-muted)",
   COLUMN_UPDATE: "var(--primary)",
   CSV_IMPORT: "var(--primary)",
   TEMPLATE_APPLY: "var(--primary)",
@@ -283,6 +291,10 @@ function buildRichRowSummary(event: AuditEvent): string {
     const reason = typeof details.reason === "string" ? details.reason : "";
     return reason ? `Retired (${reason})` : "Retired";
   }
+  if (derived === "ITEM_UNRETIRE") {
+    const restored = details.quantityRestored;
+    return restored !== undefined ? `Undid retire — restored ${restored}` : "Retire undone";
+  }
   if (derived === "ITEM_DELETE") return "Deleted";
   if (derived === "ITEM_MOVE") return "Reordered";
   if (derived === "RESTOCK_ORDER_CREATE") {
@@ -296,7 +308,14 @@ function buildRichRowSummary(event: AuditEvent): string {
     const qty = details.qtyReceived;
     return qty !== undefined ? `Received ${qty}` : "Order received";
   }
-  if (derived === "RESTOCK_ORDER_CLOSED") return "Order closed";
+  if (derived === "RESTOCK_ORDER_CLOSED") {
+    const vendor = typeof details.vendor === "string" ? details.vendor : "";
+    const note = typeof details.note === "string" ? details.note : "";
+    if (vendor && note) return `Order closed — ${vendor} (${note})`;
+    if (vendor) return `Order closed — ${vendor}`;
+    if (note) return `Order closed (${note})`;
+    return "Order closed";
+  }
   if (derived === "RESTOCK_ADDED") {
     const delta = details.qtyDelta;
     const vendor = typeof details.vendor === "string" ? details.vendor : "";
@@ -317,6 +336,10 @@ function buildRichRowSummary(event: AuditEvent): string {
     const reason = typeof details.reason === "string" ? details.reason : "";
     return reason ? `Rejected usage (${reason})` : "Usage rejected";
   }
+  if (derived === "USAGE_UNDO") {
+    const restored = details.quantityRestored;
+    return restored !== undefined ? `Undid usage — restored ${restored}` : "Usage undone";
+  }
   if (derived === "CSV_IMPORT") {
     const c = details.rowsCreated ?? 0;
     const u = details.rowsUpdated ?? 0;
@@ -324,7 +347,18 @@ function buildRichRowSummary(event: AuditEvent): string {
   }
   if (derived === "TEMPLATE_APPLY") return "Template applied";
   if (derived === "COLUMN_CREATE") return "Column added";
-  if (derived === "COLUMN_DELETE") return "Column deleted";
+  if (derived === "COLUMN_DELETE") {
+    const label = typeof details.columnLabel === "string" && details.columnLabel
+      ? details.columnLabel
+      : typeof details.columnKey === "string" ? details.columnKey : "";
+    return label ? `Column deleted (${label})` : "Column deleted";
+  }
+  if (derived === "COLUMN_RESTORE") {
+    const label = typeof details.columnLabel === "string" && details.columnLabel
+      ? details.columnLabel
+      : typeof details.columnKey === "string" ? details.columnKey : "";
+    return label ? `Column restored (${label})` : "Column restored";
+  }
   if (derived === "COLUMN_UPDATE") return "Column updated";
   return ACTION_LABELS[derived] ?? derived;
 }
@@ -361,6 +395,37 @@ function groupByDay<T>(items: Array<T & { timestamp: string; user: string }>): A
 //  caller computes its own `summary` since the audit log uses
 //  "N changes · M users" while closed orders use "N orders".
 
+/** Discriminator for events that carry an inline Undo affordance. Each kind
+ *  routes to a different reversal endpoint:
+ *   - "usage"  → re-adds the decremented qty (POST /inventory/usage/undo)
+ *   - "retire" → clears retire markers + restores qty (POST /inventory/items/undo-retire)
+ *   - "column" → recreates the column from its snapshot (POST /inventory/columns/restore)
+ */
+export type UndoableKind = "usage" | "retire" | "column";
+
+export type UndoableEvent = {
+  kind: UndoableKind;
+  eventId: string;
+  /** Item-scoped undos need the partition key. Column-restore is org-scoped. */
+  itemId?: string;
+};
+
+/** Identify undoable events from the raw audit row. Eligible iff the action
+ *  is one of the reversible kinds AND the event hasn't already been undone. */
+function detectUndoable(event: AuditEvent): UndoableEvent | undefined {
+  if (event.details?.undone) return undefined;
+  if (event.action === "USAGE_APPROVE" && typeof event.itemId === "string" && event.itemId) {
+    return { kind: "usage", eventId: event.eventId, itemId: event.itemId };
+  }
+  if (event.action === "ITEM_RETIRE" && typeof event.itemId === "string" && event.itemId) {
+    return { kind: "retire", eventId: event.eventId, itemId: event.itemId };
+  }
+  if (event.action === "COLUMN_DELETE") {
+    return { kind: "column", eventId: event.eventId };
+  }
+  return undefined;
+}
+
 /** Per-(day, item) row data for the main activity feed. */
 type ActivityRowData = {
   key: string;
@@ -371,10 +436,10 @@ type ActivityRowData = {
   accentColor: string;
   user: string;
   titleAttr?: string;
-  /** Set when the row aggregates exactly one event AND that event is an
-   *  undoable USAGE_APPROVE that hasn't already been undone. The Undo button
-   *  picks up these fields. */
-  undoableEvent?: { eventId: string; itemId: string };
+  /** Set when the row aggregates exactly one event AND that event is undoable
+   *  and not yet undone. The Undo button uses these fields to dispatch to the
+   *  right reversal endpoint. */
+  undoableEvent?: UndoableEvent;
 };
 
 function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
@@ -441,12 +506,7 @@ function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRo
       // buckets need the user to drill into item history first to pick the
       // specific event to reverse.
       const lone = bucket.events.length === 1 ? bucket.events[0] : null;
-      const undoableEvent =
-        lone && lone.action === "USAGE_APPROVE"
-          && !lone.details?.undone
-          && typeof lone.itemId === "string" && lone.itemId
-          ? { eventId: lone.eventId, itemId: lone.itemId }
-          : undefined;
+      const undoableEvent = lone ? detectUndoable(lone) : undefined;
       day.rows.push({
         key: `${d.label}::${rowKey}`,
         timestamp: bucket.lastTimestamp,
@@ -465,15 +525,21 @@ function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRo
   return days;
 }
 
+const UNDO_TOOLTIPS: Record<UndoableKind, string> = {
+  usage: "Undo this usage — restore the decremented quantity",
+  retire: "Undo this retire — clear the retire markers and restore the quantity",
+  column: "Restore this column — bring back the deleted column and its values",
+};
+
 function FlatActivityFeed({
   events,
   onViewItemHistory,
-  onUndoUsage,
+  onUndoEvent,
   undoingEventId,
 }: {
   events: AuditEvent[];
   onViewItemHistory: (itemId: string, name: string) => void;
-  onUndoUsage?: (eventId: string, itemId: string) => void;
+  onUndoEvent?: (undoable: UndoableEvent) => void;
   undoingEventId?: string | null;
 }) {
   const days = aggregateActivityRows(events);
@@ -498,7 +564,7 @@ function FlatActivityFeed({
               minute: "2-digit",
             });
             const navigable = !!row.itemId && row.itemName !== "—";
-            const showUndo = !!onUndoUsage && !!row.undoableEvent;
+            const showUndo = !!onUndoEvent && !!row.undoableEvent;
             const isUndoing = showUndo && undoingEventId === row.undoableEvent?.eventId;
             return (
               <div
@@ -527,11 +593,9 @@ function FlatActivityFeed({
                   <button
                     type="button"
                     className="audit-flat-undo-btn"
-                    onClick={() =>
-                      onUndoUsage?.(row.undoableEvent!.eventId, row.undoableEvent!.itemId)
-                    }
+                    onClick={() => onUndoEvent?.(row.undoableEvent!)}
                     disabled={isUndoing}
-                    title="Undo this usage — restore the decremented quantity"
+                    title={UNDO_TOOLTIPS[row.undoableEvent!.kind]}
                   >
                     <RotateCcw size={12} /> {isUndoing ? "Undoing…" : "Undo"}
                   </button>
@@ -738,11 +802,11 @@ function CostOverTimeChart({ events }: { events: AuditEvent[] }) {
  *  matches the main feed. */
 function FlatItemHistory({
   events,
-  onUndoUsage,
+  onUndoEvent,
   undoingEventId,
 }: {
   events: AuditEvent[];
-  onUndoUsage?: (eventId: string, itemId: string) => void;
+  onUndoEvent?: (undoable: UndoableEvent) => void;
   undoingEventId?: string | null;
 }) {
   type HistoryRowData = {
@@ -752,16 +816,10 @@ function FlatItemHistory({
     accentColor: string;
     user: string;
     titleAttr?: string;
-    undoableEvent?: { eventId: string; itemId: string };
+    undoableEvent?: UndoableEvent;
   };
   const items: Array<HistoryRowData & { timestamp: string; user: string }> = events.map((e) => {
     const derived = deriveAction(e);
-    const undoable =
-      e.action === "USAGE_APPROVE"
-        && !e.details?.undone
-        && typeof e.itemId === "string" && e.itemId
-        ? { eventId: e.eventId, itemId: e.itemId }
-        : undefined;
     return {
       key: e.eventId,
       timestamp: e.timestamp,
@@ -769,7 +827,7 @@ function FlatItemHistory({
       accentColor: ACTION_COLORS[derived] ?? "var(--text-muted)",
       user: e.userName || e.userEmail || "—",
       titleAttr: eventTitleAttr(e),
-      undoableEvent: undoable,
+      undoableEvent: detectUndoable(e),
     };
   });
   const days = groupByDay(items);
@@ -794,7 +852,7 @@ function FlatItemHistory({
               hour: "numeric",
               minute: "2-digit",
             });
-            const showUndo = !!onUndoUsage && !!row.undoableEvent;
+            const showUndo = !!onUndoEvent && !!row.undoableEvent;
             const isUndoing = showUndo && undoingEventId === row.undoableEvent?.eventId;
             return (
               <div
@@ -815,11 +873,9 @@ function FlatItemHistory({
                   <button
                     type="button"
                     className="audit-flat-undo-btn"
-                    onClick={() =>
-                      onUndoUsage?.(row.undoableEvent!.eventId, row.undoableEvent!.itemId)
-                    }
+                    onClick={() => onUndoEvent?.(row.undoableEvent!)}
                     disabled={isUndoing}
-                    title="Undo this usage — restore the decremented quantity"
+                    title={UNDO_TOOLTIPS[row.undoableEvent!.kind]}
                   >
                     <RotateCcw size={12} /> {isUndoing ? "Undoing…" : "Undo"}
                   </button>
@@ -1241,17 +1297,33 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   const [undoingEventId, setUndoingEventId] = useState<string | null>(null);
   const [undoError, setUndoError] = useState<string | null>(null);
 
-  const handleUndoUsage = useCallback(
-    async (eventId: string, itemId: string) => {
+  const handleUndoEvent = useCallback(
+    async (undoable: UndoableEvent) => {
       if (undoingEventId) return;
-      const proceed = window.confirm(
-        "Undo this usage? The decremented quantity will be restored to the item.",
-      );
+      const confirmCopy: Record<UndoableKind, string> = {
+        usage: "Undo this usage? The decremented quantity will be restored to the item.",
+        retire: "Undo this retire? The retire markers will be cleared and the quantity restored.",
+        column: "Restore this column? It will be re-added to inventory along with any per-row values.",
+      };
+      const errorCopy: Record<UndoableKind, string> = {
+        usage: "Failed to undo usage.",
+        retire: "Failed to undo retire.",
+        column: "Failed to restore column.",
+      };
+      const proceed = window.confirm(confirmCopy[undoable.kind]);
       if (!proceed) return;
-      setUndoingEventId(eventId);
+      setUndoingEventId(undoable.eventId);
       setUndoError(null);
       try {
-        await undoUsageEvent(eventId, itemId);
+        if (undoable.kind === "usage") {
+          if (!undoable.itemId) throw new Error("Missing item id for usage undo.");
+          await undoUsageEvent(undoable.eventId, undoable.itemId);
+        } else if (undoable.kind === "retire") {
+          if (!undoable.itemId) throw new Error("Missing item id for retire undo.");
+          await undoRetireEvent(undoable.eventId, undoable.itemId);
+        } else {
+          await undoColumnDeleteEvent(undoable.eventId);
+        }
         // Re-fetch so the row picks up `details.undone` from the server. We
         // refresh both the main feed and the open item history (whichever is
         // visible), so the Undo button hides immediately without another click.
@@ -1263,7 +1335,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           setHistoryCursor(res.nextCursor);
         }
       } catch (err: unknown) {
-        setUndoError(err instanceof Error ? err.message : "Failed to undo usage.");
+        setUndoError(err instanceof Error ? err.message : errorCopy[undoable.kind]);
       } finally {
         setUndoingEventId(null);
       }
@@ -1271,7 +1343,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
     [undoingEventId, tab, historyItemId, loadFeed],
   );
 
-  const undoCallback = canEditInventory ? handleUndoUsage : undefined;
+  const undoCallback = canEditInventory ? handleUndoEvent : undefined;
 
   // Strip system-field-only ITEM_EDIT events before display. Without this, the
   // one-time parentItemId backfill on every legacy row floods the feed with
@@ -1356,7 +1428,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
             <FlatActivityFeed
               events={visibleEvents}
               onViewItemHistory={viewItemHistory}
-              onUndoUsage={undoCallback}
+              onUndoEvent={undoCallback}
               undoingEventId={undoingEventId}
             />
           )}
@@ -1443,7 +1515,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           {historySubTab === "events" && visibleHistoryEvents.length > 0 && (
             <FlatItemHistory
               events={visibleHistoryEvents}
-              onUndoUsage={undoCallback}
+              onUndoEvent={undoCallback}
               undoingEventId={undoingEventId}
             />
           )}

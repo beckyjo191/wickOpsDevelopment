@@ -63,8 +63,11 @@ export const enablePitr = async (tableName: string): Promise<void> => {
         PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true },
       }),
     );
-  } catch {
-    // best-effort — table is usable without PITR
+  } catch (err) {
+    // Best-effort: table is usable without PITR, but log loudly so a CloudWatch
+    // metric / log search can flag it. (We previously swallowed silently and
+    // Zack's prod inventory tables ended up without PITR for weeks.)
+    console.warn(`[storage] failed to enable PITR on ${tableName}`, err);
   }
 };
 
@@ -91,6 +94,7 @@ export const createOrgTableIfMissing = async (
       new CreateTableCommand({
         TableName: tableName,
         BillingMode: BillingMode.PAY_PER_REQUEST,
+        DeletionProtectionEnabled: true,
         AttributeDefinitions: [
           { AttributeName: "id", AttributeType: ScalarAttributeType.S },
           { AttributeName: "module", AttributeType: ScalarAttributeType.S },
@@ -143,6 +147,7 @@ export const createOrgPendingTableIfMissing = async (tableName: string): Promise
       new CreateTableCommand({
         TableName: tableName,
         BillingMode: BillingMode.PAY_PER_REQUEST,
+        DeletionProtectionEnabled: true,
         AttributeDefinitions: [
           { AttributeName: "id", AttributeType: ScalarAttributeType.S },
         ],
@@ -183,6 +188,7 @@ export const createOrgAuditTableIfMissing = async (tableName: string): Promise<{
       new CreateTableCommand({
         TableName: tableName,
         BillingMode: BillingMode.PAY_PER_REQUEST,
+        DeletionProtectionEnabled: true,
         AttributeDefinitions: [
           { AttributeName: "pk", AttributeType: ScalarAttributeType.S },
           { AttributeName: "sk", AttributeType: ScalarAttributeType.S },

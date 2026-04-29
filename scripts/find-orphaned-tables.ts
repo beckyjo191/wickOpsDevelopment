@@ -65,6 +65,10 @@ function sanitizeOrgIdForTableName(organizationId: string): string {
   );
 }
 
+// Keep in sync with TABLE_SUFFIXES in scripts/wipe-test-org.ts and the suffix
+// type in amplify/functions/inventoryApi/src/normalize.ts:buildOrgScopedTableName.
+const PER_ORG_TABLE_SUFFIXES = ["columns", "items", "pending", "auditlog", "restock-orders"];
+
 function buildExpectedTableNames(
   organizationId: string,
   namespace: string,
@@ -72,7 +76,7 @@ function buildExpectedTableNames(
   const safeOrg = sanitizeOrgIdForTableName(organizationId);
   const hash = createHash("sha256").update(organizationId).digest("hex").slice(0, 10);
   const base = `${INVENTORY_ORG_TABLE_PREFIX}-${namespace}-${safeOrg}-${hash}`;
-  return [`${base}-columns`, `${base}-items`, `${base}-pending`];
+  return PER_ORG_TABLE_SUFFIXES.map((suffix) => `${base}-${suffix}`);
 }
 
 async function listAllInventoryTables(client: DynamoDBClient): Promise<string[]> {

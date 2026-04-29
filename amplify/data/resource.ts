@@ -14,6 +14,11 @@ export const data = defineData({
     // Modules the org owner has activated from their plan's available pool.
     // null/absent = all plan-available modules enabled (backward-compat default).
     enabledModules: a.string().array(),
+    // Mirrors Stripe subscription.cancel_at_period_end so the UI can show a
+    // pending-cancellation countdown and userSubscriptionCheck can self-heal
+    // a missed customer.subscription.deleted webhook.
+    cancelAtPeriodEnd: a.boolean(),
+    currentPeriodEnd: a.integer(), // Unix seconds (matches Stripe)
   })
   .authorization((allow) => [allow.authenticated()]),
 

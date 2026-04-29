@@ -100,10 +100,14 @@ function getHelpForTab(activeTab: AuditTab): HelpSection {
 
             <h4>Undo</h4>
             <p>
-              Logged-usage rows have an <strong>Undo</strong> button on
-              the right. Clicking it restores the decremented quantity
-              and writes a <strong>USAGE_UNDO</strong> event. Already-
-              undone events hide the button.
+              Three event types can be reversed inline from this feed:
+              <strong> usage</strong> (restores the decremented qty),
+              <strong> retire</strong> (clears retire markers and restores
+              the qty), and <strong>column delete</strong> (recreates the
+              column — per-row values are preserved through the delete and
+              reappear). Each leaves a matching <em>undone</em> event
+              behind for the audit trail; already-undone events hide the
+              button.
             </p>
 
             <h4>Search</h4>

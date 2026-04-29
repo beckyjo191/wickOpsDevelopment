@@ -17,6 +17,20 @@ export const createBlankInventoryRow = (
   };
 };
 
+/** True when every value on the row is empty / zero / null — i.e. the row was
+ *  created (typically via Add Row) but never given content. Mirrors the
+ *  server-side `isAllDefaults` check that classifies a row as a blank-row
+ *  delete (silently dropped from the audit log). Used to gate the Discard
+ *  affordance: anything with content should be retired instead. */
+export const isDiscardableRow = (row: InventoryRow): boolean => {
+  const values = row.values ?? {};
+  for (const v of Object.values(values)) {
+    if (v === null || v === undefined || v === "" || v === 0) continue;
+    return false;
+  }
+  return true;
+};
+
 export const buildRowsSignature = (rows: InventoryRow[]): string =>
   JSON.stringify(
     rows.map((row) => ({

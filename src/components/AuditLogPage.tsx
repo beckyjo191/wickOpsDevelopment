@@ -27,7 +27,7 @@ import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
 import { DaySection } from "../lib/dayGroups";
 import { dayGroupLabel } from "../lib/dayGroupLabel";
 
-type AuditTab = "feed" | "analytics" | "item-history" | "pending";
+export type AuditTab = "feed" | "analytics" | "item-history" | "pending";
 
 interface AuditLogPageProps {
   canManageColumns: boolean;
@@ -37,6 +37,9 @@ interface AuditLogPageProps {
    *  Passes the item name rather than id because we filter inventory via
    *  search term — robust across lots + renames. */
   onOpenInInventory?: (itemName: string) => void;
+  /** Notifies parent of the current sub-tab so subnav-level UI (e.g. tab-aware
+   *  help button) can react. Fires on mount and on every change. */
+  onTabChange?: (tab: AuditTab) => void;
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -1070,8 +1073,13 @@ function AnalyticsDashboard({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInInventory }: AuditLogPageProps) {
+export function AuditLogPage({ canManageColumns, canReviewSubmissions, onOpenInInventory, onTabChange }: AuditLogPageProps) {
   const [tab, setTab] = useState<AuditTab>("feed");
+
+  // Notify parent of active sub-tab so subnav-level help can react.
+  useEffect(() => {
+    onTabChange?.(tab);
+  }, [tab, onTabChange]);
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

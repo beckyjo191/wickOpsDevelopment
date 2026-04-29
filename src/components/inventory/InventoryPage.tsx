@@ -37,6 +37,7 @@ export function InventoryPage({
   selectedLocation,
   onLocationChange,
   onSaveFnChange,
+  onActiveTabChange,
 }: InventoryPageProps) {
   const { isMobile } = useMobileDetect();
 
@@ -109,6 +110,11 @@ export function InventoryPage({
     editingOriginalIndexRef: data.editingOriginalIndexRef,
     sortEpoch: data.sortEpoch,
   });
+
+  // ── Notify parent of active tab so subnav-level UI can react ──────────────
+  useEffect(() => {
+    onActiveTabChange?.(filters.activeTab);
+  }, [filters.activeTab, onActiveTabChange]);
   filtersRef.current = filters;
 
   // ── Auto-paginate + scroll to newly selected row (e.g. after Add Row) ─────

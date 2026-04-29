@@ -26,6 +26,9 @@ export interface InventoryPageProps {
   /** Called with the async save function when the component mounts, null when it unmounts.
    *  Lets a parent await a save before navigating away (avoids race with stale reads). */
   onSaveFnChange?: (fn: (() => Promise<void>) | null) => void;
+  /** Notifies parent of the current filter tab so subnav-level UI (e.g. tab-aware
+   *  help button) can react. Fires on mount and on every change. */
+  onActiveTabChange?: (tab: ActiveTab) => void;
 }
 
 export type CsvImportDialogState = {

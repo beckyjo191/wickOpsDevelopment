@@ -10,7 +10,11 @@ import { InventoryUsagePage } from "./components/InventoryUsagePage";
 import { OnboardingPage } from "./components/OnboardingPage";
 import { InventorySubNav } from "./components/InventorySubNav";
 import { AuditLogPage } from "./components/AuditLogPage";
+import type { AuditTab } from "./components/AuditLogPage";
 import { OrdersPage, OrdersHelp } from "./components/OrdersPage";
+import { InventoryHelp } from "./components/inventory/InventoryHelp";
+import { DashboardHelp } from "./components/DashboardHelp";
+import { ActivityHelp } from "./components/ActivityHelp";
 import { authFetch } from "./lib/authFetch";
 import {
   applyThemePreference,
@@ -97,6 +101,13 @@ export default function App() {
 
   // Holds the async save function registered by InventoryPage on mount.
   const inventorySaveFnRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Mirrors InventoryPage's active filter tab so the subnav-level help button
+  // can show tab-aware copy. Updated via the onActiveTabChange callback.
+  const [inventoryActiveTab, setInventoryActiveTab] = useState<ActiveTab>("all");
+
+  // Mirrors AuditLogPage's active sub-tab for the same reason.
+  const [activityActiveTab, setActivityActiveTab] = useState<AuditTab>("feed");
 
   // Navigates away from inventory only after flushing any pending save.
   // Prevents race conditions where the destination page fetches stale data.
@@ -483,6 +494,7 @@ export default function App() {
         selectedLocation={selectedLocation}
         onLocationChange={onLocationChange}
         onSaveFnChange={(fn) => { inventorySaveFnRef.current = fn; }}
+        onActiveTabChange={setInventoryActiveTab}
       />
     ) : (
       <DashboardPage
@@ -528,6 +540,7 @@ export default function App() {
           setInventoryInitialSearch(itemName);
           setView("inventory");
         }}
+        onTabChange={setActivityActiveTab}
       />
     ) : (
       <DashboardPage
@@ -606,7 +619,17 @@ export default function App() {
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
         onNavigate={(v) => void navigateTo(v as AppView)}
-        rightSlot={view === "orders" ? <OrdersHelp /> : undefined}
+        rightSlot={
+          view === "orders"
+            ? <OrdersHelp />
+            : view === "inventory"
+              ? <InventoryHelp activeTab={inventoryActiveTab} />
+              : view === "activity"
+                ? <ActivityHelp activeTab={activityActiveTab} />
+                : view === "dashboard"
+                  ? <DashboardHelp />
+                  : undefined
+        }
       />
       {content}
     </section>

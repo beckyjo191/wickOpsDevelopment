@@ -514,6 +514,7 @@ const suggestVendorNameFromUrl = (url: string): string => {
  *  When `value` is set, the input renders as readonly showing the selected
  *  vendor with an × clear button — mirrors the Log Usage item autocomplete. */
 export function VendorSelect({
+  inputId,
   value,
   availableVendors,
   onChange,
@@ -523,6 +524,7 @@ export function VendorSelect({
   ariaLabel,
   placeholder,
 }: {
+  inputId?: string;
   value: string;
   availableVendors: string[];
   onChange: (next: string) => void;
@@ -640,6 +642,7 @@ export function VendorSelect({
       <div className="usage-autocomplete-input-wrap">
         <input
           ref={inputRef}
+          id={inputId}
           type="text"
           className="usage-autocomplete-input"
           value={value || search}

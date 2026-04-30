@@ -639,7 +639,7 @@ function AppInner() {
           view === "orders"
             ? <OrdersHelp />
             : view === "inventory"
-              ? <InventoryHelp activeTab={inventoryActiveTab} />
+              ? <InventoryHelp activeTab={inventoryActiveTab} canEditInventory={canEditInventory} />
               : view === "activity"
                 ? <ActivityHelp activeTab={activityActiveTab} />
                 : view === "dashboard"

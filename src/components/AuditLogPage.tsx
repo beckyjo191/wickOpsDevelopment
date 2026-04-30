@@ -925,6 +925,7 @@ const REASON_LABELS: Record<string, string> = {
   damaged: "Damaged",
   lost: "Lost",
   recalled: "Recalled",
+  discontinued: "Discontinued",
   donated: "Donated",
   unknown: "Unknown",
 };

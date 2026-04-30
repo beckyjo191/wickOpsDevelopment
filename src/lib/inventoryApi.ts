@@ -230,7 +230,18 @@ export type RestockMetadata = {
   location?: string;
 };
 
-export type RetireReason = "expired" | "damaged" | "lost" | "recalled";
+export type RetireReason = "expired" | "damaged" | "lost" | "recalled" | "discontinued";
+
+/** Human-friendly labels for each RetireReason. Keep in sync with backend
+ *  types.ts. Used by the Remove dialog and any analytics surface that renders
+ *  reason names. */
+export const RETIRE_REASON_LABEL: Record<RetireReason, string> = {
+  expired: "Expired",
+  damaged: "Damaged or broken",
+  lost: "Lost — can't find it",
+  recalled: "Recalled by manufacturer",
+  discontinued: "We don't carry this anymore",
+};
 
 export type RetireMetadata = {
   reason: RetireReason;

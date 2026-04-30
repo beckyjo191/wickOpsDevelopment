@@ -112,7 +112,11 @@ export function useInventoryData({
   const [newLocationName, setNewLocationName] = useState("");
   const [addLocationError, setAddLocationError] = useState<string | null>(null);
   const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
-  const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
+  /** Open-state for the unified Remove dialog. The rowIds are captured at
+   *  the moment of opening so subsequent selection changes don't shift the
+   *  target (matters for the mobile per-row case where selectedRowIds may
+   *  not even reflect the row that triggered the dialog). Null = closed. */
+  const [removeTarget, setRemoveTarget] = useState<{ rowIds: string[] } | null>(null);
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
 
   // ── Refs ──
@@ -633,25 +637,14 @@ export function useInventoryData({
     }
   };
 
-  const onRequestDeleteSelectedRows = () => {
-    if (!canEditTable || selectedRowIds.size === 0) return;
-    setPendingDeleteRows(true);
-  };
-
-  /** Per-row delete: scope selection to exactly this row, then open the
-   *  confirm. Avoids the toggle-and-bulk-delete pattern which mis-fires when
-   *  the user already had other rows selected. */
-  const onRequestDeleteRow = (rowId: string) => {
-    if (!canEditTable) return;
-    setSelectedRowIds(new Set([rowId]));
-    setPendingDeleteRows(true);
-  };
-
-  const onConfirmDeleteSelectedRows = () => {
-    setPendingDeleteRows(false);
-    if (!canEditTable || selectedRowIds.size === 0) return;
+  /**
+   * Hard-delete the given rows. Used by the unified Remove dialog when the
+   * user picks "Created by mistake". Server-side guard still enforces
+   * qty == 0; this is the client-side optimistic update.
+   */
+  const performDeleteRows = (idsToDelete: Set<string>) => {
+    if (!canEditTable || idsToDelete.size === 0) return;
     pushUndoSnapshot();
-    const idsToDelete = new Set(selectedRowIds);
     const persistedIdsToDelete = rows
       .filter((row) => idsToDelete.has(row.id) && Boolean(row.createdAt))
       .map((row) => row.id);
@@ -715,6 +708,43 @@ export function useInventoryData({
       return nextRows;
     });
     setSelectedRowIds(new Set());
+  };
+
+  // ── Unified Remove flow ────────────────────────────────────────────────
+  // The dialog asks "what happened?" and routes to either retire (with
+  // reason + optional notes) or hard delete. Capture rowIds at open time so
+  // the action targets exactly the rows the user clicked, even if the
+  // global selection changes underneath us before the user confirms.
+  const onRequestRemoveRow = (rowId: string) => {
+    if (!canEditTable) return;
+    setRemoveTarget({ rowIds: [rowId] });
+  };
+
+  const onRequestRemoveSelectedRows = () => {
+    if (!canEditTable || selectedRowIds.size === 0) return;
+    setRemoveTarget({ rowIds: Array.from(selectedRowIds) });
+  };
+
+  const onCancelRemove = () => setRemoveTarget(null);
+
+  const onConfirmRemove = async (
+    choice: import("../RemoveItemDialog").RemoveChoice,
+  ) => {
+    const target = removeTarget;
+    setRemoveTarget(null);
+    if (!target || !canEditTable || target.rowIds.length === 0) return;
+
+    if (choice.kind === "delete") {
+      performDeleteRows(new Set(target.rowIds));
+      return;
+    }
+
+    // Retire path: reuse the existing onRetireRows handler so the qty-zero
+    // stub logic, audit metadata, and reorder-list bookkeeping stay in one
+    // place. Clear any selection used to populate the target so the
+    // toolbar's "N selected" affordance resets afterward.
+    await onRetireRows(target.rowIds, choice.reason, choice.notes);
+    if (selectedRowIds.size > 0) setSelectedRowIds(new Set());
   };
 
   const onMoveSelectedRows = (targetLocation: string) => {
@@ -1314,14 +1344,14 @@ export function useInventoryData({
   // (passed through from filters hook locationOptions)
 
   // ── Retire rows ──
-  // Retirement is a qty-to-zero event with a reason code (expired/damaged/lost/recalled).
+  // Retirement is a qty-to-zero event with a reason code (see RetireReason).
   // The row is preserved in storage so retirement history survives for loss
   // analytics and the Activity audit trail, but it's hidden from the inventory
   // grid and the Reorder tab (see useInventoryFilters + ReorderTab). The reason
   // is captured in an ITEM_RETIRE audit event that drives loss analytics.
   const onRetireRows = async (
     rowIds: string[],
-    reason: "expired" | "damaged" | "lost" | "recalled" = "expired",
+    reason: import("../../../lib/inventoryApi").RetireReason = "expired",
     notes?: string,
   ) => {
     if (!canEditInventory || rowIds.length === 0) return;
@@ -1513,9 +1543,12 @@ export function useInventoryData({
     // Vendors
     registeredVendors,
     setRegisteredVendors,
-    // Delete
-    pendingDeleteRows,
-    setPendingDeleteRows,
+    // Remove (unified dialog: routes to retire or delete based on reason)
+    removeTarget,
+    onRequestRemoveRow,
+    onRequestRemoveSelectedRows,
+    onConfirmRemove,
+    onCancelRemove,
     // Refs
     importInputRef,
     selectAllCheckboxRef,
@@ -1545,9 +1578,6 @@ export function useInventoryData({
     onToggleSelectAllFiltered,
     onCopySelectedRow,
     onPasteToSelectedRow,
-    onRequestDeleteSelectedRows,
-    onRequestDeleteRow,
-    onConfirmDeleteSelectedRows,
     onMoveSelectedRows,
     onRetireRows,
     onCellChange,

@@ -75,6 +75,7 @@ type AutocompleteOption = {
 };
 
 function ItemAutocomplete({
+  inputId,
   options,
   value,
   selectedId,
@@ -83,7 +84,10 @@ function ItemAutocomplete({
   onClear,
   disabled,
   placeholder,
+  ariaInvalid,
+  ariaDescribedBy,
 }: {
+  inputId?: string;
   options: AutocompleteOption[];
   value: string;
   selectedId: string;
@@ -92,6 +96,8 @@ function ItemAutocomplete({
   onClear: () => void;
   disabled: boolean;
   placeholder: string;
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
@@ -163,6 +169,7 @@ function ItemAutocomplete({
       <div className="usage-autocomplete-input-wrap">
         <input
           ref={inputRef}
+          id={inputId}
           type="text"
           className="usage-autocomplete-input"
           value={selectedId ? `${options.find((o) => o.id === selectedId)?.name ?? value}` : value}
@@ -180,6 +187,8 @@ function ItemAutocomplete({
           role="combobox"
           aria-expanded={showDropdown}
           aria-autocomplete="list"
+          aria-invalid={ariaInvalid || undefined}
+          aria-describedby={ariaDescribedBy}
           autoComplete="off"
         />
         {(selectedId || value) && (
@@ -233,19 +242,26 @@ function ItemAutocomplete({
 /* ── Quantity Input ────────────────────────────────────────────────────── */
 
 function QtyStepper({
+  inputId,
   value,
   max,
   onChange,
   disabled,
+  ariaInvalid,
+  ariaDescribedBy,
 }: {
+  inputId?: string;
   value: string;
   max: number;
   onChange: (v: string) => void;
   disabled: boolean;
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
 }) {
   return (
     <div className="usage-qty-stepper">
       <input
+        id={inputId}
         type="number"
         className="usage-qty-input"
         inputMode="numeric"
@@ -258,6 +274,8 @@ function QtyStepper({
         onClick={(e) => e.currentTarget.select()}
         onBlur={(e) => { if (e.currentTarget.value === "") onChange("0"); }}
         disabled={disabled}
+        aria-invalid={ariaInvalid || undefined}
+        aria-describedby={ariaDescribedBy}
       />
     </div>
   );
@@ -265,7 +283,17 @@ function QtyStepper({
 
 /* ── Main component ────────────────────────────────────────────────────── */
 
-export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: string | null }) {
+export function InventoryUsagePage({
+  selectedLocation,
+  canEditInventory = false,
+}: {
+  selectedLocation?: string | null;
+  /** Whether the current user can undo events from the Activity feed. The
+   *  Activity-feed Undo button is gated by edit privileges, so the page's
+   *  instructional copy only mentions Undo when the user can actually use it.
+   *  Viewers can still submit usage; they just can't reverse it themselves. */
+  canEditInventory?: boolean;
+}) {
   const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -595,7 +623,9 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
       setGroups([createUsageGroup()]);
       const itemList = submittedLines.join(", ");
       toast.success(
-        `Logged: ${itemList} — quantities updated. Undo from the Activity feed if needed.`,
+        canEditInventory
+          ? `Logged: ${itemList} — quantities updated. Undo from the Activity feed if needed.`
+          : `Logged: ${itemList} — quantities updated.`,
       );
       // Re-fetch inventory so the in-form quantities reflect the new totals.
       void refreshInventoryRows({ silent: true });
@@ -631,13 +661,18 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
             {showLocationPicker && <>Select a <strong>location</strong>, then </>}
             Search for an item, enter the quantity used, and hit <strong>Submit Usage</strong>.
             {" "}Need to log more? Tap <strong>+ Add Item</strong> to add another line.
-            {" "}Submitting decrements inventory immediately — if you make a mistake, the
-            event has an <strong>Undo</strong> button in the Activity feed.
+            {" "}Submitting decrements inventory immediately
+            {canEditInventory ? (
+              <> — if you make a mistake, the event has an
+                <strong> Undo</strong> button in the Activity feed.</>
+            ) : (
+              <>. Ask an editor or admin if you need to reverse a submission.</>
+            )}
           </p>
         </header>
 
         {formError && (
-          <div className="usage-inline-error usage-form-error" role="alert">{formError}</div>
+          <p className="field-error" role="alert">{formError}</p>
         )}
 
         <div className="usage-form-list">
@@ -648,15 +683,17 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                 {showLocationPicker && (
                   <div className="usage-location-wrap">
                     <div className="usage-location-field">
-                      <label className="usage-field-label" htmlFor={`usage-location-select-${group.id}`}>
+                      <label className="field-label" htmlFor={`usage-location-select-${group.id}`}>
                         Location
                       </label>
                       <select
                         id={`usage-location-select-${group.id}`}
-                        className={`usage-location-select${group.locationError ? " usage-input--error" : ""}`}
+                        className={`usage-location-select${group.locationError ? " field--error" : ""}`}
                         value={group.location}
                         onChange={(event) => updateGroup(group.id, { location: event.target.value, locationError: "" })}
                         disabled={submitting}
+                        aria-invalid={!!group.locationError || undefined}
+                        aria-describedby={group.locationError ? `usage-location-error-${group.id}` : undefined}
                       >
                         <option value="">Select location...</option>
                         {locationValues.map((option) => (
@@ -666,7 +703,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                         ))}
                       </select>
                       {group.locationError && (
-                        <span className="usage-inline-error">{group.locationError}</span>
+                        <p id={`usage-location-error-${group.id}`} className="field-error">{group.locationError}</p>
                       )}
                     </div>
                     {groups.length > 1 && (
@@ -691,8 +728,9 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                       <div className={`usage-entry${entry.error ? " usage-entry--error" : ""}`} key={entry.id}>
                         <div className="usage-entry-main">
                           <div className="usage-entry-item">
-                            <label className="usage-field-label">Item</label>
+                            <label className="field-label" htmlFor={`usage-item-${group.id}-${entry.id}`}>Item</label>
                             <ItemAutocomplete
+                              inputId={`usage-item-${group.id}-${entry.id}`}
                               options={itemOptions}
                               value={entry.itemSearch}
                               selectedId={entry.itemId}
@@ -707,15 +745,20 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                               }
                               disabled={submitting || (showLocationPicker ? !group.location : false)}
                               placeholder="Search items..."
+                              ariaInvalid={!!entry.error}
+                              ariaDescribedBy={entry.error ? `usage-entry-error-${group.id}-${entry.id}` : undefined}
                             />
                           </div>
                           <div className="usage-entry-qty">
-                            <label className="usage-field-label">Qty Used</label>
+                            <label className="field-label" htmlFor={`usage-qty-${group.id}-${entry.id}`}>Qty Used</label>
                             <QtyStepper
+                              inputId={`usage-qty-${group.id}-${entry.id}`}
                               value={entry.quantityUsed}
                               max={maxQty}
                               onChange={(v) => updateEntry(group.id, entry.id, { quantityUsed: v, error: "" })}
                               disabled={submitting}
+                              ariaInvalid={!!entry.error}
+                              ariaDescribedBy={entry.error ? `usage-entry-error-${group.id}-${entry.id}` : undefined}
                             />
                           </div>
                           {group.entries.length > 1 && (
@@ -792,7 +835,7 @@ export function InventoryUsagePage({ selectedLocation }: { selectedLocation?: st
                         )}
 
                         {entry.error && (
-                          <span className="usage-inline-error">{entry.error}</span>
+                          <p id={`usage-entry-error-${group.id}-${entry.id}`} className="field-error">{entry.error}</p>
                         )}
                       </div>
                     );

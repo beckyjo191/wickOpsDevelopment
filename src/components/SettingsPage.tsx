@@ -1006,9 +1006,10 @@ export function SettingsPage({
             <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
           </summary>
           <div className="settings-field-group">
-            <label className="settings-field-label">Display Name</label>
+            <label className="field-label" htmlFor="settings-display-name">Display Name</label>
             <div className="settings-field-row">
               <input
+                id="settings-display-name"
                 className={`field settings-profile-field${!editingDisplayName ? " settings-profile-field-locked" : ""}`}
                 type="text"
                 placeholder="Your name"
@@ -1048,9 +1049,10 @@ export function SettingsPage({
           </div>
 
           <div className="settings-field-group">
-            <label className="settings-field-label">Email</label>
+            <label className="field-label" htmlFor="settings-email">Email</label>
             <div className="settings-field-row">
               <input
+                id="settings-email"
                 className={`field settings-profile-field${!editingEmail ? " settings-profile-field-locked" : ""}`}
                 type="email"
                 placeholder="your@email.com"
@@ -1408,11 +1410,15 @@ export function SettingsPage({
             <>
               <div className="settings-field-row" style={{ marginBottom: locationError ? "0.25rem" : "0.5rem" }}>
                 <input
+                  id="settings-new-location"
                   className={`field${locationError ? " field--error" : ""}`}
                   placeholder="New location name"
                   value={newLocationName}
                   onChange={(e) => { setNewLocationName(e.target.value); setLocationError(null); }}
                   onKeyDown={(e) => { if (e.key === "Enter") void onAddLocation(); }}
+                  aria-invalid={!!locationError || undefined}
+                  aria-describedby={locationError ? "settings-new-location-error" : undefined}
+                  aria-label="New location name"
                 />
                 <button
                   className="button button-secondary"
@@ -1423,7 +1429,7 @@ export function SettingsPage({
                 </button>
               </div>
               {locationError ? (
-                <p className="settings-field-error">{locationError}</p>
+                <p id="settings-new-location-error" className="field-error">{locationError}</p>
               ) : null}
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading locations...</div> : null}
@@ -1444,6 +1450,9 @@ export function SettingsPage({
                               onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc); if (e.key === "Escape") { setEditingLocationName(null); setRenameLocationError(null); } }}
                               disabled={savingLocation}
                               autoFocus
+                              aria-invalid={!!renameLocationError || undefined}
+                              aria-describedby={renameLocationError ? `settings-rename-location-error-${loc}` : undefined}
+                              aria-label={`Rename ${loc}`}
                             />
                             <button
                               className="button button-secondary settings-inline-action"
@@ -1461,7 +1470,7 @@ export function SettingsPage({
                               Cancel
                             </button>
                             {renameLocationError ? (
-                              <span className="settings-field-error" style={{ width: "100%" }}>{renameLocationError}</span>
+                              <p id={`settings-rename-location-error-${loc}`} className="field-error" style={{ width: "100%" }}>{renameLocationError}</p>
                             ) : null}
                           </span>
                         ) : (
@@ -1541,11 +1550,15 @@ export function SettingsPage({
             <>
               <div className="settings-field-row" style={{ marginBottom: vendorError ? "0.25rem" : "0.5rem" }}>
                 <input
+                  id="settings-new-vendor"
                   className={`field${vendorError ? " field--error" : ""}`}
                   placeholder="New vendor name"
                   value={newVendorName}
                   onChange={(e) => { setNewVendorName(e.target.value); setVendorError(null); }}
                   onKeyDown={(e) => { if (e.key === "Enter") void onAddVendor(); }}
+                  aria-invalid={!!vendorError || undefined}
+                  aria-describedby={vendorError ? "settings-new-vendor-error" : undefined}
+                  aria-label="New vendor name"
                 />
                 <button
                   className="button button-secondary"
@@ -1556,7 +1569,7 @@ export function SettingsPage({
                 </button>
               </div>
               {vendorError ? (
-                <p className="settings-field-error">{vendorError}</p>
+                <p id="settings-new-vendor-error" className="field-error">{vendorError}</p>
               ) : null}
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading vendors...</div> : null}
@@ -1577,6 +1590,9 @@ export function SettingsPage({
                               onKeyDown={(e) => { if (e.key === "Enter") void onRenameVendor(vendor); if (e.key === "Escape") { setEditingVendorName(null); setRenameVendorError(null); } }}
                               disabled={savingVendor}
                               autoFocus
+                              aria-invalid={!!renameVendorError || undefined}
+                              aria-describedby={renameVendorError ? `settings-rename-vendor-error-${vendor}` : undefined}
+                              aria-label={`Rename ${vendor}`}
                             />
                             <button
                               className="button button-secondary settings-inline-action"
@@ -1594,7 +1610,7 @@ export function SettingsPage({
                               Cancel
                             </button>
                             {renameVendorError ? (
-                              <span className="settings-field-error" style={{ width: "100%" }}>{renameVendorError}</span>
+                              <p id={`settings-rename-vendor-error-${vendor}`} className="field-error" style={{ width: "100%" }}>{renameVendorError}</p>
                             ) : null}
                           </span>
                         ) : (
@@ -1791,7 +1807,7 @@ export function SettingsPage({
             Have a question, bug report, or feature request? Send us a message and we'll get back to you.
           </p>
           <div className="settings-field-group">
-            <label className="settings-field-label" htmlFor="contact-subject">Subject</label>
+            <label className="field-label" htmlFor="contact-subject">Subject</label>
             <input
               id="contact-subject"
               className="field"
@@ -1802,7 +1818,7 @@ export function SettingsPage({
             />
           </div>
           <div className="settings-field-group">
-            <label className="settings-field-label" htmlFor="contact-message">Message</label>
+            <label className="field-label" htmlFor="contact-message">Message</label>
             <textarea
               id="contact-message"
               className="settings-contact-textarea"

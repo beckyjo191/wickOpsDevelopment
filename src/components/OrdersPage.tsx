@@ -851,6 +851,7 @@ export function OrdersHelp() {
  *  setting a selected state. The bottom of the dropdown always offers a
  *  "+ Add as new item" sentinel for freeform entry. */
 function OrderItemAutocomplete({
+  inputId,
   inventoryRows,
   excludeNames,
   onPickExisting,
@@ -861,6 +862,7 @@ function OrderItemAutocomplete({
   disabled,
   placeholder,
 }: {
+  inputId?: string;
   inventoryRows: InventoryRow[];
   /** Lowercased item names already in the cart. Used to filter ALL lots of
    *  the same item out of the dropdown — adding "1ml syringe" once should
@@ -988,6 +990,7 @@ function OrderItemAutocomplete({
       <div className="usage-autocomplete">
         <div className="usage-autocomplete-input-wrap">
           <input
+            id={inputId}
             type="text"
             className="usage-autocomplete-input"
             value={value}
@@ -1019,6 +1022,7 @@ function OrderItemAutocomplete({
       <div className="usage-autocomplete-input-wrap">
         <input
           ref={inputRef}
+          id={inputId}
           type="text"
           className="usage-autocomplete-input"
           value={search}
@@ -1247,9 +1251,10 @@ function ComposeOrderPanel({
         </p>
       </div>
         <div className="manual-order-fields">
-          <label className="manual-order-field">
-            <span>Vendor</span>
+          <div className="manual-order-field">
+            <label className="field-label" htmlFor="manual-order-vendor">Vendor</label>
             <VendorSelect
+              inputId="manual-order-vendor"
               value={vendor}
               availableVendors={availableVendors}
               onChange={setVendor}
@@ -1258,10 +1263,11 @@ function ComposeOrderPanel({
               ariaLabel="Vendor"
               placeholder="Choose or type to add new"
             />
-          </label>
-          <label className="manual-order-field">
-            <span>Notes (optional)</span>
+          </div>
+          <div className="manual-order-field">
+            <label className="field-label" htmlFor="manual-order-notes">Notes (optional)</label>
             <input
+              id="manual-order-notes"
               className="field"
               type="text"
               placeholder="e.g. Costco run — Apr 27"
@@ -1269,7 +1275,7 @@ function ComposeOrderPanel({
               onChange={(e) => setNotes(e.target.value)}
               disabled={submitting}
             />
-          </label>
+          </div>
         </div>
 
         <div className="usage-entries compose-order-lines">
@@ -1279,8 +1285,9 @@ function ComposeOrderPanel({
               <div className="usage-entry compose-order-line" key={idx}>
                 <div className="usage-entry-main compose-order-line-main">
                   <div className="usage-entry-item">
-                    <label className="usage-field-label">Item</label>
+                    <label className="field-label" htmlFor={`manual-order-item-${idx}`}>Item</label>
                     <OrderItemAutocomplete
+                      inputId={`manual-order-item-${idx}`}
                       inventoryRows={inventoryRows}
                       excludeNames={alreadyInCartNames}
                       value={filled ? l.itemName : undefined}
@@ -1293,8 +1300,9 @@ function ComposeOrderPanel({
                     />
                   </div>
                   <div className="usage-entry-qty compose-order-line-qty">
-                    <label className="usage-field-label">Qty</label>
+                    <label className="field-label" htmlFor={`manual-order-qty-${idx}`}>Qty</label>
                     <input
+                      id={`manual-order-qty-${idx}`}
                       className="field compose-order-line-qty-input"
                       type="number"
                       min="1"
@@ -1304,7 +1312,6 @@ function ComposeOrderPanel({
                       onClick={(e) => e.currentTarget.select()}
                       onBlur={(e) => { if (e.currentTarget.value === "") updateLine(idx, { qty: "0" }); }}
                       disabled={submitting || !filled}
-                      aria-label="Quantity"
                     />
                   </div>
                   {(filled || lines.length > 1) && (
@@ -1339,9 +1346,10 @@ function ComposeOrderPanel({
                 {filled && l.expanded ? (
                   <div className="manual-order-line-details">
                     {!l.itemId ? (
-                      <label className="manual-order-detail-field">
-                        <span>Min quantity</span>
+                      <div className="manual-order-detail-field">
+                        <label className="field-label" htmlFor={`manual-order-min-${idx}`}>Min quantity</label>
                         <input
+                          id={`manual-order-min-${idx}`}
                           className="field"
                           type="number"
                           min="0"
@@ -1351,11 +1359,12 @@ function ComposeOrderPanel({
                           onFocus={(e) => e.currentTarget.select()}
                           disabled={submitting}
                         />
-                      </label>
+                      </div>
                     ) : null}
-                    <label className="manual-order-detail-field manual-order-detail-field--wide">
-                      <span>Product URL</span>
+                    <div className="manual-order-detail-field manual-order-detail-field--wide">
+                      <label className="field-label" htmlFor={`manual-order-url-${idx}`}>Product URL</label>
                       <input
+                        id={`manual-order-url-${idx}`}
                         className="field"
                         type="text"
                         placeholder="https://..."
@@ -1363,7 +1372,7 @@ function ComposeOrderPanel({
                         onChange={(e) => updateLine(idx, { productUrl: e.target.value })}
                         disabled={submitting}
                       />
-                    </label>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1390,7 +1399,7 @@ function ComposeOrderPanel({
           <span>Already received (close immediately and add to inventory)</span>
         </label>
 
-        {error ? <p className="manual-order-error">{error}</p> : null}
+        {error ? <p className="field-error" role="alert">{error}</p> : null}
 
         <div className="compose-order-actions">
           <button
@@ -1958,24 +1967,26 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                             aria-label="Filter closed orders by date"
                           >
                             <div className="closed-orders-daterange-fields">
-                              <label className="closed-orders-daterange-field">
-                                <span>From</span>
+                              <div className="closed-orders-daterange-field">
+                                <label className="field-label" htmlFor="closed-orders-date-from">From</label>
                                 <input
+                                  id="closed-orders-date-from"
                                   className="field"
                                   type="date"
                                   value={closedFromDate}
                                   onChange={(e) => setClosedFromDate(e.target.value)}
                                 />
-                              </label>
-                              <label className="closed-orders-daterange-field">
-                                <span>To</span>
+                              </div>
+                              <div className="closed-orders-daterange-field">
+                                <label className="field-label" htmlFor="closed-orders-date-to">To</label>
                                 <input
+                                  id="closed-orders-date-to"
                                   className="field"
                                   type="date"
                                   value={closedToDate}
                                   onChange={(e) => setClosedToDate(e.target.value)}
                                 />
-                              </label>
+                              </div>
                             </div>
                             {(closedFromDate || closedToDate) && (
                               <button

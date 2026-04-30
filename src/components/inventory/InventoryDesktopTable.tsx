@@ -2,7 +2,6 @@ import type { MouseEvent as ReactMouseEvent } from "react";
 import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
-import { isDeletableRow } from "./inventoryUtils";
 
 export type InventoryDesktopTableProps = {
   paginatedRows: { row: InventoryRow; index: number }[];
@@ -42,10 +41,11 @@ export type InventoryDesktopTableProps = {
   setEditingLinkCell: (cell: { rowId: string; columnKey: string } | null) => void;
   setEditingDateCell: (cell: { rowId: string; columnKey: string } | null) => void;
   activeTab?: ActiveTab;
-  onRetireRow?: (rowId: string) => void;
-  /** Selects the row then triggers the bulk-delete confirm flow. Mirrors the
-   *  mobile per-row delete path. */
-  onDeleteRow?: (rowId: string) => void;
+  /** Opens the unified Remove dialog scoped to this single row. The dialog
+   *  asks the user "what happened?" and routes to retire-with-reason or
+   *  hard-delete based on the answer — replacing the previous split between
+   *  per-row Retire (Expired tab only) and per-row Delete (qty-zero only). */
+  onRemoveRow?: (rowId: string) => void;
 };
 
 /**
@@ -82,12 +82,14 @@ export function InventoryDesktopTable({
   isEditingDateCell,
   setEditingLinkCell,
   setEditingDateCell,
-  activeTab,
-  onRetireRow,
-  onDeleteRow,
+  activeTab: _activeTab,
+  onRemoveRow,
 }: InventoryDesktopTableProps) {
-  const showRetire = activeTab === "expired" && !!onRetireRow;
-  const showDelete = canEditTable && !!onDeleteRow;
+  // Single Remove column replaces the prior separate Retire (Expired tab only)
+  // and Delete (qty-zero only) columns. Available on every tab so the user
+  // can record a loss event against any row regardless of state — the dialog
+  // handles routing.
+  const showRemove = canEditTable && !!onRemoveRow;
   return (
     <div className="inventory-table-wrap">
       <table className="inventory-table">
@@ -106,7 +108,6 @@ export function InventoryDesktopTable({
                 />
               </th>
             ) : null}
-            {showRetire ? <th className="inventory-col-retire" /> : null}
             {visibleColumns.map((column) =>
               column.key === "category" ? (
                 <th
@@ -175,7 +176,7 @@ export function InventoryDesktopTable({
                 </th>
               ),
             )}
-            {showDelete ? <th className="inventory-col-delete" aria-label="Delete" /> : null}
+            {showRemove ? <th className="inventory-col-delete" aria-label="Remove" /> : null}
           </tr>
         </thead>
         <tbody>
@@ -197,18 +198,6 @@ export function InventoryDesktopTable({
                     disabled={!canEditTable}
                     aria-label={`Select row ${rowIndex + 1}`}
                   />
-                </td>
-              ) : null}
-              {showRetire ? (
-                <td className="inventory-col-retire" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="inventory-retire-btn"
-                    onClick={() => onRetireRow!(row.id)}
-                    title="Retire this expired item"
-                  >
-                    Retire
-                  </button>
                 </td>
               ) : null}
               {visibleColumns.map((column) => {
@@ -256,19 +245,17 @@ export function InventoryDesktopTable({
                 </td>
                 );
               })}
-              {showDelete ? (
+              {showRemove ? (
                 <td className="inventory-col-delete" onClick={(e) => e.stopPropagation()}>
-                  {isDeletableRow(row) ? (
-                    <button
-                      type="button"
-                      className="inventory-row-delete-btn"
-                      onClick={() => onDeleteRow!(row.id)}
-                      title="Delete this item"
-                      aria-label="Delete row"
-                    >
-                      <Trash2 size={14} aria-hidden="true" />
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    className="inventory-row-delete-btn"
+                    onClick={() => onRemoveRow!(row.id)}
+                    title="Remove this item"
+                    aria-label="Remove row"
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
                 </td>
               ) : null}
             </tr>

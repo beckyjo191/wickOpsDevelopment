@@ -6,7 +6,7 @@ type HelpSection = {
   body: React.ReactNode;
 };
 
-function getHelpForTab(activeTab: ActiveTab): HelpSection {
+function getHelpForTab(activeTab: ActiveTab, canEditInventory: boolean): HelpSection {
   switch (activeTab) {
     case "expired":
       return {
@@ -22,12 +22,14 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
             <ul>
               <li>
                 <strong>Retire All Expired</strong> (top of the list) clears
-                every expired row in this scope in one click. Retired rows
-                move out of inventory and into the Activity log.
+                every expired row in this scope in one click — recorded as
+                expired loss.
               </li>
               <li>
-                Retire individual rows from the row's action menu if you only
-                want to clear some.
+                Use the per-row <strong>Remove</strong> button (or
+                <strong> Remove (N)</strong> in the toolbar after selecting)
+                to handle individual rows. The dialog asks what happened —
+                "Expired" is pre-selected on this tab.
               </li>
               <li>
                 Adjust the date in the <strong>Expiration Date</strong> cell
@@ -118,8 +120,14 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
               </li>
               <li>
                 Usage is recorded in Activity, so you can see who used what
-                and when. Each row has an <strong>Undo</strong> button if
-                you logged something by mistake.
+                and when.
+                {canEditInventory ? (
+                  <> Each row has an <strong>Undo</strong> button if you
+                    logged something by mistake.</>
+                ) : (
+                  <> Submissions can only be reversed by editors and admins,
+                    so flag mistakes to one of them.</>
+                )}
               </li>
               <li>
                 For brand-new stock arriving, use
@@ -183,10 +191,10 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
               </li>
               <li>
                 Use the row checkboxes for bulk
-                <strong> Move to…</strong> or <strong> Delete</strong> (any
-                zero-quantity row). Use <strong>Retire</strong> for expired
-                or lost stock — that path tracks loss reason for analytics and
-                is a different verb from Delete.
+                <strong> Move to…</strong> or <strong> Remove</strong>. The
+                Remove dialog asks what happened (expired, damaged, lost,
+                recalled, no longer carrying it, or "created by mistake")
+                and records the right loss event so analytics stay accurate.
               </li>
             </ul>
             <p>
@@ -201,8 +209,17 @@ function getHelpForTab(activeTab: ActiveTab): HelpSection {
   }
 }
 
-export function InventoryHelp({ activeTab }: { activeTab: ActiveTab }) {
-  const section = getHelpForTab(activeTab);
+export function InventoryHelp({
+  activeTab,
+  canEditInventory = false,
+}: {
+  activeTab: ActiveTab;
+  /** Whether the current user can use Activity-feed Undo. The Log Usage
+   *  section's copy mentions Undo only when this is true; viewers see a note
+   *  pointing them to an editor/admin instead. */
+  canEditInventory?: boolean;
+}) {
+  const section = getHelpForTab(activeTab, canEditInventory);
   return (
     <HelpModal key={activeTab} title={section.title}>
       {section.body}

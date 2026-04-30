@@ -68,7 +68,7 @@ export type AuditAction =
   | "ITEM_CREATE"
   | "ITEM_EDIT"
   | "ITEM_DELETE"
-  /** Quantity decrement with a loss reason (expired/damaged/lost/recalled). */
+  /** Quantity decrement with a loss reason (see RetireReason). */
   | "ITEM_RETIRE"
   /** Reverses a previous ITEM_RETIRE: clears the retire markers and marks the
    *  original event as undone. Soft-delete becomes "still in service" again. */
@@ -94,10 +94,23 @@ export type AuditAction =
   /** Fast Restock: quantity added directly to an inventory row (not via an order). */
   | "RESTOCK_ADDED";
 
-/** Reason codes attached to ITEM_RETIRE events. Drives loss analytics. */
-export type RetireReason = "expired" | "damaged" | "lost" | "recalled";
+/** Reason codes attached to ITEM_RETIRE events. Drives loss analytics.
+ *
+ *  - expired: past expiration date.
+ *  - damaged: physically broken or otherwise unusable.
+ *  - lost: stock can't be found.
+ *  - recalled: pulled per a manufacturer/safety recall.
+ *  - discontinued: org no longer carries this item; pulled and discarded
+ *    while still otherwise usable. Separable from "lost" so analytics can
+ *    distinguish intentional discards from missing stock.
+ *
+ *  Note: a row that was a setup mistake (never actually stocked) is
+ *  hard-deleted via ITEM_DELETE rather than retired — there's no loss to
+ *  record. The Remove dialog surfaces that as a separate option.
+ */
+export type RetireReason = "expired" | "damaged" | "lost" | "recalled" | "discontinued";
 
-export const RETIRE_REASONS: RetireReason[] = ["expired", "damaged", "lost", "recalled"];
+export const RETIRE_REASONS: RetireReason[] = ["expired", "damaged", "lost", "recalled", "discontinued"];
 
 export type PendingEntry = {
   itemId: string;

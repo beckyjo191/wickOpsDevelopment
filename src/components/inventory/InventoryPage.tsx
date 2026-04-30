@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus } from "lucide-react";
 import type { InventoryPageProps } from "./inventoryTypes";
 import { isDeletableRow, normalizeHeaderKey } from "./inventoryUtils";
+import { RemoveItemDialog } from "./RemoveItemDialog";
 import {
   addInventoryLocation,
   generateAndDownloadInventoryTemplate,
@@ -23,7 +24,6 @@ import { InventoryUsagePage } from "../InventoryUsagePage";
 import { InventoryMobileCards } from "./InventoryMobileCards";
 import { InventoryDesktopTable } from "./InventoryDesktopTable";
 import { ImportDialogs } from "./ImportDialogs";
-import { DeleteConfirmDialog } from "./DeleteConfirmDialog";
 import { PaginationControls } from "./PaginationControls";
 import { LoadingState } from "../shared/LoadingState";
 import { ROWS_PER_PAGE } from "./inventoryTypes";
@@ -480,22 +480,19 @@ export function InventoryPage({
                         </div>
                       </details>
                     ) : null}
-                    {/* Delete is shown only when every selected row has zero
-                     *  on-hand quantity. Rows with stock must go through
-                     *  Log Usage or Retire first. Retire stays available via
-                     *  the per-row affordance and the Expired tab's Retire All. */}
-                    {data.rows
-                      .filter((r) => filters.selectedRowIds.has(r.id))
-                      .every(isDeletableRow) ? (
-                      <button
-                        type="button"
-                        className="inventory-toolbar-action inventory-toolbar-action--danger"
-                        onClick={data.onRequestDeleteSelectedRows}
-                        title="Delete the selected rows"
-                      >
-                        Delete ({filters.selectedRowIds.size})
-                      </button>
-                    ) : null}
+                    {/* Unified Remove: opens the reason-picker dialog for
+                     *  every selected row. Replaces the previous separate
+                     *  Delete (qty-zero only) and Retire (Expired tab only)
+                     *  toolbar buttons. The dialog gates "Created by mistake"
+                     *  to selections where every row has qty == 0. */}
+                    <button
+                      type="button"
+                      className="inventory-toolbar-action inventory-toolbar-action--danger"
+                      onClick={data.onRequestRemoveSelectedRows}
+                      title="Remove the selected rows"
+                    >
+                      Remove ({filters.selectedRowIds.size})
+                    </button>
                   </>
                 ) : null}
                 {canEditInventory && data.canEditTable && (
@@ -563,7 +560,10 @@ export function InventoryPage({
         )}
 
         {filters.activeTab === "logUsage" ? (
-          <InventoryUsagePage selectedLocation={selectedLocation} />
+          <InventoryUsagePage
+            selectedLocation={selectedLocation}
+            canEditInventory={canEditInventory}
+          />
         ) : (
           <>
             {filters.activeTab === "expired" && canEditInventory && filters.filteredRows.length > 0 && (
@@ -603,8 +603,8 @@ export function InventoryPage({
                 onSetSelectMode={() => {}}
                 onSetSelectedRowId={() => {}}
                 onMoveSelectedRows={data.onMoveSelectedRows}
-                onRequestDelete={data.onRequestDeleteSelectedRows}
-                onRequestDeleteRow={data.onRequestDeleteRow}
+                onRequestRemove={data.onRequestRemoveSelectedRows}
+                onRequestRemoveRow={data.onRequestRemoveRow}
                 onCellChange={data.onCellChange}
                 getReadOnlyCellText={data.getReadOnlyCellText}
                 toDateInputValue={filters.toDateInputValue}
@@ -615,7 +615,6 @@ export function InventoryPage({
                 isEditingLinkCell={data.isEditingLinkCell}
                 setEditingLinkCell={data.setEditingLinkCell}
                 activeTab={filters.activeTab}
-                onRetireRow={(rowId) => void data.onRetireRows([rowId])}
               />
             ) : (
               <InventoryDesktopTable
@@ -659,8 +658,7 @@ export function InventoryPage({
                 setEditingLinkCell={data.setEditingLinkCell}
                 setEditingDateCell={data.setEditingDateCell}
                 activeTab={filters.activeTab}
-                onRetireRow={canEditInventory ? (rowId) => void data.onRetireRows([rowId]) : undefined}
-                onDeleteRow={canEditInventory ? data.onRequestDeleteRow : undefined}
+                onRemoveRow={canEditInventory ? data.onRequestRemoveRow : undefined}
               />
             )}
 
@@ -698,13 +696,35 @@ export function InventoryPage({
           normalizeHeaderKey={normalizeHeaderKey}
         />
 
-        {data.pendingDeleteRows ? (
-          <DeleteConfirmDialog
-            count={filters.selectedRowIds.size}
-            onConfirm={data.onConfirmDeleteSelectedRows}
-            onCancel={() => data.setPendingDeleteRows(false)}
-          />
-        ) : null}
+        {data.removeTarget ? (() => {
+          const targetRows = data.rows.filter((r) =>
+            data.removeTarget!.rowIds.includes(r.id),
+          );
+          // "Created by mistake" is the only path that hard-deletes the row.
+          // Allow it only when every targeted row has qty == 0; otherwise
+          // the server's delete guard would reject anyway and surfacing the
+          // option would be misleading.
+          const allowCreatedInError = targetRows.every(isDeletableRow);
+          // On the Expired tab the obvious answer is "expired" — pre-select
+          // it so a one-click flow is still possible. On every other tab
+          // leave it unselected so the user has to make an explicit choice.
+          const defaultReason =
+            filters.activeTab === "expired" ? "expired" : undefined;
+          return (
+            <RemoveItemDialog
+              count={data.removeTarget.rowIds.length}
+              itemName={
+                targetRows.length === 1
+                  ? String(targetRows[0]?.values.itemName ?? "").trim() || undefined
+                  : undefined
+              }
+              allowCreatedInError={allowCreatedInError}
+              defaultReason={defaultReason}
+              onConfirm={data.onConfirmRemove}
+              onCancel={data.onCancelRemove}
+            />
+          );
+        })() : null}
       </div>
 
       {isMobile && canEditInventory && data.canEditTable && (

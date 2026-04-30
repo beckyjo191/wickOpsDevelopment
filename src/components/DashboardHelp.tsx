@@ -13,8 +13,8 @@ export function DashboardHelp() {
       <p>
         Count of rows past their expiration date in the selected
         scope. Click <strong>View</strong> to jump to the Inventory
-        tab pre-filtered to the Expired view, where you can retire
-        them in one click.
+        tab pre-filtered to the Expired view, where
+        <strong> Retire All Expired</strong> clears them in one click.
       </p>
 
       <h4>Expiring soon</h4>

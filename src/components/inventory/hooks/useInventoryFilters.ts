@@ -7,13 +7,16 @@ import type {
   InventoryRow,
   SortDirection,
 } from "../inventoryTypes";
+import type { InventoryLocation } from "../../../lib/inventoryApi";
 import { ROWS_PER_PAGE } from "../inventoryTypes";
 
 interface UseInventoryFiltersParams {
   rows: InventoryRow[];
   columns: InventoryColumn[];
-  registeredLocations: string[];
-  selectedLocation: string | null;
+  /** Structural locations from bootstrap. Replaces `registeredLocations: string[]`. */
+  locations: InventoryLocation[];
+  /** Currently-scoped location id. `null` means "All Locations". */
+  selectedLocationId: string | null;
   initialFilter?: ActiveTab;
   initialSearch?: string;
   userColumnOverrides: ColumnVisibilityOverrides;
@@ -35,7 +38,9 @@ interface UseInventoryFiltersParams {
   sortEpoch: number;
 }
 
-const UNASSIGNED_LOCATION = "Unassigned";
+/** Sentinel id for the "All Locations" view. Empty string keeps it
+ *  trivially distinguishable from any UUID. */
+export const ALL_LOCATIONS = "" as const;
 
 const getDaysUntilExpiration = (value: string | number | boolean | null | undefined) => {
   const raw = String(value ?? "").trim();
@@ -119,8 +124,8 @@ function compareForSort(
 export function useInventoryFilters({
   rows,
   columns,
-  registeredLocations,
-  selectedLocation,
+  locations,
+  selectedLocationId,
   initialFilter,
   initialSearch,
   userColumnOverrides,
@@ -192,8 +197,23 @@ export function useInventoryFilters({
   // ── Pagination state ──
   const [currentPage, setCurrentPage] = useState(1);
 
-  // ── Category filter ──
-  const [categoryFilter, setCategoryFilter] = useState("All Categories");
+  // ── Generic groupable-column filters ──
+  // Replaces the previous hardcoded category-only state. Map<columnKey, "All" | <value>>.
+  // "All" is the sentinel meaning "no filter applied for this groupable column."
+  const ALL_GROUPABLE = "__all__" as const;
+  const [groupableFilters, setGroupableFilters] = useState<Record<string, string>>({});
+  const setGroupableFilter = (columnKey: string, value: string) => {
+    setGroupableFilters((prev) => {
+      if (value === ALL_GROUPABLE) {
+        // Strip the entry instead of holding a sentinel — keeps the map small.
+        if (!(columnKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[columnKey];
+        return next;
+      }
+      return { ...prev, [columnKey]: value };
+    });
+  };
 
   // ── Selection state (needed here for setActiveTabRaw clearing) ──
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
@@ -205,11 +225,6 @@ export function useInventoryFilters({
   }, [searchTerm]);
 
   // ── Derived column values ──
-  const locationColumn = useMemo(
-    () => columns.find((column) => column.key === "location"),
-    [columns],
-  );
-
   const allColumns = useMemo(
     () => [...columns].sort((a, b) => a.sortOrder - b.sortOrder),
     [columns],
@@ -222,32 +237,39 @@ export function useInventoryFilters({
     (column) => column.key === "minQuantity" && column.isVisible,
   );
 
-  const locationOptions = useMemo(() => {
-    const fromItems = locationColumn
-      ? rows.map((row) => String(row.values[locationColumn.key] ?? "").trim()).filter((v) => v.length > 0)
-      : [];
-    const named = Array.from(new Set([...fromItems, ...registeredLocations])).sort((a, b) => a.localeCompare(b));
-    // Only show "Unassigned" when there are rows with real data that lack a location.
-    // A row counts as "has data" if any non-location field has a non-empty, non-zero value.
-    const hasUnassigned = locationColumn
-      ? rows.some((row) => {
-          const loc = String(row.values[locationColumn.key] ?? "").trim();
-          if (loc !== "") return false;
-          // Check if row has any meaningful content
-          return Object.entries(row.values).some(([key, val]) => {
-            if (key === locationColumn.key) return false;
-            if (val === null || val === undefined || val === "" || val === 0) return false;
-            return true;
-          });
-        })
-      : false;
-    if (hasUnassigned && named.length > 0) named.push(UNASSIGNED_LOCATION);
-    return named;
-  }, [rows, locationColumn, registeredLocations]);
+  // Resolve the effective scope. `selectedLocationId` is one of:
+  //   - a real location id (filter to that location)
+  //   - `null` (no preference set — pick the first location)
+  //   - ALL_LOCATIONS (show every location's items)
+  const locationById = useMemo(
+    () => new Map(locations.map((l) => [l.id, l])),
+    [locations],
+  );
+  const sortedLocations = useMemo(
+    () => [...locations].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
+    [locations],
+  );
 
-  const showLocationPills = locationOptions.length >= 1;
+  const effectiveLocationId: string =
+    selectedLocationId !== null && (selectedLocationId === ALL_LOCATIONS || locationById.has(selectedLocationId))
+      ? selectedLocationId
+      : sortedLocations.length > 0
+      ? sortedLocations[0].id
+      : ALL_LOCATIONS;
 
-  // Hide location column from table when location pills are active (redundant info)
+  const effectiveLocationName: string =
+    effectiveLocationId === ALL_LOCATIONS
+      ? "All Locations"
+      : locationById.get(effectiveLocationId)?.name ?? "All Locations";
+
+  const showLocationPills = sortedLocations.length >= 1;
+
+  // visibleColumns post-restructure:
+  //   - core columns always render
+  //   - custom columns render only when their attachedLocationIds includes the
+  //     current location id
+  //   - "All Locations" view shows core columns only (custom cells would be
+  //     ambiguous because attachment varies per location)
   const visibleColumns = useMemo(
     () => {
       const base = [...columns]
@@ -255,36 +277,35 @@ export function useInventoryFilters({
           const override = userColumnOverrides[column.id];
           return override !== undefined ? override : column.isVisible;
         })
+        .filter((column) => {
+          if (column.isCore) return true;
+          if (effectiveLocationId === ALL_LOCATIONS) return false;
+          const attached = column.attachedLocationIds ?? [];
+          return attached.includes(effectiveLocationId);
+        })
         .sort((a, b) => a.sortOrder - b.sortOrder);
-      return showLocationPills ? base.filter((c) => c.key !== "location") : base;
+      return base;
     },
-    [columns, userColumnOverrides, showLocationPills],
+    [columns, userColumnOverrides, effectiveLocationId],
   );
 
-  const categoryColumn = useMemo(
-    () => visibleColumns.find((column) => column.key === "category"),
-    [visibleColumns],
-  );
-
-  const effectiveLocationFilter = selectedLocation !== null && locationOptions.includes(selectedLocation)
-    ? selectedLocation
-    : locationOptions.length > 0 ? locationOptions[0] : "All Locations";
-
-  const categoryOptions = useMemo(() => {
-    if (!categoryColumn) return ["All Categories"];
-    const options = Array.from(
-      new Set(
-        rows
-          .map((row) => String(row.values[categoryColumn.key] ?? "").trim())
-          .filter((value) => value.length > 0),
-      ),
-    ).sort((a, b) => a.localeCompare(b));
-    return ["All Categories", ...options];
-  }, [rows, categoryColumn]);
-
-  const effectiveCategoryFilter = categoryOptions.includes(categoryFilter)
-    ? categoryFilter
-    : "All Categories";
+  // Per-groupable-column option lists. Built dynamically for every visible
+  // column with isGroupable: true. Replaces the previous category-only path.
+  const groupableColumnOptions = useMemo(() => {
+    const out: Record<string, string[]> = {};
+    for (const col of visibleColumns) {
+      if (!col.isGroupable) continue;
+      const values = Array.from(
+        new Set(
+          rows
+            .map((row) => String(row.values[col.key] ?? "").trim())
+            .filter((v) => v.length > 0),
+        ),
+      ).sort((a, b) => a.localeCompare(b));
+      out[col.key] = values;
+    }
+    return out;
+  }, [rows, visibleColumns]);
 
   const tabCounts = useMemo(() => {
     let expired = 0;
@@ -293,13 +314,7 @@ export function useInventoryFilters({
     let lowStock = 0;
     let retired = 0;
     for (const row of rows) {
-      if (locationColumn && effectiveLocationFilter !== "All Locations") {
-        const rowLocation = String(row.values[locationColumn.key] ?? "").trim();
-        const matchesLocation = effectiveLocationFilter === UNASSIGNED_LOCATION
-          ? rowLocation === ""
-          : rowLocation === effectiveLocationFilter;
-        if (!matchesLocation) continue;
-      }
+      if (effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) continue;
       const isRetired = Boolean(row.values.retiredAt);
       if (isRetired) retired++;
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
@@ -327,7 +342,7 @@ export function useInventoryFilters({
       if (isLowStock) lowStock++;
     }
     return { expired, exp30, exp60, lowStock, retired };
-  }, [rows, locationColumn, effectiveLocationFilter]);
+  }, [rows, effectiveLocationId]);
 
   // ── THE BIG filteredRows memo ──
   const filteredRows = useMemo(() => {
@@ -352,11 +367,21 @@ export function useInventoryFilters({
           if (!matchesSearch) return false;
         }
 
-        // Tab/location/category filters are bypassed for the row being edited
-        // (and briefly after) so its values can change mid-edit without the
-        // row disappearing out from under the user.
-        if (editingRowIdRef.current && row.id === editingRowIdRef.current) return true;
-        if (recentlyEditedRowIdRef.current && row.id === recentlyEditedRowIdRef.current) return true;
+        // Tab + groupable filters are bypassed for the row being edited (and
+        // briefly after) so its values can change mid-edit without the row
+        // disappearing. Location is NOT bypassed — it's structural now and
+        // doesn't mutate while editing, so leaving it bypassed caused the
+        // edit-pinned row to flicker into the wrong location's view when
+        // the user switched scope.
+        const isPinnedRow =
+          (editingRowIdRef.current && row.id === editingRowIdRef.current)
+          || (recentlyEditedRowIdRef.current && row.id === recentlyEditedRowIdRef.current);
+        if (isPinnedRow && effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) {
+          // Pinned but in a different location → hide. Editing continues in
+          // the original scope; switching back will surface it again.
+          return false;
+        }
+        if (isPinnedRow) return true;
         const quantityRaw = row.values.quantity;
         const minQuantityRaw = row.values.minQuantity;
         const quantity = Number(quantityRaw);
@@ -368,8 +393,6 @@ export function useInventoryFilters({
           Number.isFinite(minQuantity) &&
           minQuantity > 0;
         const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
-        const rowLocation = String(row.values.location ?? "").trim();
-        const rowCategory = String(row.values.category ?? "").trim();
 
         // Retired rows are preserved in storage so retirement history survives
         // for loss analytics and the Activity page audit trail. They are NOT
@@ -388,13 +411,18 @@ export function useInventoryFilters({
         if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil > 0 && daysUntil <= 60;
         if (!passesTab) return false;
 
-        if (locationColumn && effectiveLocationFilter !== "All Locations") {
-          const matchesLocation = effectiveLocationFilter === UNASSIGNED_LOCATION
-            ? rowLocation === ""
-            : rowLocation === effectiveLocationFilter;
-          if (!matchesLocation) return false;
+        // Structural location filter (replaces the old values.location compare).
+        if (effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) {
+          return false;
         }
-        if (categoryColumn && effectiveCategoryFilter !== "All Categories" && rowCategory !== "" && rowCategory !== effectiveCategoryFilter) {
+
+        // Generic groupable-column filters. Empty cell values bypass the
+        // filter (so a row with no category isn't hidden when filtering by
+        // a specific category — matches the prior behavior exactly).
+        for (const [columnKey, selectedValue] of Object.entries(groupableFilters)) {
+          if (!selectedValue) continue;
+          const cellValue = String(row.values[columnKey] ?? "").trim();
+          if (cellValue === "" || cellValue === selectedValue) continue;
           return false;
         }
 
@@ -499,10 +527,8 @@ export function useInventoryFilters({
     activeTab,
     visibleColumns,
     debouncedSearchTerm,
-    locationColumn,
-    effectiveLocationFilter,
-    categoryColumn,
-    effectiveCategoryFilter,
+    effectiveLocationId,
+    groupableFilters,
     sortStateByTab,
     sortEpoch,
   ]);
@@ -521,7 +547,7 @@ export function useInventoryFilters({
   // Reset page on filter or sort change
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearchTerm, activeFilter, effectiveLocationFilter, effectiveCategoryFilter, sortStateByTab]);
+  }, [debouncedSearchTerm, activeFilter, effectiveLocationId, groupableFilters, sortStateByTab]);
 
   // Reset invalid filter tabs when columns change
   useEffect(() => {
@@ -571,23 +597,23 @@ export function useInventoryFilters({
     safePage,
     pageStart,
     paginatedRows,
-    // Category
-    categoryFilter,
-    setCategoryFilter,
-    categoryOptions,
-    effectiveCategoryFilter,
+    // Generic groupable filters (replaces category-specific state)
+    groupableFilters,
+    setGroupableFilter,
+    groupableColumnOptions,
+    ALL_GROUPABLE,
     // Columns
-    locationColumn,
     allColumns,
     hasExpirationColumn,
     hasMinQuantityColumn,
     visibleColumns,
-    categoryColumn,
     // Locations
-    locationOptions,
+    sortedLocations,
+    locationById,
     showLocationPills,
-    effectiveLocationFilter,
-    UNASSIGNED_LOCATION,
+    effectiveLocationId,
+    effectiveLocationName,
+    ALL_LOCATIONS,
     // Rows
     filteredRows,
     filteredRowIds,

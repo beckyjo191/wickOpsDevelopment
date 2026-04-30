@@ -3,7 +3,7 @@ import { CustomResource, RemovalPolicy, Stack } from "aws-cdk-lib";
 import { HttpUserPoolAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import { CorsHttpMethod, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
-import { AttributeType, BillingMode, CfnTable, Table } from "aws-cdk-lib/aws-dynamodb";
+import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
 import { PolicyStatement, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Provider } from "aws-cdk-lib/custom-resources";
 import { Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
@@ -209,22 +209,19 @@ const userTable = (backend.data.resources as any)?.tables?.user;
 const organizationTable = (backend.data.resources as any)?.tables?.organization;
 const inviteTable = (backend.data.resources as any)?.tables?.invite;
 
-// defineData generates L2 Table constructs but with PITR off and deletion
-// protection off by default. Reach down to the underlying CfnTable to enable
-// both — these tables hold the source-of-truth org/user/invite data.
-const enableTableProtection = (table: any, label: string) => {
-  if (!table) return;
-  const cfn = table.node.defaultChild as CfnTable | undefined;
-  if (!cfn) {
-    console.warn(`[backend] could not resolve CfnTable for ${label}; protection not applied`);
-    return;
+// defineData uses the AMPLIFY_TABLE strategy (Custom::AmplifyDynamoDBTable),
+// not a plain CfnTable, so PITR + deletion protection must be set via the
+// AmplifyDynamoDbTableWrapper exposed at cfnResources.amplifyDynamoDbTables.
+const amplifyDynamoTables: Record<string, any> =
+  (backend.data.resources as any)?.cfnResources?.amplifyDynamoDbTables ?? {};
+for (const [name, wrapper] of Object.entries(amplifyDynamoTables)) {
+  if (!wrapper) {
+    console.warn(`[backend] amplifyDynamoDbTables[${name}] missing; protection not applied`);
+    continue;
   }
-  cfn.pointInTimeRecoverySpecification = { pointInTimeRecoveryEnabled: true };
-  cfn.deletionProtectionEnabled = true;
-};
-enableTableProtection(userTable, "user");
-enableTableProtection(organizationTable, "organization");
-enableTableProtection(inviteTable, "invite");
+  wrapper.pointInTimeRecoverySpecification = { pointInTimeRecoveryEnabled: true };
+  wrapper.deletionProtectionEnabled = true;
+}
 
 if (userTable) {
   inventoryApiLambda.addEnvironment("USER_TABLE", userTable.tableName);

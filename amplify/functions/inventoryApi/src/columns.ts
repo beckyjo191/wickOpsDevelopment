@@ -1,12 +1,12 @@
 // ── Shared: columns.ts ──────────────────────────────────────────────────────
-// Column listing and core-column seeding.
+// Column listing and core-column seeding. Also hosts location-row reads since
+// locations live in the same DynamoDB table (see RESTRUCTURE_SPEC.md §2.6).
 
 import { PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb } from "./clients";
 import { INVENTORY_COLUMN_BY_MODULE_INDEX } from "./config";
-import { normalizeLooseKey } from "./normalize";
 import { ensureStorageForOrganization } from "./storage";
-import type { InventoryColumn, InventoryStorage } from "./types";
+import type { InventoryColumn, InventoryLocation, InventoryStorage } from "./types";
 
 /**
  * Authoritative `isEditable` flag per core column key. Used by
@@ -14,20 +14,47 @@ import type { InventoryColumn, InventoryStorage } from "./types";
  * changes across releases (lazy-seed's `attribute_not_exists` blocks updates
  * to existing rows, so schema drift accumulates without this step).
  *
- * Keep in sync with the `defaults` array below.
+ * Keep in sync with the `defaults` array below. Post-restructure: location
+ * and expirationDate are gone; notes and category are new core columns.
  */
 const CORE_COLUMN_IS_EDITABLE: Record<string, boolean> = {
   itemName: true,
   quantity: true,
   minQuantity: true,
-  expirationDate: true,
-  location: true,
+  vendor: true,
   reorderLink: true,
   unitCost: false,   // derived from packCost / packSize (or restock events)
-  packSize: true,    // user enters the box size
-  packCost: true,    // user enters the per-pack price (source of truth)
-  vendor: true,      // managed via vendor registry; users pick from dropdown
+  packSize: true,
+  packCost: true,
+  notes: true,
+  category: true,
 };
+
+/** Authoritative `isGroupable` per core column key. Only `category` ships
+ *  with the dropdown filter on by default; all others off. */
+const CORE_COLUMN_IS_GROUPABLE: Record<string, boolean> = {
+  itemName: false,
+  quantity: false,
+  minQuantity: false,
+  vendor: false,
+  reorderLink: false,
+  unitCost: false,
+  packSize: false,
+  packCost: false,
+  notes: false,
+  category: true,
+};
+
+/**
+ * Type-guard: a row in the columns table is a column row when its kind is
+ * "column" OR absent (pre-migration rows lack the field).
+ */
+const isColumnRow = (item: Record<string, unknown>): boolean => {
+  const kind = item.kind;
+  return kind === undefined || kind === null || kind === "column";
+};
+
+const isLocationRow = (item: Record<string, unknown>): boolean => item.kind === "location";
 
 export const listColumns = async (storage: InventoryStorage): Promise<InventoryColumn[]> => {
   const out: InventoryColumn[] = [];
@@ -44,7 +71,9 @@ export const listColumns = async (storage: InventoryStorage): Promise<InventoryC
       }),
     );
     out.push(
-      ...((page.Items ?? []) as InventoryColumn[]).filter((item) => item.module === "inventory"),
+      ...((page.Items ?? []) as Record<string, unknown>[])
+        .filter((item) => item.module === "inventory" && isColumnRow(item))
+        .map((item) => item as unknown as InventoryColumn),
     );
     lastEvaluatedKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
   } while (lastEvaluatedKey);
@@ -52,278 +81,53 @@ export const listColumns = async (storage: InventoryStorage): Promise<InventoryC
   return out.sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
 };
 
+/** List per-org locations from the columns table (kind = "location"). */
+export const listLocations = async (storage: InventoryStorage): Promise<InventoryLocation[]> => {
+  const out: InventoryLocation[] = [];
+  let lastEvaluatedKey: Record<string, unknown> | undefined;
+  do {
+    const page = await ddb.send(
+      new QueryCommand({
+        TableName: storage.columnTable,
+        IndexName: INVENTORY_COLUMN_BY_MODULE_INDEX,
+        KeyConditionExpression: "#module = :module",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: { ":module": "inventory" },
+        ExclusiveStartKey: lastEvaluatedKey,
+      }),
+    );
+    out.push(
+      ...((page.Items ?? []) as Record<string, unknown>[])
+        .filter((item) => item.module === "inventory" && isLocationRow(item))
+        .map((item) => item as unknown as InventoryLocation),
+    );
+    lastEvaluatedKey = page.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastEvaluatedKey);
+
+  return out.sort((a, b) => Number(a.sortOrder) - Number(b.sortOrder));
+};
+
+/**
+ * Idempotent core-column seeder. Pre-migration orgs get the v1 set seeded;
+ * post-migration orgs get reconciled (label/isEditable/isGroupable/isCore drift
+ * propagates without manual backfill).
+ *
+ * Intentionally conservative: we never delete existing rows here. Removing
+ * `location` and demoting `expirationDate` from core happens in the migration
+ * (see migration.ts), not in seeding.
+ */
 export const ensureColumns = async (organizationId: string): Promise<InventoryColumn[]> => {
   const storage = await ensureStorageForOrganization(organizationId);
   const existing = await listColumns(storage);
 
   const coreColumnIdForKey = (key: string): string => `inventory-core-${key}`;
 
-  // For existing orgs, ensure the location core column exists (added after initial 4 core columns).
-  // Skip if the org already has a column with key matching "location" (from a template).
-  if (existing.length > 0) {
-    const hasLocationColumn = existing.some(
-      (c) => normalizeLooseKey(c.key) === "location" || normalizeLooseKey(c.label) === "location" || normalizeLooseKey(c.label) === "storagelocation",
-    );
-    if (!hasLocationColumn) {
-      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 40);
-      try {
-        await ddb.send(
-          new PutCommand({
-            TableName: storage.columnTable,
-            Item: {
-              id: coreColumnIdForKey("location"),
-              organizationId,
-              module: "inventory",
-              key: "location",
-              label: "Location",
-              type: "text",
-              isCore: true,
-              isRequired: false,
-              isVisible: true,
-              isEditable: true,
-              sortOrder: maxSort + 10,
-              createdAt: new Date().toISOString(),
-            } satisfies InventoryColumn,
-            ConditionExpression: "attribute_not_exists(id)",
-          }),
-        );
-      } catch (err: any) {
-        if (err?.name !== "ConditionalCheckFailedException") throw err;
-      }
-    }
-
-    // Ensure the reorderLink core column exists (added after location).
-    const hasReorderLinkColumn = existing.some(
-      (c) => normalizeLooseKey(c.key) === "reorderlink",
-    );
-    if (!hasReorderLinkColumn) {
-      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 50);
-      try {
-        await ddb.send(
-          new PutCommand({
-            TableName: storage.columnTable,
-            Item: {
-              id: coreColumnIdForKey("reorderLink"),
-              organizationId,
-              module: "inventory",
-              key: "reorderLink",
-              label: "Product URL",
-              type: "link",
-              isCore: true,
-              isRequired: false,
-              isVisible: true,
-              isEditable: true,
-              sortOrder: maxSort + 10,
-              createdAt: new Date().toISOString(),
-            } satisfies InventoryColumn,
-            ConditionExpression: "attribute_not_exists(id)",
-          }),
-        );
-      } catch (err: any) {
-        if (err?.name !== "ConditionalCheckFailedException") throw err;
-      }
-    }
-
-    // Ensure the unitCost core column exists (added after reorderLink).
-    // Hidden by default — orgs that don't track cost won't see an empty column.
-    // Non-editable — value is refreshed only by restock events (Fast Restock /
-    // Orders receive) so the cached latest-price stays honest.
-    const hasUnitCostColumn = existing.some(
-      (c) => normalizeLooseKey(c.key) === "unitcost",
-    );
-    if (!hasUnitCostColumn) {
-      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 60);
-      try {
-        await ddb.send(
-          new PutCommand({
-            TableName: storage.columnTable,
-            Item: {
-              id: coreColumnIdForKey("unitCost"),
-              organizationId,
-              module: "inventory",
-              key: "unitCost",
-              label: "Unit Cost",
-              type: "number",
-              isCore: true,
-              isRequired: false,
-              isVisible: false,
-              isEditable: false,
-              sortOrder: maxSort + 10,
-              createdAt: new Date().toISOString(),
-            } satisfies InventoryColumn,
-            ConditionExpression: "attribute_not_exists(id)",
-          }),
-        );
-      } catch (err: any) {
-        if (err?.name !== "ConditionalCheckFailedException") throw err;
-      }
-    }
-
-    // Ensure the packSize core column exists (items that come in cases/boxes).
-    // Hidden by default; editable so users can set per-item pack size.
-    const hasPackSizeColumn = existing.some(
-      (c) => normalizeLooseKey(c.key) === "packsize",
-    );
-    if (!hasPackSizeColumn) {
-      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 70);
-      try {
-        await ddb.send(
-          new PutCommand({
-            TableName: storage.columnTable,
-            Item: {
-              id: coreColumnIdForKey("packSize"),
-              organizationId,
-              module: "inventory",
-              key: "packSize",
-              label: "Pack Size",
-              type: "number",
-              isCore: true,
-              isRequired: false,
-              isVisible: false,
-              isEditable: true,
-              sortOrder: maxSort + 10,
-              createdAt: new Date().toISOString(),
-            } satisfies InventoryColumn,
-            ConditionExpression: "attribute_not_exists(id)",
-          }),
-        );
-      } catch (err: any) {
-        if (err?.name !== "ConditionalCheckFailedException") throw err;
-      }
-    }
-
-    // Ensure the packCost core column exists. Source of truth for per-pack
-    // pricing — user enters the box price. unitCost is derived from
-    // packCost / packSize for display and analytics.
-    const hasPackCostColumn = existing.some(
-      (c) => normalizeLooseKey(c.key) === "packcost",
-    );
-    if (!hasPackCostColumn) {
-      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 80);
-      try {
-        await ddb.send(
-          new PutCommand({
-            TableName: storage.columnTable,
-            Item: {
-              id: coreColumnIdForKey("packCost"),
-              organizationId,
-              module: "inventory",
-              key: "packCost",
-              label: "Pack Cost",
-              type: "number",
-              isCore: true,
-              isRequired: false,
-              isVisible: false,
-              isEditable: true,
-              sortOrder: maxSort + 10,
-              createdAt: new Date().toISOString(),
-            } satisfies InventoryColumn,
-            ConditionExpression: "attribute_not_exists(id)",
-          }),
-        );
-      } catch (err: any) {
-        if (err?.name !== "ConditionalCheckFailedException") throw err;
-      }
-    }
-
-    // Ensure the vendor core column exists (added after packCost).
-    // Hidden by default — users opt in once they start managing vendors.
-    const hasVendorColumn = existing.some(
-      (c) => normalizeLooseKey(c.key) === "vendor",
-    );
-    if (!hasVendorColumn) {
-      const maxSort = Math.max(...existing.map((c) => c.sortOrder ?? 0), 90);
-      try {
-        await ddb.send(
-          new PutCommand({
-            TableName: storage.columnTable,
-            Item: {
-              id: coreColumnIdForKey("vendor"),
-              organizationId,
-              module: "inventory",
-              key: "vendor",
-              label: "Vendor",
-              type: "text",
-              isCore: true,
-              isRequired: false,
-              isVisible: false,
-              isEditable: true,
-              sortOrder: maxSort + 10,
-              createdAt: new Date().toISOString(),
-            } satisfies InventoryColumn,
-            ConditionExpression: "attribute_not_exists(id)",
-          }),
-        );
-      } catch (err: any) {
-        if (err?.name !== "ConditionalCheckFailedException") throw err;
-      }
-    }
-
-    // Rename the reorderLink column label if it's still the old default.
-    // The field was renamed "Reorder Link" → "Product URL" so the inventory
-    // table header matches the rest of the UI. Only touches columns whose
-    // label is exactly the old default — preserves any user customization.
-    const reorderLinkCol = existing.find((c) => c.key === "reorderLink");
-    if (reorderLinkCol && reorderLinkCol.label === "Reorder Link") {
-      try {
-        await ddb.send(
-          new UpdateCommand({
-            TableName: storage.columnTable,
-            Key: { id: reorderLinkCol.id },
-            UpdateExpression: "SET label = :v",
-            ExpressionAttributeValues: { ":v": "Product URL" },
-          }),
-        );
-      } catch (err) {
-        console.warn("Failed to rename reorderLink column label", err);
-      }
-    }
-
-    // Reconcile isEditable on existing core columns so schema changes across
-    // releases (e.g. packCost flipped to editable) propagate without needing
-    // a manual backfill. Only touches core columns whose current value
-    // disagrees with CORE_COLUMN_IS_EDITABLE.
-    let reconciled = false;
-    for (const col of existing) {
-      if (!col.isCore) continue;
-      const authoritative = CORE_COLUMN_IS_EDITABLE[col.key];
-      if (authoritative === undefined) continue;
-      if (col.isEditable === authoritative) continue;
-      try {
-        await ddb.send(
-          new UpdateCommand({
-            TableName: storage.columnTable,
-            Key: { id: col.id },
-            UpdateExpression: "SET isEditable = :v",
-            ExpressionAttributeValues: { ":v": authoritative },
-          }),
-        );
-        reconciled = true;
-      } catch (err) {
-        // Non-critical — next ensureColumns call will try again.
-        console.warn(`Failed to reconcile isEditable on ${col.key}`, err);
-      }
-    }
-
-    if (
-      !hasLocationColumn
-      || !hasReorderLinkColumn
-      || !hasUnitCostColumn
-      || !hasPackSizeColumn
-      || !hasPackCostColumn
-      || !hasVendorColumn
-      || reconciled
-      || (reorderLinkCol && reorderLinkCol.label === "Reorder Link")
-    ) {
-      return listColumns(storage);
-    }
-    return existing;
-  }
-
+  // Authoritative core column set (post-restructure).
   const defaults: Omit<InventoryColumn, "id">[] = [
     {
       organizationId,
       module: "inventory",
+      kind: "column",
       key: "itemName",
       label: "Item Name",
       type: "text",
@@ -331,64 +135,59 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       isRequired: true,
       isVisible: true,
       isEditable: true,
+      isGroupable: false,
       sortOrder: 10,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
+      kind: "column",
       key: "quantity",
       label: "Quantity",
       type: "number",
       isCore: true,
-      isRequired: true,
+      isRequired: false,
       isVisible: true,
       isEditable: true,
+      isGroupable: false,
       sortOrder: 20,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
+      kind: "column",
       key: "minQuantity",
       label: "Min Quantity",
       type: "number",
       isCore: true,
-      isRequired: true,
+      isRequired: false,
       isVisible: true,
       isEditable: true,
+      isGroupable: false,
       sortOrder: 30,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
-      key: "expirationDate",
-      label: "Expiration Date",
-      type: "date",
+      kind: "column",
+      key: "vendor",
+      label: "Vendor",
+      type: "text",
       isCore: true,
       isRequired: false,
-      isVisible: true,
+      isVisible: false,
       isEditable: true,
+      isGroupable: false,
       sortOrder: 40,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
-      key: "location",
-      label: "Location",
-      type: "text",
-      isCore: true,
-      isRequired: false,
-      isVisible: true,
-      isEditable: true,
-      sortOrder: 50,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      organizationId,
-      module: "inventory",
+      kind: "column",
       key: "reorderLink",
       label: "Product URL",
       type: "link",
@@ -396,73 +195,96 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       isRequired: false,
       isVisible: true,
       isEditable: true,
+      isGroupable: false,
+      sortOrder: 50,
+      createdAt: new Date().toISOString(),
+    },
+    {
+      organizationId,
+      module: "inventory",
+      kind: "column",
+      key: "unitCost",
+      label: "Unit Cost",
+      type: "number",
+      isCore: true,
+      isRequired: false,
+      isVisible: false,
+      // Non-editable — value is refreshed only by restock events / pack
+      // derivation so the cached latest-price matches audit history.
+      isEditable: false,
+      isGroupable: false,
       sortOrder: 60,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
-      key: "unitCost",
-      label: "Unit Cost",
+      kind: "column",
+      key: "packSize",
+      label: "Pack Size",
       type: "number",
       isCore: true,
       isRequired: false,
-      // Hidden by default — orgs that don't track cost won't see an empty column.
-      // Users can show it from the column settings.
       isVisible: false,
-      // Non-editable — value is refreshed only by restock events (Fast Restock
-      // or Orders receive) so the cached latest-price matches audit history.
-      isEditable: false,
+      isEditable: true,
+      isGroupable: false,
       sortOrder: 70,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
-      key: "packSize",
-      label: "Pack Size",
+      kind: "column",
+      key: "packCost",
+      label: "Pack Cost",
       type: "number",
       isCore: true,
       isRequired: false,
-      // Hidden by default — orgs that don't buy in boxes don't see it.
       isVisible: false,
       isEditable: true,
+      isGroupable: false,
       sortOrder: 80,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
-      key: "packCost",
-      label: "Pack Cost",
-      type: "number",
+      kind: "column",
+      key: "notes",
+      label: "Notes",
+      type: "text",
       isCore: true,
       isRequired: false,
-      // Editable — users enter the per-pack price. unitCost is derived from
-      // packCost / packSize for display and analytics.
-      isVisible: false,
+      isVisible: true,
       isEditable: true,
+      isGroupable: false,
       sortOrder: 90,
       createdAt: new Date().toISOString(),
     },
     {
       organizationId,
       module: "inventory",
-      key: "vendor",
-      label: "Vendor",
+      kind: "column",
+      key: "category",
+      label: "Category",
       type: "text",
       isCore: true,
       isRequired: false,
-      // Hidden by default — orgs that don't manage vendors won't see it.
-      // Managed via the vendor registry; users pick from a dropdown in the UI.
-      isVisible: false,
+      isVisible: true,
       isEditable: true,
+      // Category ships with the header dropdown filter on. Replaces the
+      // previous hardcoded `column.key === "category"` branch in the table.
+      isGroupable: true,
       sortOrder: 100,
       createdAt: new Date().toISOString(),
     },
   ];
 
+  const existingByKey = new Map(existing.map((c) => [c.key, c]));
+
+  // Lazy seed: insert every default that doesn't yet exist by key.
   for (const column of defaults) {
+    if (existingByKey.has(column.key)) continue;
     try {
       await ddb.send(
         new PutCommand({
@@ -481,5 +303,49 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
     }
   }
 
-  return listColumns(storage);
+  // Reconcile drift on existing core rows (isEditable / isGroupable / kind).
+  // Only touches core columns whose stored value disagrees with the authoritative
+  // map. Non-core columns are user-managed and never reconciled here.
+  let reconciled = false;
+  for (const col of existing) {
+    if (!col.isCore) continue;
+    const updates: Record<string, unknown> = {};
+    const editableTarget = CORE_COLUMN_IS_EDITABLE[col.key];
+    const groupableTarget = CORE_COLUMN_IS_GROUPABLE[col.key];
+    if (editableTarget !== undefined && col.isEditable !== editableTarget) {
+      updates.isEditable = editableTarget;
+    }
+    if (groupableTarget !== undefined && (col.isGroupable ?? false) !== groupableTarget) {
+      updates.isGroupable = groupableTarget;
+    }
+    // Backfill kind on pre-migration rows.
+    if (col.kind === undefined) {
+      updates.kind = "column";
+    }
+    if (Object.keys(updates).length === 0) continue;
+    try {
+      const setExpr = Object.keys(updates)
+        .map((k) => `#${k} = :${k}`)
+        .join(", ");
+      const exprNames = Object.fromEntries(Object.keys(updates).map((k) => [`#${k}`, k]));
+      const exprValues = Object.fromEntries(Object.entries(updates).map(([k, v]) => [`:${k}`, v]));
+      await ddb.send(
+        new UpdateCommand({
+          TableName: storage.columnTable,
+          Key: { id: col.id },
+          UpdateExpression: `SET ${setExpr}`,
+          ExpressionAttributeNames: exprNames,
+          ExpressionAttributeValues: exprValues,
+        }),
+      );
+      reconciled = true;
+    } catch (err) {
+      console.warn(`Failed to reconcile core column ${col.key}`, err);
+    }
+  }
+
+  if (existingByKey.size < defaults.length || reconciled) {
+    return listColumns(storage);
+  }
+  return existing;
 };

@@ -138,8 +138,11 @@ export const handleSubmitUsage = async (ctx: RouteContext) => {
     return json(400, { error: "At least one usage entry is required." });
   }
 
-  // Validate and deduplicate entries
-  const usageByItemId = new Map<string, { quantityUsed: number; notes?: string; location?: string }>();
+  // Validate and deduplicate entries.
+  // Post-restructure: clients no longer send `location` per entry — the item's
+  // structural locationId is authoritative. We accept and ignore an incoming
+  // `location` field for one deploy cycle's worth of v0 client compatibility.
+  const usageByItemId = new Map<string, { quantityUsed: number; notes?: string }>();
   for (let i = 0; i < entries.length; i += 1) {
     const entry = entries[i];
     const itemId = String(entry?.itemId ?? "").trim();
@@ -150,18 +153,13 @@ export const handleSubmitUsage = async (ctx: RouteContext) => {
     if (!Number.isFinite(quantityUsed) || quantityUsed < 0) {
       return json(400, { error: "Used quantity must be 0 or greater." });
     }
-    const location = String(entry?.location ?? "").trim();
     const notes = String(entry?.notes ?? "").trim();
     const existing = usageByItemId.get(itemId);
     if (!existing) {
-      usageByItemId.set(itemId, { quantityUsed, notes: notes || undefined, location: location || undefined });
+      usageByItemId.set(itemId, { quantityUsed, notes: notes || undefined });
       continue;
     }
-    if (existing.location && location && existing.location !== location) {
-      return json(400, { error: `Entry ${i + 1}: conflicting locations for the same item.` });
-    }
     existing.quantityUsed += quantityUsed;
-    if (!existing.location && location) existing.location = location;
     usageByItemId.set(itemId, existing);
   }
 
@@ -184,16 +182,11 @@ export const handleSubmitUsage = async (ctx: RouteContext) => {
       values = {};
     }
     const itemName = String(values.itemName ?? "").trim() || `Item ${itemId.slice(0, 8)}`;
-    const itemLocation = String(values.location ?? "").trim();
-    if (entry.location && itemLocation && entry.location !== itemLocation) {
-      return json(400, { error: `Entry ${itemCounter}: location does not match inventory.` });
-    }
     pendingEntries.push({
       itemId,
       itemName,
       quantityUsed: entry.quantityUsed,
       notes: entry.notes,
-      location: entry.location,
     });
   }
 

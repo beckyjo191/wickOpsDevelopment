@@ -2,6 +2,7 @@
 export type {
   ColumnVisibilityOverrides,
   InventoryColumn,
+  InventoryLocation,
   InventoryRow,
 } from "../../lib/inventoryApi";
 
@@ -19,8 +20,10 @@ export interface InventoryPageProps {
   initialSearch?: string;
   initialEditCell?: { rowId: string; columnKey: string };
   initialAction?: InventoryInitialAction;
-  selectedLocation: string | null;
-  onLocationChange: (location: string | null) => void;
+  /** Currently-scoped location id. Empty string means "All Locations". `null`
+   *  means "no preference saved" — the page picks the first location. */
+  selectedLocationId: string | null;
+  onSelectedLocationIdChange: (locationId: string | null) => void;
   /** Called with the async save function when the component mounts, null when it unmounts.
    *  Lets a parent await a save before navigating away (avoids race with stale reads). */
   onSaveFnChange?: (fn: (() => Promise<void>) | null) => void;

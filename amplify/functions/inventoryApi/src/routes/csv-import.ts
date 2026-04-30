@@ -12,7 +12,7 @@ import { json } from "../http";
 import { CORE_KEYS, HEADER_ALIASES } from "../config";
 import { normalizeLooseKey, toKey } from "../normalize";
 import { buildAuditEvent, writeAuditEvents } from "../audit";
-import { ensureColumns } from "../columns";
+import { ensureColumns, listLocations } from "../columns";
 import { listAllItems } from "../items";
 import {
   parseCsv,
@@ -40,6 +40,18 @@ export const handleImportCsv = async (ctx: RouteContext) => {
   const csvText = String(body?.csvText ?? "");
   if (!csvText.trim()) {
     return json(400, { error: "csvText is required" });
+  }
+
+  // Post-restructure: location is structural, not a column. The frontend
+  // surfaces a location-picker as Step 1 of the import flow and passes the
+  // resolved id here.
+  const locationId = String(body?.locationId ?? "").trim();
+  if (!locationId) {
+    return json(400, { error: "locationId is required" });
+  }
+  const knownLocations = await listLocations(storage);
+  if (!knownLocations.some((l) => l.id === locationId)) {
+    return json(400, { error: `locationId '${locationId}' does not exist` });
   }
 
   const parsed = parseCsv(csvText);
@@ -97,6 +109,11 @@ export const handleImportCsv = async (ctx: RouteContext) => {
     const header = headers[headerIndex];
     if (!header) continue;
     const loose = normalizeLooseKey(header);
+    // Location is structural now — silently drop any "location"-shaped header
+    // from the column mapping. The frontend explicitly told us which location
+    // to import into (via the locationId param), so a CSV-side location column
+    // is at best redundant, at worst contradictory.
+    if (loose === "location" || loose === "storagelocation") continue;
     if (selectedHeaderLooseSet && !selectedHeaderLooseSet.has(loose)) {
       continue;
     }
@@ -120,10 +137,14 @@ export const handleImportCsv = async (ctx: RouteContext) => {
 
       const lastColumn = columns.length > 0 ? columns[columns.length - 1] : undefined;
       const sortOrder = (lastColumn?.sortOrder ?? 0) + 10;
+      // Auto-created columns get attached to the location we're importing into
+      // (only). Users can broaden the attachment later via Settings or the
+      // inventory toolbar.
       const created: InventoryColumn = {
         id: randomUUID(),
         organizationId: access.organizationId,
         module: "inventory",
+        kind: "column",
         key,
         label: header,
         type: inferColumnType(header, headerIndex, dataRows),
@@ -131,6 +152,8 @@ export const handleImportCsv = async (ctx: RouteContext) => {
         isRequired: false,
         isVisible: true,
         isEditable: true,
+        isGroupable: false,
+        attachedLocationIds: [locationId],
         sortOrder,
         createdAt: new Date().toISOString(),
       };
@@ -164,7 +187,10 @@ export const handleImportCsv = async (ctx: RouteContext) => {
     } catch {
       parsedValues = {};
     }
-    const matchKey = buildImportMatchKey(parsedValues);
+    // Use the existing item's structural locationId in the match key, not the
+    // legacy values.location (which is gone post-migration).
+    const itemLocationId = (item as { locationId?: string }).locationId;
+    const matchKey = buildImportMatchKey(parsedValues, itemLocationId);
     if (matchKey) existingByMatchKey.set(matchKey, item);
   }
 
@@ -243,7 +269,7 @@ export const handleImportCsv = async (ctx: RouteContext) => {
       }
     }
 
-    const matchKey = hasItemNameMapping ? buildImportMatchKey(values) : "";
+    const matchKey = hasItemNameMapping ? buildImportMatchKey(values, locationId) : "";
     if (hasItemNameMapping && !matchKey) {
       skippedCount += 1;
       continue;
@@ -302,11 +328,18 @@ export const handleImportCsv = async (ctx: RouteContext) => {
       mergedValues.parentItemId = itemId;
     }
 
+    // Stamp the structural locationId on every imported row. For existing
+    // rows being updated (matched by itemName+locationId), preserve their
+    // current locationId; for new rows, use the request's locationId.
+    const rowLocationId = isUpdate
+      ? (existingMatch as { locationId?: string }).locationId ?? locationId
+      : locationId;
     const itemPayload: InventoryItem = {
       id: itemId,
       organizationId: access.organizationId,
       module: "inventory",
       position,
+      locationId: rowLocationId,
       valuesJson: JSON.stringify(mergedValues),
       createdAt,
       updatedAtCustom: new Date().toISOString(),

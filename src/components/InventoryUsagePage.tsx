@@ -5,6 +5,7 @@ import { LoadingState } from "./shared/LoadingState";
 import {
   isInventoryProvisioningError,
   loadInventoryBootstrap,
+  type InventoryLocation,
   submitInventoryUsage,
   type InventoryColumn,
   type InventoryRow,
@@ -30,9 +31,6 @@ type UsageGroup = {
 
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
 import { pickLoadingLine } from "../lib/loadingLines";
-
-const normalizeLooseKey = (value: string): string =>
-  value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const toDateInputValue = (value: unknown): string => {
   const raw = String(value ?? "").trim();
@@ -284,10 +282,13 @@ function QtyStepper({
 /* ── Main component ────────────────────────────────────────────────────── */
 
 export function InventoryUsagePage({
-  selectedLocation,
+  selectedLocationId,
   canEditInventory = false,
 }: {
-  selectedLocation?: string | null;
+  /** Currently-scoped location id (or empty string for "All Locations").
+   *  Used to seed the default UsageGroup so the user doesn't have to pick a
+   *  location they're already viewing. */
+  selectedLocationId?: string | null;
   /** Whether the current user can undo events from the Activity feed. The
    *  Activity-feed Undo button is gated by edit privileges, so the page's
    *  instructional copy only mentions Undo when the user can actually use it.
@@ -299,9 +300,12 @@ export function InventoryUsagePage({
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
-  const [columns, setColumns] = useState<InventoryColumn[]>([]);
+  const [, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
-  const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup(selectedLocation ?? "")]);
+  const [locations, setLocations] = useState<InventoryLocation[]>([]);
+  // The UsageGroup `location` field stores a locationId (UUID) post-restructure.
+  // Empty string = unset. The picker resolves id→name for display.
+  const [groups, setGroups] = useState<UsageGroup[]>([createUsageGroup(selectedLocationId ?? "")]);
   const [formError, setFormError] = useState("");
 
   const refreshInventoryRows = useCallback(
@@ -319,6 +323,7 @@ export function InventoryUsagePage({
           const bootstrap = await loadInventoryBootstrap();
           setColumns(bootstrap.columns ?? []);
           setRows(bootstrap.items);
+          setLocations(bootstrap.locations ?? []);
           if (initial) setLoading(false);
           return;
         } catch (err: any) {
@@ -368,60 +373,35 @@ export function InventoryUsagePage({
 
   const rowById = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
 
-  const locationKey = useMemo(() => {
-    const fromColumns = columns.find((column) => {
-      const keyLoose = normalizeLooseKey(String(column.key ?? ""));
-      const labelLoose = normalizeLooseKey(String(column.label ?? ""));
-      return keyLoose === "location" || labelLoose === "location";
-    });
-    if (fromColumns) return fromColumns.key;
-
-    const rowKeys = new Set<string>();
-    for (const row of rows) {
-      for (const key of Object.keys(row.values ?? {})) {
-        rowKeys.add(key);
-      }
-    }
-    for (const key of rowKeys) {
-      if (normalizeLooseKey(key) === "location") return key;
-    }
-    return null;
-  }, [columns, rows]);
-
-  const effectiveLocationKey = locationKey;
-
-  const locationValues = useMemo(() => {
-    if (!effectiveLocationKey) return [] as string[];
-    return Array.from(
-      new Set(
-        rows
-          .map((row) => String(row.values[effectiveLocationKey] ?? "").trim())
-          .filter((value) => value.length > 0),
+  // Locations are first-class entities post-restructure. The picker shows
+  // location names, but the UsageGroup.location field stores a locationId.
+  const sortedLocations = useMemo(
+    () =>
+      [...locations].sort((a, b) =>
+        (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name),
       ),
-    ).sort((a, b) => a.localeCompare(b));
-  }, [effectiveLocationKey, rows]);
+    [locations],
+  );
+  // Only show the picker when there are 2+ locations to pick from.
+  const showLocationPicker = sortedLocations.length > 1;
+  const singleLocationId = sortedLocations.length === 1 ? sortedLocations[0].id : null;
 
-  // Only show the location picker when there are 2+ distinct locations
-  const showLocationPicker = effectiveLocationKey !== null && locationValues.length > 1;
-  const singleLocation = effectiveLocationKey !== null && locationValues.length === 1 ? locationValues[0] : null;
-
-  // Auto-assign the single location to all groups when there's exactly one
+  // Auto-assign the only location to all groups when there's exactly one.
   useEffect(() => {
-    if (!singleLocation) return;
+    if (!singleLocationId) return;
     setGroups((prev) =>
       prev.map((group) =>
-        group.location === singleLocation ? group : { ...group, location: singleLocation },
+        group.location === singleLocationId ? group : { ...group, location: singleLocationId },
       ),
     );
-  }, [singleLocation]);
+  }, [singleLocationId]);
 
   const getItemOptionsForLocation = useCallback(
-    (location: string): AutocompleteOption[] =>
+    (locationId: string): AutocompleteOption[] =>
       rows
         .filter((row) => {
-          if (!effectiveLocationKey) return true;
-          if (!location.trim()) return false;
-          return String(row.values[effectiveLocationKey] ?? "").trim() === location;
+          if (!locationId.trim()) return false;
+          return row.locationId === locationId;
         })
         .filter((row) => String(row.values.itemName ?? "").trim().length > 0)
         .slice()
@@ -432,7 +412,7 @@ export function InventoryUsagePage({
           quantity: Number(row.values.quantity ?? 0),
           expirationDate: toDateInputValue(row.values.expirationDate),
         })),
-    [rows, effectiveLocationKey],
+    [rows],
   );
 
   useEffect(() => {
@@ -591,7 +571,6 @@ export function InventoryUsagePage({
                 itemId,
                 quantityUsed,
                 notes: notes || undefined,
-                location: effectiveLocationKey ? group.location : undefined,
               });
             }
           }
@@ -696,9 +675,9 @@ export function InventoryUsagePage({
                         aria-describedby={group.locationError ? `usage-location-error-${group.id}` : undefined}
                       >
                         <option value="">Select location...</option>
-                        {locationValues.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
+                        {sortedLocations.map((loc) => (
+                          <option key={loc.id} value={loc.id}>
+                            {loc.name}
                           </option>
                         ))}
                       </select>

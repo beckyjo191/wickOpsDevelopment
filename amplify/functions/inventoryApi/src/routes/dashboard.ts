@@ -3,20 +3,25 @@ import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
 import type { RouteContext } from "../types";
 import { json } from "../http";
-import { ensureColumns } from "../columns";
+import { ensureColumns, listLocations } from "../columns";
 import { listAllItems, listItemsPage } from "../items";
 import { getDaysUntilExpiration } from "../csv";
-import { getRegisteredLocations } from "../locations";
 import { getRegisteredVendors } from "../vendors";
+import { createLocation } from "../locations";
+import { ensureSchemaUpToDate, DEFAULT_LOCATION_NAME } from "../migration";
 import { ddb } from "../clients";
 
 export const handleAlertSummary = async (ctx: RouteContext) => {
   const { storage } = ctx;
-  const items = await listAllItems(storage, "");
+  const [items, locations] = await Promise.all([
+    listAllItems(storage, ""),
+    listLocations(storage),
+  ]);
   let expiredCount = 0;
   let expiringSoonCount = 0;
   let lowStockCount = 0;
 
+  const locationNameById = new Map(locations.map((l) => [l.id, l.name]));
   const byLocationMap = new Map<string, { expiredCount: number; expiringSoonCount: number; lowStockCount: number }>();
 
   for (const item of items) {
@@ -27,11 +32,12 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
       continue;
     }
 
-    const location = String(values.location ?? "").trim();
-    if (!byLocationMap.has(location)) {
-      byLocationMap.set(location, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
+    const locationId = String((item as { locationId?: string }).locationId ?? "").trim();
+    const locationName = locationNameById.get(locationId) ?? "";
+    if (!byLocationMap.has(locationName)) {
+      byLocationMap.set(locationName, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
     }
-    const locCounts = byLocationMap.get(location)!;
+    const locCounts = byLocationMap.get(locationName)!;
 
     const daysUntil = getDaysUntilExpiration(values.expirationDate as string | null | undefined);
     if (daysUntil !== null) {
@@ -59,18 +65,17 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
     }
   }
 
-  // Include registered locations that may not have items yet
-  const registeredLocations = await getRegisteredLocations(storage);
-  for (const loc of registeredLocations) {
-    if (!byLocationMap.has(loc)) {
-      byLocationMap.set(loc, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
+  // Include locations that have no items yet so the dashboard renders them.
+  for (const loc of locations) {
+    if (!byLocationMap.has(loc.name)) {
+      byLocationMap.set(loc.name, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
     }
   }
 
   const byLocation = Array.from(byLocationMap.entries())
     .map(([location, counts]) => ({ location, ...counts }))
     .sort((a, b) => {
-      // Empty location (unassigned) goes last
+      // Empty location (orphan — shouldn't happen post-migration) goes last
       if (!a.location && b.location) return 1;
       if (a.location && !b.location) return -1;
       return a.location.localeCompare(b.location);
@@ -81,14 +86,30 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
 
 export const handleBootstrap = async (ctx: RouteContext) => {
   const { storage, access } = ctx;
+  // Run schema migration before reading anything else. Idempotent; cheap on
+  // the warm path (one GetCommand on the migration meta row).
+  const migrationResult = await ensureSchemaUpToDate(storage, access);
   const columns = await ensureColumns(access.organizationId);
+
+  // Locations must exist before we seed a blank row (the seed needs a
+  // locationId). On a fresh org with no items and no migration, no locations
+  // exist yet — create a Default one.
+  let locations = await listLocations(storage);
+  if (locations.length === 0) {
+    const created = await createLocation(
+      storage,
+      access.organizationId,
+      DEFAULT_LOCATION_NAME,
+      10,
+    );
+    locations = [created];
+  }
 
   // Use paginated fetch to stay well under Lambda's 6 MB response limit.
   // Each item is ~200 bytes JSON, so 10k items ≈ 2 MB — safe margin under 6 MB.
   const BOOTSTRAP_PAGE_SIZE = 10_000;
-  let [page, registeredLocations, registeredVendors] = await Promise.all([
+  let [page, registeredVendors] = await Promise.all([
     listItemsPage(storage, access.organizationId, BOOTSTRAP_PAGE_SIZE),
-    getRegisteredLocations(storage),
     getRegisteredVendors(storage),
   ]);
   let items = page.items;
@@ -105,12 +126,13 @@ export const handleBootstrap = async (ctx: RouteContext) => {
         else blankValues[col.key] = "";
       }
       const valuesJson = JSON.stringify(blankValues);
+      const seedLocationId = locations[0].id;
       await ddb.send(
         new UpdateCommand({
           TableName: storage.itemTable,
           Key: { id: rowId },
           UpdateExpression:
-            "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, updatedAtCustom = :now, createdAt = :now",
+            "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, locationId = :loc, updatedAtCustom = :now, createdAt = :now",
           ExpressionAttributeNames: {
             "#module": "module",
             "#position": "position",
@@ -120,11 +142,12 @@ export const handleBootstrap = async (ctx: RouteContext) => {
             ":module": "inventory",
             ":position": 0,
             ":values": valuesJson,
+            ":loc": seedLocationId,
             ":now": now,
           },
         }),
       );
-      items = [{ id: rowId, organizationId: access.organizationId, module: "inventory", position: 0, valuesJson, createdAt: now, updatedAtCustom: now }];
+      items = [{ id: rowId, organizationId: access.organizationId, module: "inventory", position: 0, valuesJson, locationId: seedLocationId, createdAt: now, updatedAtCustom: now }];
       nextToken = null;
     } catch (err) {
       console.warn("Failed to seed blank row for new org", err);
@@ -135,9 +158,12 @@ export const handleBootstrap = async (ctx: RouteContext) => {
     access,
     columns,
     items,
-    registeredLocations,
+    locations,
     registeredVendors,
     columnVisibilityOverrides: access.columnVisibilityOverrides,
     nextToken,
+    ...(migrationResult.toastMessage
+      ? { migrationNotice: { message: migrationResult.toastMessage } }
+      : {}),
   });
 };

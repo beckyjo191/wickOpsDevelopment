@@ -10,13 +10,13 @@ import { handleUpdateCurrentUserDisplayName, handleSyncCurrentUserEmail, handleS
 import { handleListOnboardingTemplates, handleApplyOnboardingTemplate } from "./routes/onboarding";
 import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics } from "./routes/audit";
 import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestockOrder, handleCloseRestockOrder } from "./routes/restock";
-import { handleAddLocation, handleRemoveLocation, handleRenameLocation } from "./routes/locations";
+import { handleAddLocation, handleListLocations, handleRemoveLocation, handleRenameLocation } from "./routes/locations";
 import { handleAddVendor, handleRemoveVendor, handleRenameVendor } from "./routes/vendors";
 import { handleAlertSummary, handleBootstrap } from "./routes/dashboard";
-import { handleListItems, handleSaveItems, handleUndoRetire } from "./routes/inventory";
+import { handleListItems, handleMoveItems, handleSaveItems, handleUndoRetire } from "./routes/inventory";
 import { handleSubmitUsage, handleListPendingSubmissions, handleApproveSubmission, handleRejectSubmission, handleDeleteSubmission, handleUndoUsage } from "./routes/usage";
 import { handleImportCsv } from "./routes/csv-import";
-import { handleCreateColumn, handleDeleteColumn, handleRestoreColumn, handleUpdateColumnVisibility, handleUpdateColumnLabel, handleUpdateColumnType, handleReorderColumns, handleDeleteOrganizationStorage } from "./routes/column-mgmt";
+import { handleCreateColumn, handleDeleteColumn, handleRestoreColumn, handleUpdateColumnAttachments, handleUpdateColumnVisibility, handleUpdateColumnLabel, handleUpdateColumnType, handleReorderColumns, handleDeleteOrganizationStorage } from "./routes/column-mgmt";
 
 type RouteHandler = (ctx: RouteContext) => Promise<ReturnType<typeof json>>;
 
@@ -57,6 +57,7 @@ const routes: Route[] = [
   { method: "POST",   pattern: /\/inventory\/restock\/orders\/[^/]+\/close$/,   needsStorage: true, module: "inventory", handler: handleCloseRestockOrder },
 
   // Locations
+  { method: "GET",    pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleListLocations },
   { method: "POST",   pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleAddLocation },
   { method: "DELETE",  pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleRemoveLocation },
   { method: "POST",   pattern: "/inventory/locations/rename",           needsStorage: true, module: "inventory", handler: handleRenameLocation },
@@ -73,6 +74,7 @@ const routes: Route[] = [
   // Items
   { method: "GET",    pattern: "/inventory/items",                      needsStorage: true, module: "inventory", handler: handleListItems },
   { method: "POST",   pattern: "/inventory/items/save",                 needsStorage: true, module: "inventory", handler: handleSaveItems },
+  { method: "POST",   pattern: "/inventory/items/move",                 needsStorage: true, module: "inventory", handler: handleMoveItems },
   { method: "POST",   pattern: "/inventory/items/undo-retire",          needsStorage: true, module: "inventory", handler: handleUndoRetire },
 
   // Usage (feature within the inventory module; role-based gating applies inside handlers)
@@ -94,6 +96,7 @@ const routes: Route[] = [
   { method: "POST",   pattern: /\/inventory\/columns\/[^/]+\/visibility$/, needsStorage: true, module: "inventory", handler: handleUpdateColumnVisibility },
   { method: "POST",   pattern: /\/inventory\/columns\/[^/]+\/label$/,      needsStorage: true, module: "inventory", handler: handleUpdateColumnLabel },
   { method: "POST",   pattern: /\/inventory\/columns\/[^/]+\/type$/,       needsStorage: true, module: "inventory", handler: handleUpdateColumnType },
+  { method: "POST",   pattern: /\/inventory\/columns\/[^/]+\/attachments$/, needsStorage: true, module: "inventory", handler: handleUpdateColumnAttachments },
   { method: "POST",   pattern: "/inventory/columns/reorder",              needsStorage: true, module: "inventory", handler: handleReorderColumns },
   { method: "POST",   pattern: "/inventory/columns/restore",              needsStorage: true, module: "inventory", handler: handleRestoreColumn },
   { method: "POST",   pattern: "/inventory/columns",                      needsStorage: true, module: "inventory", handler: handleCreateColumn },

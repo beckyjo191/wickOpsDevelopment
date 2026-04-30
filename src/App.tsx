@@ -62,6 +62,7 @@ export default function App() {
 function AppInner() {
   const { user, authStatus, signOut: rawSignOut } = useAuthenticator() as any;
   const signOut = () => {
+    try { localStorage.removeItem("wickops.selectedLocationId"); } catch { /* noop */ }
     try { localStorage.removeItem("wickops.selectedLocation"); } catch { /* noop */ }
     rawSignOut();
   };
@@ -129,12 +130,19 @@ function AppInner() {
     }
     setView(v);
   };
-  const [selectedLocation, setSelectedLocation] = useState<string | null>(() => {
-    try { return localStorage.getItem("wickops.selectedLocation") ?? null; } catch { return null; }
+  // Post-restructure: location is a structural id, not a name. The localStorage
+  // key got renamed to make it obvious the stored value is an opaque UUID.
+  // Pre-restructure stored values get cleared by the migration toast flow on
+  // the first post-deploy bootstrap.
+  const [selectedLocationId, setSelectedLocationId] = useState<string | null>(() => {
+    try { return localStorage.getItem("wickops.selectedLocationId") ?? null; } catch { return null; }
   });
-  const onLocationChange = (loc: string | null) => {
-    setSelectedLocation(loc);
-    try { if (loc === null) localStorage.removeItem("wickops.selectedLocation"); else localStorage.setItem("wickops.selectedLocation", loc); } catch { /* noop */ }
+  const onSelectedLocationIdChange = (loc: string | null) => {
+    setSelectedLocationId(loc);
+    try {
+      if (loc === null) localStorage.removeItem("wickops.selectedLocationId");
+      else localStorage.setItem("wickops.selectedLocationId", loc);
+    } catch { /* noop */ }
   };
   const [loadingLine, setLoadingLine] = useState(() => pickLoadingLine());
   const [themePreference, setThemePreference] = useState<ThemePreference>(() => loadThemePreference());
@@ -507,8 +515,8 @@ function AppInner() {
         initialSearch={inventoryInitialSearch}
         initialEditCell={inventoryInitialEditCell}
         initialAction={inventoryInitialAction}
-        selectedLocation={selectedLocation}
-        onLocationChange={onLocationChange}
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
         onSaveFnChange={(fn) => { inventorySaveFnRef.current = fn; }}
         onActiveTabChange={setInventoryActiveTab}
       />
@@ -516,32 +524,35 @@ function AppInner() {
       <DashboardPage
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
-        selectedLocation={selectedLocation}
-        onLocationChange={onLocationChange}
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
         onNavigate={(v) => setView(v as AppView)}
       />
     );
   } else if (view === "usage") {
     content = canAccessInventory ? (
-      <InventoryUsagePage selectedLocation={selectedLocation} />
+      <InventoryUsagePage selectedLocationId={selectedLocationId} />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
-        selectedLocation={selectedLocation}
-        onLocationChange={onLocationChange}
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
         onNavigate={(v) => setView(v as AppView)}
       />
     );
   } else if (view === "orders") {
     content = canAccessInventory && canEditInventory ? (
-      <OrdersPage selectedLocation={selectedLocation} />
+      <OrdersPage
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
+      />
     ) : (
       <DashboardPage
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
-        selectedLocation={selectedLocation}
-        onLocationChange={onLocationChange}
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
         onNavigate={(v) => setView(v as AppView)}
       />
     );
@@ -562,8 +573,8 @@ function AppInner() {
       <DashboardPage
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
-        selectedLocation={selectedLocation}
-        onLocationChange={onLocationChange}
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
         onNavigate={(v) => setView(v as AppView)}
       />
     );
@@ -600,8 +611,8 @@ function AppInner() {
       <DashboardPage
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
-        selectedLocation={selectedLocation}
-        onLocationChange={onLocationChange}
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
         onNavigate={(v) => setView(v as AppView)}
       />
     );
@@ -611,11 +622,11 @@ function AppInner() {
         key={dashboardKey}
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
-        selectedLocation={selectedLocation}
-        onLocationChange={onLocationChange}
+        selectedLocationId={selectedLocationId}
+        onSelectedLocationIdChange={onSelectedLocationIdChange}
         onNavigate={(v) => setView(v as AppView)}
-        onNavigateToInventoryWithFilter={(filter, location) => {
-          if (location !== undefined) onLocationChange(location);
+        onNavigateToInventoryWithFilter={(filter, locationId) => {
+          if (locationId !== undefined) onSelectedLocationIdChange(locationId);
           setInventoryInitialFilter(filter);
           setInventoryKey((k) => k + 1);
           setView("inventory");

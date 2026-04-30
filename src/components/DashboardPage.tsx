@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, ClipboardList, Package, ShoppingCart } from "lucide-react";
 import { LoadingState } from "./shared/LoadingState";
 import type { AppModuleKey } from "../lib/moduleRegistry";
-import { fetchInventoryAlertSummary, type InventoryAlertSummary } from "../lib/inventoryApi";
+import {
+  fetchInventoryAlertSummary,
+  listInventoryLocations,
+  type InventoryAlertSummary,
+  type InventoryLocation,
+} from "../lib/inventoryApi";
 import { pickLoadingLine } from "../lib/loadingLines";
 
 type InventoryFilter = "expired" | "exp30" | "lowStock" | "logUsage";
@@ -10,21 +15,25 @@ type InventoryFilter = "expired" | "exp30" | "lowStock" | "logUsage";
 interface DashboardPageProps {
   accessibleModules: AppModuleKey[];
   canEditInventory?: boolean;
-  selectedLocation: string | null;
-  onLocationChange: (location: string | null) => void;
+  /** Currently-scoped location id from App-level state. Empty string for "All Locations". */
+  selectedLocationId: string | null;
+  onSelectedLocationIdChange: (locationId: string | null) => void;
   onNavigate: (view: string) => void;
-  onNavigateToInventoryWithFilter?: (filter: InventoryFilter, location?: string | null) => void;
+  /** Navigate to Inventory with a filter pre-applied. The optional locationId
+   *  scopes the inventory view; pass undefined to leave the current scope. */
+  onNavigateToInventoryWithFilter?: (filter: InventoryFilter, locationId?: string | null) => void;
 }
 
 export function DashboardPage({
   accessibleModules,
   canEditInventory,
-  selectedLocation,
-  onLocationChange,
+  selectedLocationId,
+  onSelectedLocationIdChange,
   onNavigate,
   onNavigateToInventoryWithFilter,
 }: DashboardPageProps) {
   const [alertSummary, setAlertSummary] = useState<InventoryAlertSummary | null>(null);
+  const [structuralLocations, setStructuralLocations] = useState<InventoryLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
 
@@ -36,10 +45,30 @@ export function DashboardPage({
       setLoading(false);
       return;
     }
-    void fetchInventoryAlertSummary()
-      .then(setAlertSummary)
-      .finally(() => setLoading(false));
+    // Load alert summary + locations in parallel. Locations let us translate
+    // the App-level locationId (UUID) to the location name the alert summary
+    // is keyed by — it sits between the byLocation map and the dashboard UI.
+    void Promise.all([
+      fetchInventoryAlertSummary().then(setAlertSummary),
+      listInventoryLocations().then(setStructuralLocations).catch(() => setStructuralLocations([])),
+    ]).finally(() => setLoading(false));
   }, [canSeeAlerts]);
+
+  // Resolve the App-level id → name. The alert summary's byLocation array is
+  // keyed by name (server-side denormalization), so the rest of this component
+  // works against names exactly as before.
+  const selectedLocationName = useMemo(() => {
+    if (!selectedLocationId) return null;
+    return structuralLocations.find((l) => l.id === selectedLocationId)?.name ?? null;
+  }, [selectedLocationId, structuralLocations]);
+  const setSelectedLocationByName = (name: string | null) => {
+    if (name === null) {
+      onSelectedLocationIdChange(null);
+      return;
+    }
+    const match = structuralLocations.find((l) => l.name === name);
+    onSelectedLocationIdChange(match?.id ?? null);
+  };
 
   useEffect(() => {
     if (!loading) return;
@@ -63,25 +92,29 @@ export function DashboardPage({
   );
 
   // Auto-select first location if none selected or selected location isn't a real dashboard location
-  const validSelection = selectedLocation !== null
-    && selectedLocation !== "Unassigned"
-    && locations.some((l) => l.location === selectedLocation);
+  const validSelection = selectedLocationName !== null
+    && locations.some((l) => l.location === selectedLocationName);
 
   useEffect(() => {
     if (!validSelection && locations.length > 0) {
-      onLocationChange(locations[0].location);
+      setSelectedLocationByName(locations[0].location);
     }
-  }, [validSelection, locations, onLocationChange]);
+    // setSelectedLocationByName is stable enough for this useEffect — it's
+    // recreated each render but only called when validSelection flips false.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validSelection, locations]);
 
   // What the dropdown trigger and "No issues at X" text should actually
-  // display. When the saved selectedLocation isn't valid (e.g. user just
-  // emptied "Unassigned"), the auto-sync above will correct the stored
-  // value on the next tick — but in this render we still want the UI to
-  // show the location whose data is actually being shown, not the stale
-  // saved value.
+  // display. When the saved selection isn't valid (e.g. user just deleted
+  // the location), the auto-sync above will correct the stored value on the
+  // next tick — but in this render we still want the UI to show the location
+  // whose data is actually being shown, not the stale saved value.
   const displayedLocation = validSelection
-    ? selectedLocation
+    ? selectedLocationName
     : (locations[0]?.location ?? null);
+  const displayedLocationId = displayedLocation
+    ? structuralLocations.find((l) => l.name === displayedLocation)?.id ?? null
+    : null;
 
   // Get alert counts for the selected location
   const activeAlerts = (() => {
@@ -90,7 +123,7 @@ export function DashboardPage({
       // Will auto-select soon, use first location's data in the meantime
       return locations[0];
     }
-    const match = alertSummary.byLocation?.find((b) => b.location === selectedLocation);
+    const match = alertSummary.byLocation?.find((b) => b.location === selectedLocationName);
     return match ?? { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 };
   })();
 
@@ -128,7 +161,7 @@ export function DashboardPage({
                       type="button"
                       className={`inventory-dropdown-option${displayedLocation === loc.location ? " active" : ""}`}
                       onClick={(e) => {
-                        onLocationChange(loc.location);
+                        setSelectedLocationByName(loc.location);
                         e.currentTarget.closest("details")?.removeAttribute("open");
                       }}
                     >
@@ -153,7 +186,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="app-alert-card app-alert-card--danger"
-                  onClick={() => onNavigateToInventoryWithFilter("expired", displayedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("expired", displayedLocationId)}
                 >
                   <span className="app-alert-card__icon">
                     <AlertTriangle size={16} strokeWidth={2} />
@@ -168,7 +201,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="app-alert-card app-alert-card--caution"
-                  onClick={() => onNavigateToInventoryWithFilter("exp30", displayedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("exp30", displayedLocationId)}
                 >
                   <span className="app-alert-card__icon">
                     <AlertTriangle size={16} strokeWidth={2} />
@@ -183,7 +216,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="app-alert-card app-alert-card--warning"
-                  onClick={() => onNavigateToInventoryWithFilter("lowStock", displayedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("lowStock", displayedLocationId)}
                 >
                   <span className="app-alert-card__icon">
                     <Package size={16} strokeWidth={2} />
@@ -218,7 +251,7 @@ export function DashboardPage({
                 <button
                   type="button"
                   className="dash-action-btn"
-                  onClick={() => onNavigateToInventoryWithFilter("logUsage", displayedLocation)}
+                  onClick={() => onNavigateToInventoryWithFilter("logUsage", displayedLocationId)}
                 >
                   <ClipboardList size={18} strokeWidth={2} />
                   <span>Log Usage</span>

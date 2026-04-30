@@ -1,7 +1,9 @@
 // ── InventoryPage orchestrator ───────────────────────────────────────────────
 // Wires custom hooks to sub-components. All state lives in hooks.
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Plus } from "lucide-react";
+// Download (arrow pointing down into a tray) reads as "import — bringing
+// data in." Upload looked like Export to the user, which is the opposite.
+import { ChevronDown, Download, Plus } from "lucide-react";
 import type { InventoryPageProps } from "./inventoryTypes";
 import { isDeletableRow, normalizeHeaderKey } from "./inventoryUtils";
 import { RemoveItemDialog } from "./RemoveItemDialog";
@@ -18,6 +20,7 @@ import { useInventoryData } from "./hooks/useInventoryData";
 
 // Components
 import { AddLocationForm } from "./AddLocationForm";
+import { ColumnAttachmentDialog } from "./ColumnAttachmentDialog";
 import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryFilterBar } from "./InventoryFilterBar";
 import { InventoryUsagePage } from "../InventoryUsagePage";
@@ -35,8 +38,8 @@ export function InventoryPage({
   initialSearch,
   initialEditCell,
   initialAction,
-  selectedLocation,
-  onLocationChange,
+  selectedLocationId,
+  onSelectedLocationIdChange,
   onSaveFnChange,
   onActiveTabChange,
 }: InventoryPageProps) {
@@ -60,17 +63,16 @@ export function InventoryPage({
   const data = useInventoryData({
     canEditInventory,
     initialEditCell,
-    selectedLocation,
-    onLocationChange,
+    selectedLocationId,
+    onSelectedLocationIdChange,
     onSaveFnChange,
     // From filters (ref bridge — stale by at most 1 render, which is fine)
-    effectiveLocationFilter: filtersRef.current?.effectiveLocationFilter ?? "",
+    effectiveLocationId: filtersRef.current?.effectiveLocationId ?? "",
+    ALL_LOCATIONS: filtersRef.current?.ALL_LOCATIONS ?? "",
     allColumns: filtersRef.current?.allColumns ?? [],
-    locationColumn: filtersRef.current?.locationColumn,
     filteredRows: filtersRef.current?.filteredRows ?? [],
     filteredRowIds: filtersRef.current?.filteredRowIds ?? [],
     visibleColumns: filtersRef.current?.visibleColumns ?? [],
-    UNASSIGNED_LOCATION: filtersRef.current?.UNASSIGNED_LOCATION ?? "Unassigned",
     setSelectedRowIds: filtersRef.current?.setSelectedRowIds ?? (() => {}),
     activeTab: filtersRef.current?.activeTab ?? "all",
     selectedRowIds: filtersRef.current?.selectedRowIds ?? new Set(),
@@ -98,8 +100,8 @@ export function InventoryPage({
   const filters = useInventoryFilters({
     rows: data.rows,
     columns: data.columns,
-    registeredLocations: data.registeredLocations,
-    selectedLocation,
+    locations: data.locations,
+    selectedLocationId,
     initialFilter,
     initialSearch,
     userColumnOverrides: data.userColumnOverrides,
@@ -119,21 +121,19 @@ export function InventoryPage({
   filtersRef.current = filters;
 
   // ── Stale-location auto-sync ──────────────────────────────────────────────
-  // When the saved `selectedLocation` (persisted to localStorage) drops out
-  // of `locationOptions` — e.g. the user deleted the last row in
-  // "Unassigned" — snap the stored value back to whatever the filter is
-  // actually applying so the dropdown trigger, the table, and storage all
-  // agree. Without this the trigger keeps showing the dead location through
-  // page reloads until the user manually picks something.
+  // When the saved `selectedLocationId` (persisted to localStorage) refers to
+  // a location that's been deleted, snap to the first available one so the
+  // dropdown trigger, table, and storage all agree.
   useEffect(() => {
     if (
-      selectedLocation !== null &&
-      filters.locationOptions.length > 0 &&
-      !filters.locationOptions.includes(selectedLocation)
+      selectedLocationId !== null &&
+      selectedLocationId !== filters.ALL_LOCATIONS &&
+      filters.sortedLocations.length > 0 &&
+      !filters.locationById.has(selectedLocationId)
     ) {
-      onLocationChange(filters.locationOptions[0]);
+      onSelectedLocationIdChange(filters.sortedLocations[0].id);
     }
-  }, [selectedLocation, filters.locationOptions, onLocationChange]);
+  }, [selectedLocationId, filters.sortedLocations, filters.locationById, filters.ALL_LOCATIONS, onSelectedLocationIdChange]);
 
   // ── Auto-paginate + scroll to newly selected row (e.g. after Add Row) ─────
   const prevSelectedRowIdRef = useRef(data.selectedRowId);
@@ -162,22 +162,34 @@ export function InventoryPage({
   const [showTemplateDialog, setShowTemplateDialog] = useState(false);
   const [templateSelectedIds, setTemplateSelectedIds] = useState<Set<string> | null>(null);
 
+  // ── Per-location column-attachment dialog ──────────────────────────────
+  const [showColumnDialog, setShowColumnDialog] = useState(false);
+  const currentLocation = filters.locationById.get(filters.effectiveLocationId) ?? null;
+  const refetchAfterColumnChange = async () => {
+    // Cheapest path: reload bootstrap + reapply. The dialog is rare enough
+    // that the extra round trip is fine.
+    try {
+      const bootstrap = await (await import("../../lib/inventoryApi")).loadInventoryBootstrap();
+      data.applyBootstrap(bootstrap);
+    } catch { /* surfaced by the dialog's own error handling */ }
+  };
+
   // ── Location add handler ──────────────────────────────────────────────────
   const handleAddLocation = () => {
     const name = data.newLocationName.trim();
     if (!name) return;
-    const dup = filters.locationOptions.find(
-      (l) => l.toLowerCase() === name.toLowerCase(),
+    const dup = filters.sortedLocations.find(
+      (l) => l.name.toLowerCase() === name.toLowerCase(),
     );
-    if (dup && dup !== filters.UNASSIGNED_LOCATION) {
-      data.setAddLocationError(`"${dup}" already exists`);
+    if (dup) {
+      data.setAddLocationError(`"${dup.name}" already exists`);
       return;
     }
     void addInventoryLocation(name)
-      .then((locs) => {
-        data.setRegisteredLocations(locs);
-        data.pendingNewLocationRef.current = name;
-        onLocationChange(name);
+      .then(({ location, locations }) => {
+        data.setLocations(locations);
+        data.pendingNewLocationRef.current = location.id;
+        onSelectedLocationIdChange(location.id);
         data.setNewLocationName("");
         data.setAddingLocation(false);
         data.setAddLocationError(null);
@@ -290,21 +302,21 @@ export function InventoryPage({
               {filters.showLocationPills && (
                 <details className="inventory-dropdown">
                   <summary className="inventory-dropdown-trigger">
-                    {filters.effectiveLocationFilter || "All Locations"}
+                    {filters.effectiveLocationName}
                     <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                   </summary>
                   <div className="inventory-dropdown-panel">
-                    {filters.locationOptions.map((loc) => (
+                    {filters.sortedLocations.map((loc) => (
                       <button
-                        key={loc}
+                        key={loc.id}
                         type="button"
-                        className={`inventory-dropdown-option${filters.effectiveLocationFilter === loc ? " active" : ""}`}
+                        className={`inventory-dropdown-option${filters.effectiveLocationId === loc.id ? " active" : ""}`}
                         onClick={(e) => {
-                          onLocationChange(loc);
+                          onSelectedLocationIdChange(loc.id);
                           e.currentTarget.closest("details")?.removeAttribute("open");
                         }}
                       >
-                        {loc}
+                        {loc.name}
                       </button>
                     ))}
                     {canEditInventory && (
@@ -371,7 +383,7 @@ export function InventoryPage({
                   data.setAddLocationError(null);
                 }}
                 error={data.addLocationError}
-                registeredLocations={data.registeredLocations}
+                registeredLocations={data.locations.map((l) => l.name)}
               />
             )}
           </>
@@ -383,21 +395,21 @@ export function InventoryPage({
               {filters.showLocationPills && (
                 <details className="inventory-dropdown">
                   <summary className="inventory-dropdown-trigger">
-                    {filters.effectiveLocationFilter || "All Locations"}
+                    {filters.effectiveLocationName}
                     <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                   </summary>
                   <div className="inventory-dropdown-panel">
-                    {filters.locationOptions.map((loc) => (
+                    {filters.sortedLocations.map((loc) => (
                       <button
-                        key={loc}
+                        key={loc.id}
                         type="button"
-                        className={`inventory-dropdown-option${filters.effectiveLocationFilter === loc ? " active" : ""}`}
+                        className={`inventory-dropdown-option${filters.effectiveLocationId === loc.id ? " active" : ""}`}
                         onClick={(e) => {
-                          onLocationChange(loc);
+                          onSelectedLocationIdChange(loc.id);
                           e.currentTarget.closest("details")?.removeAttribute("open");
                         }}
                       >
-                        {loc}
+                        {loc.name}
                       </button>
                     ))}
                     {canEditInventory && (
@@ -453,28 +465,91 @@ export function InventoryPage({
               />
 
               <div className="inventory-actions-group">
+                {/* Import dropdown — scoped to the current location since CSV
+                 *  imports always land items at one specific location. Hidden
+                 *  in "All Locations" view because a destination is required. */}
+                {canEditInventory
+                && data.canEditTable
+                && !isMobile
+                && filters.effectiveLocationId !== filters.ALL_LOCATIONS
+                ? (
+                  <details className="inventory-move-menu">
+                    <summary
+                      className="inventory-toolbar-action"
+                      title="Import items into this location"
+                    >
+                      <Download size={14} aria-hidden="true" /> Import
+                    </summary>
+                    <div className="inventory-move-panel">
+                      <button
+                        type="button"
+                        className="inventory-move-option"
+                        onClick={(e) => {
+                          data.onChooseCsvImport();
+                          e.currentTarget.closest("details")?.removeAttribute("open");
+                        }}
+                      >
+                        Upload CSV / XLSX
+                      </button>
+                      <button
+                        type="button"
+                        className="inventory-move-option"
+                        onClick={(e) => {
+                          data.onOpenPasteImport();
+                          e.currentTarget.closest("details")?.removeAttribute("open");
+                        }}
+                      >
+                        Paste from clipboard
+                      </button>
+                      <button
+                        type="button"
+                        className="inventory-move-option"
+                        onClick={(e) => {
+                          handleDownloadTemplate();
+                          e.currentTarget.closest("details")?.removeAttribute("open");
+                        }}
+                      >
+                        Download template
+                      </button>
+                    </div>
+                  </details>
+                ) : null}
+                {data.canEditTable
+                && !isMobile
+                && filters.effectiveLocationId !== filters.ALL_LOCATIONS
+                && currentLocation
+                ? (
+                  <button
+                    type="button"
+                    className="inventory-toolbar-action"
+                    onClick={() => setShowColumnDialog(true)}
+                    title="Manage which custom columns appear at this location"
+                  >
+                    Manage columns
+                  </button>
+                ) : null}
                 {data.canEditTable && !isMobile && data.rows.length > 1 && filters.selectedRowIds.size > 0 ? (
                   <>
-                    {filters.showLocationPills && filters.locationOptions.length > 1 ? (
+                    {filters.showLocationPills && filters.sortedLocations.length > 1 ? (
                       <details className="inventory-move-menu">
                         <summary className="inventory-toolbar-action">
                           Move to…
                         </summary>
                         <div className="inventory-move-panel">
-                          {filters.locationOptions
-                            .filter((loc) => loc !== filters.effectiveLocationFilter)
+                          {filters.sortedLocations
+                            .filter((loc) => loc.id !== filters.effectiveLocationId)
                             .map((loc) => (
                               <button
-                                key={loc}
+                                key={loc.id}
                                 type="button"
                                 className="inventory-move-option"
                                 onClick={(e) => {
-                                  data.onMoveSelectedRows(loc);
+                                  void data.onMoveSelectedRows(loc.id);
                                   const details = e.currentTarget.closest("details");
                                   details?.removeAttribute("open");
                                 }}
                               >
-                                {loc}
+                                {loc.name}
                               </button>
                             ))}
                         </div>
@@ -553,7 +628,7 @@ export function InventoryPage({
                   data.setAddLocationError(null);
                 }}
                 error={data.addLocationError}
-                registeredLocations={data.registeredLocations}
+                registeredLocations={data.locations.map((l) => l.name)}
               />
             )}
           </>
@@ -561,7 +636,7 @@ export function InventoryPage({
 
         {filters.activeTab === "logUsage" ? (
           <InventoryUsagePage
-            selectedLocation={selectedLocation}
+            selectedLocationId={selectedLocationId}
             canEditInventory={canEditInventory}
           />
         ) : (
@@ -593,8 +668,8 @@ export function InventoryPage({
                 canEdit={canEditInventory}
                 canEditTable={data.canEditTable}
                 showLocationPills={filters.showLocationPills}
-                locationOptions={filters.locationOptions}
-                effectiveLocationFilter={filters.effectiveLocationFilter}
+                locations={filters.sortedLocations}
+                effectiveLocationId={filters.effectiveLocationId}
                 rows={data.rows}
                 filteredRowsLength={filters.filteredRows.length}
                 onToggleRowSelection={data.onToggleRowSelection}
@@ -641,13 +716,9 @@ export function InventoryPage({
                 getAppliedColumnWidth={resize.getAppliedColumnWidth}
                 getColumnMinWidth={resize.getColumnMinWidth}
                 onResizeMouseDown={resize.onResizeMouseDown}
-                locationOptions={filters.locationOptions}
-                categoryOptions={filters.categoryOptions}
-                categoryFilter={filters.categoryFilter}
-                effectiveCategoryFilter={filters.effectiveCategoryFilter}
-                onCategoryChange={filters.setCategoryFilter}
-                effectiveLocationFilter={filters.effectiveLocationFilter}
-                onLocationChange={onLocationChange}
+                groupableFilters={filters.groupableFilters}
+                groupableColumnOptions={filters.groupableColumnOptions}
+                onGroupableFilterChange={filters.setGroupableFilter}
                 getReadOnlyCellText={data.getReadOnlyCellText}
                 toDateInputValue={filters.toDateInputValue}
                 normalizeLinkValue={data.normalizeLinkValue}
@@ -671,6 +742,15 @@ export function InventoryPage({
             />
           </>
         )}
+
+        {showColumnDialog && currentLocation ? (
+          <ColumnAttachmentDialog
+            columns={data.columns}
+            location={currentLocation}
+            onClose={() => setShowColumnDialog(false)}
+            onColumnsChanged={() => { void refetchAfterColumnChange(); }}
+          />
+        ) : null}
 
         <ImportDialogs
           csvImportDialog={data.csvImportDialog}

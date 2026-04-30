@@ -11,8 +11,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
     name: "Fire / EMS",
     description: "Equipment, PPE, and apparatus inventory for fire and EMS departments.",
     columns: [
-      { label: "Location", type: "text" },
-      { label: "Vehicle/Unit", type: "text" },
+{ label: "Vehicle/Unit", type: "text" },
       { label: "Serial Number", type: "text" },
       { label: "Last Inspected", type: "date" },
       { label: "Condition", type: "text" },
@@ -27,8 +26,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Part Number", type: "text" },
       { label: "Size/Spec", type: "text" },
       { label: "Manufacturer", type: "text" },
-      { label: "Location", type: "text" },
-      { label: "Unit Cost", type: "number" },
+{ label: "Unit Cost", type: "number" },
       { label: "Notes", type: "text" },
     ],
   },
@@ -40,8 +38,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Part Number", type: "text" },
       { label: "Voltage/Amperage", type: "text" },
       { label: "Manufacturer", type: "text" },
-      { label: "Location", type: "text" },
-      { label: "Unit Cost", type: "number" },
+{ label: "Unit Cost", type: "number" },
       { label: "Notes", type: "text" },
     ],
   },
@@ -53,8 +50,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Part Number", type: "text" },
       { label: "Size/Spec", type: "text" },
       { label: "Manufacturer", type: "text" },
-      { label: "Location", type: "text" },
-      { label: "Notes", type: "text" },
+{ label: "Notes", type: "text" },
     ],
   },
   {
@@ -65,8 +61,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Category", type: "text" },
       { label: "Unit", type: "text" },
       { label: "Supplier", type: "text" },
-      { label: "Storage Location", type: "text" },
-      { label: "Notes", type: "text" },
+{ label: "Notes", type: "text" },
     ],
   },
   {
@@ -76,8 +71,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
     columns: [
       { label: "Category", type: "text" },
       { label: "Lot Number", type: "text" },
-      { label: "Storage Location", type: "text" },
-      { label: "Controlled", type: "boolean" },
+{ label: "Controlled", type: "boolean" },
       { label: "Notes", type: "text" },
     ],
   },
@@ -89,8 +83,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Asset Tag", type: "text" },
       { label: "Serial Number", type: "text" },
       { label: "Assigned To", type: "text" },
-      { label: "Location", type: "text" },
-      { label: "Purchase Date", type: "date" },
+{ label: "Purchase Date", type: "date" },
       { label: "Notes", type: "text" },
     ],
   },
@@ -100,8 +93,7 @@ const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
     description: "General purpose inventory for offices and small businesses.",
     columns: [
       { label: "Category", type: "text" },
-      { label: "Location", type: "text" },
-      { label: "Notes", type: "text" },
+{ label: "Notes", type: "text" },
     ],
   },
 ];
@@ -186,7 +178,8 @@ export function OnboardingPage({ orgName, onComplete }: OnboardingPageProps) {
                 <li className="onboarding-preview-column onboarding-preview-column-core">Item Name</li>
                 <li className="onboarding-preview-column onboarding-preview-column-core">Quantity</li>
                 <li className="onboarding-preview-column onboarding-preview-column-core">Min Quantity</li>
-                <li className="onboarding-preview-column onboarding-preview-column-core">Expiration Date</li>
+                <li className="onboarding-preview-column onboarding-preview-column-core">Notes</li>
+                <li className="onboarding-preview-column onboarding-preview-column-core">Category</li>
                 {selected.columns.map((col) => (
                   <li key={col.label} className="onboarding-preview-column">
                     {col.label}

@@ -7,6 +7,7 @@ import { ddb } from "../clients";
 import { json, parseNextToken } from "../http";
 import { getParentItemId, listAllItems, listItemsPage, validateNonNegativeField } from "../items";
 import { buildAuditEvent, findAuditEventByEventId, writeAuditEvents, writeAuditEventsCoalesced, computeValuesDiff } from "../audit";
+import { listLocations } from "../columns";
 
 // Machine-managed fields in valuesJson. Changes to these shouldn't produce
 // ITEM_EDIT audit events — they're either identity (parentItemId) or state
@@ -47,12 +48,14 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         .filter((value: string) => value.length > 0)
     : [];
 
-  // Batch-read existing rows for audit diff
+  // Batch-read existing rows for audit diff. Also project locationId so save
+  // can preserve the structural pointer when the client doesn't supply one.
   const allIds = [
     ...rows.map((r: any) => String(r?.id ?? "").trim()).filter((id: string) => id.length > 0),
     ...deletedRowIds,
   ];
   const oldValuesMap = new Map<string, Record<string, unknown>>();
+  const oldLocationMap = new Map<string, string | undefined>();
   if (allIds.length > 0) {
     for (let i = 0; i < allIds.length; i += 100) {
       const chunk = allIds.slice(i, i + 100);
@@ -62,7 +65,7 @@ export const handleSaveItems = async (ctx: RouteContext) => {
             RequestItems: {
               [storage.itemTable]: {
                 Keys: chunk.map((id: string) => ({ id })),
-                ProjectionExpression: "id, valuesJson",
+                ProjectionExpression: "id, valuesJson, locationId",
               },
             },
           }),
@@ -74,6 +77,9 @@ export const handleSaveItems = async (ctx: RouteContext) => {
           } catch {
             oldValuesMap.set(String(item.id), {});
           }
+          if (typeof item.locationId === "string") {
+            oldLocationMap.set(String(item.id), String(item.locationId));
+          }
         }
       } catch {
         // Non-critical: audit diffs will be unavailable but save proceeds
@@ -81,12 +87,24 @@ export const handleSaveItems = async (ctx: RouteContext) => {
     }
   }
 
+  // Validate any new locationId values against the current locations list.
+  // Reject up-front rather than letting a typo land a row in a non-existent
+  // location. Also build a name map for audit-event denormalization so the
+  // activity feed can render "added at <Location>" without a join.
+  const allLocationsForSave = await listLocations(storage);
+  const knownLocationIds = new Set(allLocationsForSave.map((l) => l.id));
+  const locationNameById = new Map(allLocationsForSave.map((l) => [l.id, l.name]));
+
   const auditEvents: Record<string, unknown>[] = [];
 
   for (let idx = 0; idx < rows.length; idx += 1) {
     const row = rows[idx];
     const rowId = String(row?.id ?? "").trim() || randomUUID();
     const values = (row?.values ?? {}) as Record<string, unknown>;
+    // Strip any legacy location field — location is now structural. Defensive
+    // because v0 clients may still send `values.location` for a deploy cycle
+    // (we accept it but never persist it).
+    delete values.location;
     // Stamp the logical-item id. Preserves an existing link if the client sent one
     // (e.g. when adding a new lot under an existing parent); otherwise defaults to
     // the row's own id so every row is at minimum its own logical item.
@@ -101,6 +119,33 @@ export const handleSaveItems = async (ctx: RouteContext) => {
       const reason = "error" in minQuantityValidation ? minQuantityValidation.error : "invalid minQuantity";
       return json(400, { error: `Row ${idx + 1}: ${reason}` });
     }
+
+    // Resolve the structural locationId. Three paths:
+    //  1. Client sends `locationId` → validate + use
+    //  2. Existing row → keep its current locationId
+    //  3. Brand-new row with no locationId → reject (the client always knows
+    //     which location it's adding into; absence is a bug worth surfacing)
+    const requestedLocationId =
+      typeof row?.locationId === "string" && row.locationId.trim().length > 0
+        ? row.locationId.trim()
+        : null;
+    const existingLocationId = oldLocationMap.get(rowId);
+    let locationId: string;
+    if (requestedLocationId) {
+      if (!knownLocationIds.has(requestedLocationId)) {
+        return json(400, {
+          error: `Row ${idx + 1}: locationId '${requestedLocationId}' does not exist`,
+        });
+      }
+      locationId = requestedLocationId;
+    } else if (existingLocationId && knownLocationIds.has(existingLocationId)) {
+      locationId = existingLocationId;
+    } else {
+      return json(400, {
+        error: `Row ${idx + 1}: locationId is required for new rows`,
+      });
+    }
+
     try {
       await ddb.send(
         new UpdateCommand({
@@ -109,7 +154,7 @@ export const handleSaveItems = async (ctx: RouteContext) => {
           ConditionExpression:
             "attribute_not_exists(id) OR (organizationId = :org AND #module = :module)",
           UpdateExpression:
-            "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, updatedAtCustom = :updatedAtCustom, createdAt = if_not_exists(createdAt, :createdAt)",
+            "SET organizationId = :org, #module = :module, #position = :position, valuesJson = :values, locationId = :locationId, updatedAtCustom = :updatedAtCustom, createdAt = if_not_exists(createdAt, :createdAt)",
           ExpressionAttributeNames: {
             "#module": "module",
             "#position": "position",
@@ -119,6 +164,7 @@ export const handleSaveItems = async (ctx: RouteContext) => {
             ":module": "inventory",
             ":position": Number(row?.position ?? idx),
             ":values": JSON.stringify(values),
+            ":locationId": locationId,
             ":updatedAtCustom": new Date().toISOString(),
             ":createdAt": String(row?.createdAt ?? new Date().toISOString()),
           },
@@ -182,9 +228,17 @@ export const handleSaveItems = async (ctx: RouteContext) => {
           : { changes: userChanges, snapshot }));
       }
     } else {
-      // Brand new row — only log creation if it has actual content
+      // Brand new row — only log creation if it has actual content. Stamp
+      // location info so the activity feed can render "added at <Location>".
       if (!isAllDefaults(values as Record<string, unknown>)) {
-        auditEvents.push(buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, { initialValues: values, snapshot }));
+        auditEvents.push(
+          buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, {
+            initialValues: values,
+            snapshot,
+            locationId,
+            locationName: locationNameById.get(locationId) ?? null,
+          }),
+        );
       }
     }
 
@@ -424,4 +478,105 @@ export const handleUndoRetire = async (ctx: RouteContext) => {
   ]);
 
   return json(200, { ok: true });
+};
+
+/**
+ * Structural location move. Body: `{ rowIds: string[], locationId }`.
+ * Updates each row's `locationId` and emits one ITEM_MOVE audit event per
+ * row. Replaces the prior pattern of moves being recorded as ordinary
+ * ITEM_EDIT events whose `changes` array happened to contain `field:
+ * "location"`.
+ */
+export const handleMoveItems = async (ctx: RouteContext) => {
+  const { storage, access, body } = ctx;
+  if (!access.canEditInventory) return json(403, { error: "Insufficient permissions" });
+
+  const rowIds = Array.isArray(body?.rowIds)
+    ? body.rowIds
+        .map((v: unknown) => String(v ?? "").trim())
+        .filter((v: string) => v.length > 0)
+    : [];
+  const locationId = String(body?.locationId ?? "").trim();
+  if (rowIds.length === 0) return json(400, { error: "rowIds is required" });
+  if (!locationId) return json(400, { error: "locationId is required" });
+
+  // Validate the destination exists.
+  const locations = await listLocations(storage);
+  const dest = locations.find((l) => l.id === locationId);
+  if (!dest) return json(400, { error: `locationId '${locationId}' does not exist` });
+  const locationNameById = new Map(locations.map((l) => [l.id, l.name]));
+
+  // Snapshot existing rows so the audit events can record the from-side.
+  const oldByIdMap = new Map<string, { locationId?: string; itemName: string }>();
+  for (let i = 0; i < rowIds.length; i += 100) {
+    const chunk = rowIds.slice(i, i + 100);
+    try {
+      const batchResult = await ddb.send(
+        new BatchGetCommand({
+          RequestItems: {
+            [storage.itemTable]: {
+              Keys: chunk.map((id: string) => ({ id })),
+              ProjectionExpression: "id, valuesJson, locationId",
+            },
+          },
+        }),
+      );
+      const items = batchResult.Responses?.[storage.itemTable] ?? [];
+      for (const item of items) {
+        let parsedValues: Record<string, unknown> = {};
+        try { parsedValues = JSON.parse(String(item.valuesJson ?? "{}")); } catch { /* ignore */ }
+        const id = String(item.id);
+        oldByIdMap.set(id, {
+          locationId: typeof item.locationId === "string" ? String(item.locationId) : undefined,
+          itemName: String(parsedValues.itemName ?? "").trim() || `Item ${id.slice(0, 8)}`,
+        });
+      }
+    } catch {
+      // Audit will be incomplete but moves still proceed.
+    }
+  }
+
+  const auditEvents: Record<string, unknown>[] = [];
+  let movedCount = 0;
+  const now = new Date().toISOString();
+  for (const id of rowIds) {
+    const old = oldByIdMap.get(id);
+    if (!old) continue; // not found — silently skip rather than 404 the whole batch
+    if (old.locationId === locationId) continue; // no-op move
+    try {
+      await ddb.send(
+        new UpdateCommand({
+          TableName: storage.itemTable,
+          Key: { id },
+          UpdateExpression: "SET locationId = :loc, updatedAtCustom = :now",
+          ConditionExpression: "organizationId = :org AND #module = :module",
+          ExpressionAttributeNames: { "#module": "module" },
+          ExpressionAttributeValues: {
+            ":loc": locationId,
+            ":now": now,
+            ":org": access.organizationId,
+            ":module": "inventory",
+          },
+        }),
+      );
+      auditEvents.push(
+        buildAuditEvent(access, "ITEM_MOVE", id, old.itemName, {
+          fromLocationId: old.locationId ?? null,
+          fromLocationName: old.locationId ? locationNameById.get(old.locationId) ?? null : null,
+          toLocationId: locationId,
+          toLocationName: dest.name,
+        }),
+      );
+      movedCount += 1;
+    } catch (err: any) {
+      if (err?.name === "ConditionalCheckFailedException") continue;
+      throw err;
+    }
+  }
+
+  if (auditEvents.length > 0) {
+    await writeAuditEvents(storage.auditTable, auditEvents);
+  }
+
+  return json(200, { ok: true, movedCount });
 };

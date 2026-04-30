@@ -19,6 +19,8 @@ import { ddb } from "../clients";
 import { json } from "../http";
 import { buildAuditEvent, writeAuditEvents } from "../audit";
 import { listAllItems } from "../items";
+import { findLocationByName, createLocation } from "../locations";
+import { listLocations } from "../columns";
 
 export const handleListRestockOrders = async (ctx: RouteContext) => {
   const { access, storage } = ctx;
@@ -87,6 +89,9 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
       if (!itemName) return json(400, { error: `Entry ${i + 1}: itemName is required for items not in inventory.` });
       const freeformId = `freeform-${randomUUID()}`;
       const reorderLink = String(entry?.reorderLink ?? "").trim() || undefined;
+      // Prefer the structural locationId. Accept the legacy `location` name
+      // for v0 client compat; the receive flow resolves it to an id later.
+      const locationId = String(entry?.locationId ?? "").trim() || undefined;
       const location = String(entry?.location ?? "").trim() || undefined;
       const minQuantity = entry?.minQuantity !== undefined && entry?.minQuantity !== null && entry?.minQuantity !== ""
         ? Number(entry.minQuantity) : undefined;
@@ -110,6 +115,7 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
         qtyReceived: 0,
         ...(unitCost !== undefined ? { unitCost } : {}),
         ...(reorderLink ? { reorderLink } : {}),
+        ...(locationId ? { locationId } : {}),
         ...(location ? { location } : {}),
         ...(minQuantity !== undefined ? { minQuantity } : {}),
         ...(packSize !== undefined ? { packSize } : {}),
@@ -230,6 +236,16 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
   const byId = new Map(allItems.map((item) => [String(item.id), item]));
   const auditEvents: Record<string, unknown>[] = [];
   const now = new Date().toISOString();
+  /** Per-line diagnostic of what the receive actually did. Returned to the
+   *  client so symptoms like "qty didn't go up" can be debugged from the
+   *  browser console without trawling CloudWatch. */
+  const receiveTrace: Array<{
+    itemId: string;
+    path: "freeform-create" | "freeform-skip" | "update" | "skip-not-found";
+    oldQty?: number;
+    newQty?: number;
+    qtyAdded: number;
+  }> = [];
   // Vendor captured at order time — propagates onto every RESTOCK_RECEIVED event
   // so phase 2 "spend by vendor" analytics can query audit alone.
   const orderVendor = typeof order.vendor === "string" && order.vendor.trim()
@@ -243,8 +259,40 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     if (isFreeform) {
       orderItem.qtyReceived += line.qtyThisReceive;
       if (line.unitCost !== undefined) orderItem.unitCost = line.unitCost;
+      receiveTrace.push({
+        itemId: line.itemId,
+        path: line.addToInventory ? "freeform-create" : "freeform-skip",
+        qtyAdded: line.addToInventory ? line.qtyThisReceive : 0,
+      });
 
       if (line.addToInventory) {
+        // Resolve the structural locationId for the new inventory row.
+        // Order item carries `locationId` (v1+) or legacy `location` (v0).
+        // For legacy: look up by name; if missing, create the location on the
+        // fly so we never block a receive on a typo. Falls back to the first
+        // available location when both fields are absent (rare but possible
+        // on a free-text row that didn't capture either).
+        let resolvedLocationId: string;
+        if (orderItem.locationId) {
+          resolvedLocationId = orderItem.locationId;
+        } else if (orderItem.location) {
+          const existing = await findLocationByName(storage, orderItem.location);
+          if (existing) {
+            resolvedLocationId = existing.id;
+          } else {
+            const all = await listLocations(storage);
+            const sortOrder = all.length > 0 ? Math.max(...all.map((l) => l.sortOrder ?? 0)) + 10 : 10;
+            const created = await createLocation(storage, access.organizationId, orderItem.location, sortOrder);
+            resolvedLocationId = created.id;
+          }
+        } else {
+          const all = await listLocations(storage);
+          if (all.length === 0) {
+            return json(400, { error: "No locations exist; cannot materialize freeform item." });
+          }
+          resolvedLocationId = all[0].id;
+        }
+
         // Create a new inventory item from this freeform receive
         const newItemId = randomUUID();
         const newValues: Record<string, unknown> = {
@@ -256,8 +304,6 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
         // Persist the vendor link captured at order time so future reorders
         // route the item back to the right vendor card automatically.
         if (orderItem.reorderLink) newValues.reorderLink = orderItem.reorderLink;
-        // Persist location so location-filtered inventory views pick it up.
-        if (orderItem.location) newValues.location = orderItem.location;
         // Cache the latest unit cost on the row so the (read-only) Unit Cost
         // column shows the most recent price paid. Authoritative history lives
         // in the RESTOCK_RECEIVED audit events.
@@ -277,6 +323,7 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
             organizationId: access.organizationId,
             module: "inventory",
             position: allItems.length + 1,
+            locationId: resolvedLocationId,
             valuesJson: JSON.stringify(newValues),
             createdAt: now,
             updatedAtCustom: now,
@@ -303,7 +350,24 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     }
 
     const item = byId.get(line.itemId);
-    if (!item) continue;
+    if (!item) {
+      // Order was created against this id, but the row no longer exists.
+      // Most likely cause: the row was deleted between order and receive,
+      // OR the order is from before the v1 migration and references a stale
+      // id. Either way, log loudly so we can diagnose — silently skipping
+      // looked successful to the user but never updated stock.
+      console.warn(
+        `restock receive: line.itemId=${line.itemId} not found in items table; skipping.` +
+        ` Order=${orderId}, qty=${line.qtyThisReceive}.` +
+        ` This typically means the inventory row was deleted between order and receive.`,
+      );
+      receiveTrace.push({
+        itemId: line.itemId,
+        path: "skip-not-found",
+        qtyAdded: 0,
+      });
+      continue;
+    }
     let values: Record<string, unknown> = {};
     try { values = JSON.parse(String(item.valuesJson ?? "{}")); } catch { /* ignore */ }
     const oldQty = Number(values.quantity ?? 0);
@@ -314,6 +378,17 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     // column shows the most recent price paid. Authoritative history lives in
     // the RESTOCK_RECEIVED audit events.
     if (line.unitCost !== undefined) nextValues.unitCost = line.unitCost;
+    // Receiving stock against an item clears its "ordered" state. Without
+    // this, a row that had orderedAt set when it was placed on order keeps
+    // the marker after stock arrives, and the row stays hidden from the
+    // reorder list even if the user already burned through the new stock.
+    // Conversely, the user reported items reappearing on reorder after
+    // receive — the most-likely explanation is the marker was cleared by
+    // some other path (manual edit, autosave) and we never re-set it. Either
+    // way, "stock just arrived" is the right moment to reset the ordered
+    // state explicitly.
+    delete nextValues.orderedAt;
+    delete nextValues.reorderCheckedAt;
 
     await ddb.send(new UpdateCommand({
       TableName: storage.itemTable,
@@ -331,6 +406,13 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
 
     orderItem.qtyReceived += line.qtyThisReceive;
     if (line.unitCost !== undefined) orderItem.unitCost = line.unitCost;
+    receiveTrace.push({
+      itemId: line.itemId,
+      path: "update",
+      oldQty,
+      newQty,
+      qtyAdded: line.qtyThisReceive,
+    });
 
     const snapshot: Record<string, unknown> = { quantity: newQty };
     if (values.minQuantity !== undefined) snapshot.minQuantity = values.minQuantity;
@@ -400,7 +482,7 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
   }
 
   await writeAuditEvents(storage.auditTable, auditEvents);
-  return json(200, { ok: true, status: newStatus });
+  return json(200, { ok: true, status: newStatus, receiveTrace });
 };
 
 export const handleCloseRestockOrder = async (ctx: RouteContext) => {

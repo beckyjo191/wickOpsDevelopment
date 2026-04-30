@@ -24,13 +24,14 @@ export type InventoryDesktopTableProps = {
   getAppliedColumnWidth: (column: InventoryColumn) => number;
   getColumnMinWidth: (column: InventoryColumn) => number;
   onResizeMouseDown: (event: ReactMouseEvent<HTMLSpanElement>, column: InventoryColumn) => void;
-  locationOptions: string[];
-  categoryOptions: string[];
-  categoryFilter: string;
-  effectiveCategoryFilter: string;
-  onCategoryChange: (category: string) => void;
-  effectiveLocationFilter: string;
-  onLocationChange: (location: string) => void;
+  /** Map of column key → currently-selected filter value. Replaces the
+   *  previous category-only `categoryFilter` prop. */
+  groupableFilters: Record<string, string>;
+  /** Map of column key → distinct values for the dropdown. */
+  groupableColumnOptions: Record<string, string[]>;
+  /** Update a single groupable column's filter value. Pass empty string (or
+   *  the ALL_GROUPABLE sentinel) to clear. */
+  onGroupableFilterChange: (columnKey: string, value: string) => void;
   getReadOnlyCellText: (column: InventoryColumn, value: unknown) => string;
   toDateInputValue: (raw: unknown) => string;
   normalizeLinkValue: (value: string) => string;
@@ -70,9 +71,9 @@ export function InventoryDesktopTable({
   getAppliedColumnWidth,
   getColumnMinWidth,
   onResizeMouseDown,
-  categoryOptions,
-  effectiveCategoryFilter,
-  onCategoryChange,
+  groupableFilters,
+  groupableColumnOptions,
+  onGroupableFilterChange,
   getReadOnlyCellText,
   toDateInputValue,
   normalizeLinkValue,
@@ -109,7 +110,10 @@ export function InventoryDesktopTable({
               </th>
             ) : null}
             {visibleColumns.map((column) =>
-              column.key === "category" ? (
+              // Generic groupable filter: any column with isGroupable === true
+              // gets the dropdown header. Replaces the previous hardcoded
+              // category-only branch.
+              column.isGroupable ? (
                 <th
                   key={column.id}
                   className={`inventory-col-${column.key}`}
@@ -121,12 +125,24 @@ export function InventoryDesktopTable({
                       <ChevronDown size={14} aria-hidden="true" />
                     </summary>
                     <div className="inventory-location-panel">
-                      {categoryOptions.map((option) => (
+                      <button
+                        key="__all__"
+                        className={`inventory-location-item${!groupableFilters[column.key] ? " active" : ""}`}
+                        onClick={(event) => {
+                          onGroupableFilterChange(column.key, "");
+                          const details = event.currentTarget.closest("details");
+                          details?.removeAttribute("open");
+                        }}
+                        type="button"
+                      >
+                        All {column.label}
+                      </button>
+                      {(groupableColumnOptions[column.key] ?? []).map((option) => (
                         <button
                           key={option}
-                          className={`inventory-location-item${effectiveCategoryFilter === option ? " active" : ""}`}
+                          className={`inventory-location-item${groupableFilters[column.key] === option ? " active" : ""}`}
                           onClick={(event) => {
-                            onCategoryChange(option);
+                            onGroupableFilterChange(column.key, option);
                             const details = event.currentTarget.closest("details");
                             details?.removeAttribute("open");
                           }}

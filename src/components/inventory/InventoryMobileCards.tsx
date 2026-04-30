@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import type { ActiveTab, InventoryColumn, InventoryRow } from "./inventoryTypes";
+import type { ActiveTab, InventoryColumn, InventoryLocation, InventoryRow } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
 export type InventoryMobileCardsProps = {
@@ -13,8 +13,10 @@ export type InventoryMobileCardsProps = {
   canEdit: boolean;
   canEditTable: boolean;
   showLocationPills: boolean;
-  locationOptions: string[];
-  effectiveLocationFilter: string;
+  /** Available locations (sorted). Replaces the previous string[] of names. */
+  locations: InventoryLocation[];
+  /** Currently-scoped location id, or "" for All Locations. */
+  effectiveLocationId: string;
   rows: InventoryRow[];
   filteredRowsLength: number;
   onToggleRowSelection: (rowId: string) => void;
@@ -22,7 +24,7 @@ export type InventoryMobileCardsProps = {
   onExpandCard: (rowId: string | null) => void;
   onSetSelectMode: (mode: boolean) => void;
   onSetSelectedRowId: (rowId: string | null) => void;
-  onMoveSelectedRows: (location: string) => void;
+  onMoveSelectedRows: (locationId: string) => void;
   /** Opens the unified Remove dialog for the current selection. Replaces the
    *  prior bulk-Delete affordance — same call site, but the dialog asks
    *  what happened so the action can be retire-with-reason or hard-delete. */
@@ -58,8 +60,8 @@ export function InventoryMobileCards({
   selectMode,
   canEditTable,
   showLocationPills,
-  locationOptions,
-  effectiveLocationFilter,
+  locations,
+  effectiveLocationId,
   rows,
   filteredRowsLength,
   onToggleRowSelection,
@@ -84,26 +86,26 @@ export function InventoryMobileCards({
     <div className="inventory-cards-wrap">
       {selectMode && canEditTable && selectedRowIds.size > 0 && rows.length > 1 && (
         <div className="inventory-cards-toolbar">
-          {showLocationPills && locationOptions.length > 1 ? (
+          {showLocationPills && locations.length > 1 ? (
             <details className="inventory-move-menu">
               <summary className="button button-secondary button-sm">
                 Move to…
               </summary>
               <div className="inventory-move-panel">
-                {locationOptions
-                  .filter((loc) => loc !== effectiveLocationFilter)
+                {locations
+                  .filter((loc) => loc.id !== effectiveLocationId)
                   .map((loc) => (
                     <button
-                      key={loc}
+                      key={loc.id}
                       type="button"
                       className="inventory-move-option"
                       onClick={(e) => {
-                        onMoveSelectedRows(loc);
+                        onMoveSelectedRows(loc.id);
                         const details = e.currentTarget.closest("details");
                         details?.removeAttribute("open");
                       }}
                     >
-                      {loc}
+                      {loc.name}
                     </button>
                   ))}
               </div>

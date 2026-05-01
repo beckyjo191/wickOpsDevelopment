@@ -26,6 +26,7 @@ import {
   loadInventoryBootstrap,
   receiveRestockOrder,
   saveInventoryItems,
+  type InventoryLocation,
   type InventoryRow,
   type RestockOrder,
   type RestockOrderItem,
@@ -36,7 +37,10 @@ import { formatCurrency, parseCurrency } from "../lib/currency";
 
 
 interface OrdersPageProps {
-  selectedLocation?: string | null;
+  selectedLocationId?: string | null;
+  /** Optional: lets the user change scope from inside Orders without
+   *  flipping back to Inventory. When omitted the dropdown is read-only. */
+  onSelectedLocationIdChange?: (locationId: string | null) => void;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -239,6 +243,26 @@ function ReceiveOrderForm({
             ...(l.isFreeform ? { addToInventory: true } : {}),
           };
         });
+      // Aggressive diagnostic: log the form state at submit time and the
+      // outgoing payload. If "[receive]" never shows up below this, the
+      // browser is running stale frontend code (hard refresh) OR the submit
+      // is short-circuiting somewhere we don't see. console.warn so it
+      // bypasses any default "hide info" filter.
+      console.warn("[receive form] submit", {
+        orderId: order.id,
+        validatedLines: validated.map((l) => ({
+          itemId: l.itemId,
+          itemName: l.itemName,
+          isFreeform: l.isFreeform,
+          qtyOrdered: l.qtyOrdered,
+          qtyReceived: l.qtyReceived,
+          qtyThisReceive: l.qtyThisReceive,
+          receivingAsBoxes: l.receivingAsBoxes,
+          packSize: l.packSize,
+        })),
+        outgoingLines: receiveLines,
+        closeOrder,
+      });
       if (receiveLines.length === 0) {
         // Nothing to send — backend requires at least one line.
         setError("Enter at least one received quantity above 0.");
@@ -293,7 +317,15 @@ function ReceiveOrderForm({
     }
 
     // If any line will leave outstanding qty after this receive, prompt the user.
-    const shortLines = validated.filter((l) => Number(l.qtyThisReceive) < l.qtyRemaining);
+    // qtyThisReceive is in boxes when receivingAsBoxes, units otherwise.
+    // qtyRemaining is always units. Convert to a shared denominator (units)
+    // before comparing — otherwise "1 box" reads as "1 unit" and a fully-
+    // received pack-based order looks 99 short.
+    const shortLines = validated.filter((l) => {
+      const raw = Number(l.qtyThisReceive);
+      const receivedUnits = l.receivingAsBoxes && l.packSize > 0 ? raw * l.packSize : raw;
+      return receivedUnits < l.qtyRemaining;
+    });
     if (shortLines.length > 0) {
       setPendingShortLines(shortLines);
       return;
@@ -424,10 +456,22 @@ function ReceiveOrderForm({
           </div>
           <ul className="order-receive-warning-list">
             {pendingShortLines.map((l) => {
-              const short = l.qtyRemaining - Number(l.qtyThisReceive);
+              // Display the short qty in the unit the user typed in. For pack
+              // items that means converting both qtyOrdered and the shortfall
+              // to boxes; for unit items both stay in units.
+              const inBoxMode = l.receivingAsBoxes && l.packSize > 0;
+              const receivingTyped = Number(l.qtyThisReceive) || 0;
+              const orderedDisplay = inBoxMode
+                ? Math.ceil(l.qtyRemaining / l.packSize)
+                : l.qtyRemaining;
+              const shortDisplay = orderedDisplay - receivingTyped;
+              const unitWord = inBoxMode
+                ? `box${orderedDisplay === 1 ? "" : "es"}`
+                : "";
+              const suffix = unitWord ? ` ${unitWord}` : "";
               return (
                 <li key={l.itemId}>
-                  {l.itemName}: receiving {Number(l.qtyThisReceive)} of {l.qtyRemaining} — {short} short
+                  {l.itemName}: receiving {receivingTyped} of {orderedDisplay}{suffix} — {shortDisplay} short
                 </li>
               );
             })}
@@ -529,7 +573,17 @@ function OrderCard({
         order={order}
         hasExpirationColumn={hasExpirationColumn}
         inventoryRows={inventoryRows}
-        onReceived={() => { setShowReceive(false); onRefresh(order); }}
+        onReceived={() => {
+          setShowReceive(false);
+          // Pass NO `closedOrder` — receive already cleared orderedAt
+          // server-side AND incremented qty. Calling onRefresh(order)
+          // would route through handleOrderChanged's cancel-cleanup
+          // branch, which posts the row back with stale local state and
+          // overwrites the receive's qty bump. The cancel button below
+          // still passes `order` because the cancel server-flow doesn't
+          // touch inventory rows — frontend cleanup is needed there.
+          onRefresh();
+        }}
         onCancel={() => setShowReceive(false)}
       />
     );
@@ -851,6 +905,7 @@ export function OrdersHelp() {
  *  setting a selected state. The bottom of the dropdown always offers a
  *  "+ Add as new item" sentinel for freeform entry. */
 function OrderItemAutocomplete({
+  inputId,
   inventoryRows,
   excludeNames,
   onPickExisting,
@@ -861,6 +916,7 @@ function OrderItemAutocomplete({
   disabled,
   placeholder,
 }: {
+  inputId?: string;
   inventoryRows: InventoryRow[];
   /** Lowercased item names already in the cart. Used to filter ALL lots of
    *  the same item out of the dropdown — adding "1ml syringe" once should
@@ -988,6 +1044,7 @@ function OrderItemAutocomplete({
       <div className="usage-autocomplete">
         <div className="usage-autocomplete-input-wrap">
           <input
+            id={inputId}
             type="text"
             className="usage-autocomplete-input"
             value={value}
@@ -1019,6 +1076,7 @@ function OrderItemAutocomplete({
       <div className="usage-autocomplete-input-wrap">
         <input
           ref={inputRef}
+          id={inputId}
           type="text"
           className="usage-autocomplete-input"
           value={search}
@@ -1247,9 +1305,10 @@ function ComposeOrderPanel({
         </p>
       </div>
         <div className="manual-order-fields">
-          <label className="manual-order-field">
-            <span>Vendor</span>
+          <div className="manual-order-field">
+            <label className="field-label" htmlFor="manual-order-vendor">Vendor</label>
             <VendorSelect
+              inputId="manual-order-vendor"
               value={vendor}
               availableVendors={availableVendors}
               onChange={setVendor}
@@ -1258,10 +1317,11 @@ function ComposeOrderPanel({
               ariaLabel="Vendor"
               placeholder="Choose or type to add new"
             />
-          </label>
-          <label className="manual-order-field">
-            <span>Notes (optional)</span>
+          </div>
+          <div className="manual-order-field">
+            <label className="field-label" htmlFor="manual-order-notes">Notes (optional)</label>
             <input
+              id="manual-order-notes"
               className="field"
               type="text"
               placeholder="e.g. Costco run — Apr 27"
@@ -1269,7 +1329,7 @@ function ComposeOrderPanel({
               onChange={(e) => setNotes(e.target.value)}
               disabled={submitting}
             />
-          </label>
+          </div>
         </div>
 
         <div className="usage-entries compose-order-lines">
@@ -1279,8 +1339,9 @@ function ComposeOrderPanel({
               <div className="usage-entry compose-order-line" key={idx}>
                 <div className="usage-entry-main compose-order-line-main">
                   <div className="usage-entry-item">
-                    <label className="usage-field-label">Item</label>
+                    <label className="field-label" htmlFor={`manual-order-item-${idx}`}>Item</label>
                     <OrderItemAutocomplete
+                      inputId={`manual-order-item-${idx}`}
                       inventoryRows={inventoryRows}
                       excludeNames={alreadyInCartNames}
                       value={filled ? l.itemName : undefined}
@@ -1293,8 +1354,9 @@ function ComposeOrderPanel({
                     />
                   </div>
                   <div className="usage-entry-qty compose-order-line-qty">
-                    <label className="usage-field-label">Qty</label>
+                    <label className="field-label" htmlFor={`manual-order-qty-${idx}`}>Qty</label>
                     <input
+                      id={`manual-order-qty-${idx}`}
                       className="field compose-order-line-qty-input"
                       type="number"
                       min="1"
@@ -1304,7 +1366,6 @@ function ComposeOrderPanel({
                       onClick={(e) => e.currentTarget.select()}
                       onBlur={(e) => { if (e.currentTarget.value === "") updateLine(idx, { qty: "0" }); }}
                       disabled={submitting || !filled}
-                      aria-label="Quantity"
                     />
                   </div>
                   {(filled || lines.length > 1) && (
@@ -1339,9 +1400,10 @@ function ComposeOrderPanel({
                 {filled && l.expanded ? (
                   <div className="manual-order-line-details">
                     {!l.itemId ? (
-                      <label className="manual-order-detail-field">
-                        <span>Min quantity</span>
+                      <div className="manual-order-detail-field">
+                        <label className="field-label" htmlFor={`manual-order-min-${idx}`}>Min quantity</label>
                         <input
+                          id={`manual-order-min-${idx}`}
                           className="field"
                           type="number"
                           min="0"
@@ -1351,11 +1413,12 @@ function ComposeOrderPanel({
                           onFocus={(e) => e.currentTarget.select()}
                           disabled={submitting}
                         />
-                      </label>
+                      </div>
                     ) : null}
-                    <label className="manual-order-detail-field manual-order-detail-field--wide">
-                      <span>Product URL</span>
+                    <div className="manual-order-detail-field manual-order-detail-field--wide">
+                      <label className="field-label" htmlFor={`manual-order-url-${idx}`}>Product URL</label>
                       <input
+                        id={`manual-order-url-${idx}`}
                         className="field"
                         type="text"
                         placeholder="https://..."
@@ -1363,7 +1426,7 @@ function ComposeOrderPanel({
                         onChange={(e) => updateLine(idx, { productUrl: e.target.value })}
                         disabled={submitting}
                       />
-                    </label>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1390,7 +1453,7 @@ function ComposeOrderPanel({
           <span>Already received (close immediately and add to inventory)</span>
         </label>
 
-        {error ? <p className="manual-order-error">{error}</p> : null}
+        {error ? <p className="field-error" role="alert">{error}</p> : null}
 
         <div className="compose-order-actions">
           <button
@@ -1408,28 +1471,30 @@ function ComposeOrderPanel({
 
 // ── Main Orders Page ───────────────────────────────────────────────────────
 
-export function OrdersPage({ selectedLocation }: OrdersPageProps) {
+export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: OrdersPageProps) {
   const [orders, setOrders] = useState<RestockOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [hasExpirationColumn, setHasExpirationColumn] = useState(false);
-  const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
+  const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
   const inventoryRowsRef = useRef<InventoryRow[]>([]);
 
-  // Known locations = registered ones (even if unused) + any location that shows up
-  // on existing rows. Used by the "Add Item Not Listed" form so users can assign
-  // a location to new items.
-  const locationValues = useMemo(() => {
-    const fromRows = inventoryRows
-      .map((row) => String(row.values.location ?? "").trim())
-      .filter((v) => v.length > 0);
-    return Array.from(new Set([...registeredLocations, ...fromRows])).sort((a, b) =>
-      a.localeCompare(b),
-    );
-  }, [inventoryRows, registeredLocations]);
+  // Sorted location list. Replaces the previous merged-from-row-values
+  // derivation — locations are first-class entities post-restructure.
+  const sortedLocations = useMemo(
+    () => [...locations].sort((a, b) =>
+      (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name),
+    ),
+    [locations],
+  );
+  // Some downstream UI (the picker for free-form items) still wants names only.
+  const locationValues = useMemo(
+    () => sortedLocations.map((l) => l.name),
+    [sortedLocations],
+  );
 
   // Known vendors = registered ones (even if unused) + any vendor that shows up
   // on existing rows. Used by the "Add Item Not Listed" form and ReorderTab
@@ -1457,11 +1522,11 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
   }, []);
 
   const loadBootstrap = useCallback(() => {
-    loadInventoryBootstrap().then(({ columns, items, registeredLocations: locs, registeredVendors: vendors }) => {
+    loadInventoryBootstrap().then(({ columns, items, locations: locs, registeredVendors: vendors }) => {
       setInventoryRows(items);
       inventoryRowsRef.current = items;
       setHasExpirationColumn(columns.some((c) => c.key === "expirationDate" && c.isVisible));
-      setRegisteredLocations(Array.isArray(locs) ? locs : []);
+      setLocations(Array.isArray(locs) ? locs : []);
       setRegisteredVendors(Array.isArray(vendors) ? vendors : []);
     }).catch(() => {}).finally(() => {
       setInventoryLoaded(true);
@@ -1494,23 +1559,49 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
     );
     setInventoryRows(updated);
     inventoryRowsRef.current = updated;
-    if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
+    // Surface save errors instead of silently swallowing — the previous
+    // .catch(()=>{}) was masking failures that left orderedAt unpersisted,
+    // causing items to "reappear" on the reorder list and confusing receive
+    // accounting.
+    if (toSave.length > 0) {
+      try {
+        await saveInventoryItems(toSave, []);
+      } catch (err) {
+        console.error("Failed to stamp orderedAt on rows", err);
+        setError(
+          err instanceof Error
+            ? `Could not mark items as ordered: ${err.message}`
+            : "Could not mark items as ordered.",
+        );
+        return; // Don't create the order if we couldn't persist the marker
+      }
+    }
 
     if (orderItems.length > 0) {
-      await createRestockOrder({
-        vendor: vendor || undefined,
-        items: orderItems.map((item) => ({
-          ...(item.rowId ? { itemId: item.rowId } : {}),
-          itemName: item.name,
-          qtyOrdered: item.qty,
-          ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
-          ...(item.minQuantity !== undefined ? { minQuantity: item.minQuantity } : {}),
-          ...(item.packSize !== undefined ? { packSize: item.packSize } : {}),
-          ...(item.packCost !== undefined ? { packCost: item.packCost } : {}),
-          ...(item.reorderLink ? { reorderLink: item.reorderLink } : {}),
-          ...(item.location ? { location: item.location } : {}),
-        })),
-      }).catch(() => {});
+      try {
+        await createRestockOrder({
+          vendor: vendor || undefined,
+          items: orderItems.map((item) => ({
+            ...(item.rowId ? { itemId: item.rowId } : {}),
+            itemName: item.name,
+            qtyOrdered: item.qty,
+            ...(item.unitCost !== undefined ? { unitCost: item.unitCost } : {}),
+            ...(item.minQuantity !== undefined ? { minQuantity: item.minQuantity } : {}),
+            ...(item.packSize !== undefined ? { packSize: item.packSize } : {}),
+            ...(item.packCost !== undefined ? { packCost: item.packCost } : {}),
+            ...(item.reorderLink ? { reorderLink: item.reorderLink } : {}),
+            ...(item.location ? { location: item.location } : {}),
+          })),
+        });
+      } catch (err) {
+        console.error("Failed to create restock order", err);
+        setError(
+          err instanceof Error
+            ? `Could not create the order: ${err.message}`
+            : "Could not create the order.",
+        );
+        return;
+      }
       loadOrders();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1561,6 +1652,15 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
           const newRows: InventoryRow[] = orphanedFreeform.map((oi, idx) => ({
             id: crypto.randomUUID(),
             position: current.length + idx,
+            // Seed structural location from the order item (captured at Add-
+            // Item time as locationId post-restructure, or as a name on
+            // legacy orders). Falls back to the App-level selectedLocationId,
+            // then to the first available location.
+            locationId:
+              oi.locationId
+              ?? (oi.location ? sortedLocations.find((l) => l.name === oi.location)?.id : undefined)
+              ?? selectedLocationId
+              ?? sortedLocations[0]?.id,
             values: {
               itemName: oi.itemName,
               quantity: 0,
@@ -1569,9 +1669,6 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
               // cancelled item doesn't auto-pop into Reorder. The user can
               // set a min later if they want to track this item.
               minQuantity: oi.minQuantity ?? 0,
-              // Seed location from the order item (captured at Add-Item time).
-              // Fall back to the current location context, then "" (Unassigned).
-              location: oi.location ?? selectedLocation ?? "",
               ...(oi.reorderLink ? { reorderLink: oi.reorderLink } : {}),
               ...(oi.unitCost !== undefined ? { unitCost: oi.unitCost } : {}),
               ...(oi.packSize !== undefined ? { packSize: oi.packSize } : {}),
@@ -1800,11 +1897,11 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
 
         {!loading && (
           <>
-            {/* Section tabs — matches the Activity page's `.audit-tab` look:
-             *  large pill buttons with an icon + label and a count badge for
-             *  the queue tabs. Counts live on `orders` so they're cheap to
-             *  derive. Reorder count lives inside ReorderTab; the existing
-             *  "REORDER N" badge in the panel covers it once selected. */}
+            {/* Section tabs only. Location scope moved into ReorderTab's
+             *  own header (where the Estimated total used to live) — orders
+             *  are org-wide entities so the scope picker doesn't apply to
+             *  Pending Receipt or Closed Orders. New Order picks location
+             *  per-item via its own form fields. */}
             <div className="audit-tabs orders-tabs" role="tablist" aria-label="Orders sections">
               <button
                 type="button"
@@ -1860,9 +1957,11 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                 <ReorderTab
                   rows={inventoryRows}
                   availableLocations={locationValues}
+                  availableLocationsFull={sortedLocations}
                   availableVendors={vendorValues}
                   onAddVendor={handleAddVendor}
-                  selectedLocation={selectedLocation ?? null}
+                  selectedLocationId={selectedLocationId ?? null}
+                  onSelectedLocationIdChange={onSelectedLocationIdChange}
                   onSaveItemFields={handleSaveItemFields}
                   onCountChange={setReorderCount}
                   onMarkOrdered={handleMarkOrdered}
@@ -1958,24 +2057,26 @@ export function OrdersPage({ selectedLocation }: OrdersPageProps) {
                             aria-label="Filter closed orders by date"
                           >
                             <div className="closed-orders-daterange-fields">
-                              <label className="closed-orders-daterange-field">
-                                <span>From</span>
+                              <div className="closed-orders-daterange-field">
+                                <label className="field-label" htmlFor="closed-orders-date-from">From</label>
                                 <input
+                                  id="closed-orders-date-from"
                                   className="field"
                                   type="date"
                                   value={closedFromDate}
                                   onChange={(e) => setClosedFromDate(e.target.value)}
                                 />
-                              </label>
-                              <label className="closed-orders-daterange-field">
-                                <span>To</span>
+                              </div>
+                              <div className="closed-orders-daterange-field">
+                                <label className="field-label" htmlFor="closed-orders-date-to">To</label>
                                 <input
+                                  id="closed-orders-date-to"
                                   className="field"
                                   type="date"
                                   value={closedToDate}
                                   onChange={(e) => setClosedToDate(e.target.value)}
                                 />
-                              </label>
+                              </div>
                             </div>
                             {(closedFromDate || closedToDate) && (
                               <button

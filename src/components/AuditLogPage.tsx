@@ -64,12 +64,16 @@ const ACTION_LABELS: Record<string, string> = {
   COLUMN_DELETE: "Column deleted",
   COLUMN_RESTORE: "Column restored",
   COLUMN_UPDATE: "Column updated",
+  LOCATION_CREATE: "Location added",
+  LOCATION_RENAME: "Location renamed",
+  LOCATION_DELETE: "Location deleted",
   CSV_IMPORT: "CSV import",
   TEMPLATE_APPLY: "Template applied",
   RESTOCK_ORDER_CREATE: "Order placed",
   RESTOCK_RECEIVED: "Order received",
   RESTOCK_ORDER_CLOSED: "Order closed",
   RESTOCK_ADDED: "Fast restock",
+  MIGRATION_APPLY: "Inventory upgraded",
 };
 
 const FIELD_LABELS: Record<string, string> = {
@@ -205,12 +209,16 @@ const ACTION_COLORS: Record<string, string> = {
   COLUMN_DELETE: "var(--danger)",
   COLUMN_RESTORE: "var(--text-muted)",
   COLUMN_UPDATE: "var(--primary)",
+  LOCATION_CREATE: "var(--success)",
+  LOCATION_RENAME: "var(--primary)",
+  LOCATION_DELETE: "var(--danger)",
   CSV_IMPORT: "var(--primary)",
   TEMPLATE_APPLY: "var(--primary)",
   RESTOCK_ORDER_CREATE: "var(--primary)",
   RESTOCK_RECEIVED: "var(--success)",
   RESTOCK_ORDER_CLOSED: "var(--text-muted)",
   RESTOCK_ADDED: "var(--success)",
+  MIGRATION_APPLY: "var(--text-muted)",
 };
 
 function formatDate(iso: string): string {
@@ -290,7 +298,11 @@ function buildRichRowSummary(event: AuditEvent): string {
     const parts: string[] = [];
     if (snap.quantity !== undefined && snap.quantity !== null) parts.push(`Qty ${snap.quantity}`);
     if (snap.minQuantity !== undefined && snap.minQuantity !== null) parts.push(`Min ${snap.minQuantity}`);
-    return parts.length > 0 ? `Added (${parts.join(", ")})` : "Added";
+    // Location denormalized at save time, when present, lets the feed read
+    // "Added at Main Storage (Qty 4)" without resolving the id again here.
+    const locName = typeof details.locationName === "string" ? details.locationName : "";
+    const base = parts.length > 0 ? `Added (${parts.join(", ")})` : "Added";
+    return locName ? `${base} at ${locName}` : base;
   }
   if (derived === "ITEM_RETIRE") {
     const reason = typeof details.reason === "string" ? details.reason : "";
@@ -301,7 +313,39 @@ function buildRichRowSummary(event: AuditEvent): string {
     return restored !== undefined ? `Undid retire — restored ${restored}` : "Retire undone";
   }
   if (derived === "ITEM_DELETE") return "Deleted";
-  if (derived === "ITEM_MOVE") return "Reordered";
+  if (derived === "ITEM_MOVE") {
+    // Real structural moves (server-emitted /inventory/items/move) carry the
+    // location names. Legacy "position-only ITEM_EDIT" events from before
+    // ITEM_MOVE was a first-class action don't, so they fall back to
+    // "Reordered" (which described the rearrange-rows behavior at the time).
+    const fromName = typeof details.fromLocationName === "string" ? details.fromLocationName : "";
+    const toName = typeof details.toLocationName === "string" ? details.toLocationName : "";
+    if (fromName && toName) return `Moved from ${fromName} to ${toName}`;
+    if (toName) return `Moved to ${toName}`;
+    return "Reordered";
+  }
+  if (derived === "LOCATION_CREATE") {
+    const name = typeof details.name === "string" ? details.name : "";
+    return name ? `Location added (${name})` : "Location added";
+  }
+  if (derived === "LOCATION_RENAME") {
+    const from = typeof details.from === "string" ? details.from : "";
+    const to = typeof details.to === "string" ? details.to : "";
+    if (from && to) return `Location renamed: ${from} → ${to}`;
+    return "Location renamed";
+  }
+  if (derived === "LOCATION_DELETE") {
+    const name = typeof details.name === "string" ? details.name : "";
+    return name ? `Location deleted (${name})` : "Location deleted";
+  }
+  if (derived === "MIGRATION_APPLY") {
+    const moved = Number(details.itemsMovedToDefault ?? 0);
+    const created = Number(details.locationsCreated ?? 0);
+    const parts: string[] = [];
+    if (created > 0) parts.push(`${created} location${created === 1 ? "" : "s"} created`);
+    if (moved > 0) parts.push(`${moved} item${moved === 1 ? "" : "s"} moved to Default`);
+    return parts.length > 0 ? `Inventory upgraded — ${parts.join(", ")}` : "Inventory upgraded";
+  }
   if (derived === "RESTOCK_ORDER_CREATE") {
     const qty = details.qtyOrdered;
     const vendor = typeof details.vendor === "string" ? details.vendor : "";
@@ -351,7 +395,12 @@ function buildRichRowSummary(event: AuditEvent): string {
     return `CSV import: ${c} created, ${u} updated`;
   }
   if (derived === "TEMPLATE_APPLY") return "Template applied";
-  if (derived === "COLUMN_CREATE") return "Column added";
+  if (derived === "COLUMN_CREATE") {
+    const label = typeof details.columnLabel === "string" && details.columnLabel
+      ? details.columnLabel
+      : typeof details.columnKey === "string" ? details.columnKey : "";
+    return label ? `Column added (${label})` : "Column added";
+  }
   if (derived === "COLUMN_DELETE") {
     const label = typeof details.columnLabel === "string" && details.columnLabel
       ? details.columnLabel
@@ -364,7 +413,25 @@ function buildRichRowSummary(event: AuditEvent): string {
       : typeof details.columnKey === "string" ? details.columnKey : "";
     return label ? `Column restored (${label})` : "Column restored";
   }
-  if (derived === "COLUMN_UPDATE") return "Column updated";
+  if (derived === "COLUMN_UPDATE") {
+    const label = typeof details.columnLabel === "string" && details.columnLabel
+      ? details.columnLabel
+      : typeof details.columnKey === "string" ? details.columnKey : "";
+    const change = typeof details.changeType === "string" ? details.changeType : "";
+    // changeType values from server: "label" / "type" / "visibility" /
+    // "attachments" / "attachments+groupable" / "groupable". Map to a
+    // user-readable suffix so the feed isn't just "Column updated" for
+    // every kind of change.
+    const changeSuffix =
+      change === "attachments" || change === "attachments+groupable"
+        ? "locations"
+        : change === "groupable"
+          ? "filter"
+          : change || "";
+    if (label && changeSuffix) return `Column updated (${label} — ${changeSuffix})`;
+    if (label) return `Column updated (${label})`;
+    return "Column updated";
+  }
   return ACTION_LABELS[derived] ?? derived;
 }
 
@@ -925,6 +992,7 @@ const REASON_LABELS: Record<string, string> = {
   damaged: "Damaged",
   lost: "Lost",
   recalled: "Recalled",
+  discontinued: "Discontinued",
   donated: "Donated",
   unknown: "Unknown",
 };

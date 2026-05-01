@@ -45,8 +45,11 @@ import {
   saveUserColumnVisibility,
   type ColumnVisibilityOverrides,
   type InventoryColumn,
+  type InventoryLocation,
   type InventoryRow,
+  isLocationNotEmptyError,
   exportInventoryData,
+  updateInventoryColumnAttachments,
 } from "../lib/inventoryApi";
 import { MODULE_BY_KEY } from "../lib/moduleRegistry";
 import type { ThemePreference } from "../lib/themePreference";
@@ -59,6 +62,8 @@ import {
 import { AlertTriangle, ChevronRight, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { useToast } from "./shared/Toast";
 import { ConfirmDialog } from "./shared/ConfirmDialog";
+import { LocationPickerDialog } from "./inventory/LocationPickerDialog";
+import { AddColumnDialog } from "./inventory/AddColumnDialog";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
 type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "vendors" | "inventoryColumns" | "importData" | "exportData" | "helpSupport";
@@ -96,7 +101,9 @@ interface SettingsPageProps {
   onCurrentUserEmailChange: (email: string) => void;
   onUserRevoked: (userId: string, newSeatsUsed: number) => void;
   onInviteUsers: () => void;
-  onNavigateToImport: (action: "import-csv" | "paste-import" | "download-template") => void;
+  /** @deprecated Import was moved to the Inventory toolbar. Kept on the
+   *  prop type so App.tsx doesn't need a coordinated change in this commit. */
+  onNavigateToImport?: (action: "import-csv" | "paste-import" | "download-template") => void;
   userName?: string;
   onLogout?: () => void;
 }
@@ -120,7 +127,6 @@ export function SettingsPage({
   onCurrentUserEmailChange,
   onUserRevoked,
   onInviteUsers,
-  onNavigateToImport,
   userName,
   onLogout,
 }: SettingsPageProps) {
@@ -130,7 +136,6 @@ export function SettingsPage({
   const isLockedColumn = (column: InventoryColumn): boolean =>
     column.isCore || column.isRequired || nonEditableKeys.has(column.key);
   const [columns, setColumns] = useState<InventoryColumn[]>([]);
-  const [newColumnName, setNewColumnName] = useState("");
   const [inventoryColumnSearchTerm, setInventoryColumnSearchTerm] = useState("");
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [savingColumn, setSavingColumn] = useState(false);
@@ -162,15 +167,17 @@ export function SettingsPage({
   const [inviteActionStatus, setInviteActionStatus] = useState<string>("");
   const [portalLoading, setPortalLoading] = useState(false);
   const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "done" | "error">("idle");
-  const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
+  const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
   const [newLocationName, setNewLocationName] = useState("");
   const [savingLocation, setSavingLocation] = useState(false);
   const [locationError, setLocationError] = useState<string | null>(null);
-  const [editingLocationName, setEditingLocationName] = useState<string | null>(null);
+  /** Currently-edited location id (rename inline). Null when not editing. */
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [editingLocationValue, setEditingLocationValue] = useState("");
   const [renameLocationError, setRenameLocationError] = useState<string | null>(null);
-  const [pendingDeleteLocation, setPendingDeleteLocation] = useState<string | null>(null);
+  const [pendingDeleteLocationId, setPendingDeleteLocationId] = useState<string | null>(null);
+  const [deleteLocationError, setDeleteLocationError] = useState<string | null>(null);
   const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
   const [newVendorName, setNewVendorName] = useState("");
   const [savingVendor, setSavingVendor] = useState(false);
@@ -199,7 +206,7 @@ export function SettingsPage({
               (a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0),
             ),
           );
-          setRegisteredLocations(bootstrap.registeredLocations ?? []);
+          setLocations(bootstrap.locations ?? []);
           setRegisteredVendors(bootstrap.registeredVendors ?? []);
           setInventoryRows(bootstrap.items ?? []);
           setUserColumnOverrides(bootstrap.columnVisibilityOverrides ?? {});
@@ -339,34 +346,28 @@ export function SettingsPage({
     }
   }, [disclosureStorageKey, disclosures, loadedDisclosureKey]);
 
-  // Derive merged location list: registered + from item data
-  const allLocations = (() => {
-    const fromItems = new Set(
-      inventoryRows
-        .map((r) => String(r.values.location ?? "").trim())
-        .filter((v) => v.length > 0),
-    );
-    const merged = new Set([...registeredLocations, ...fromItems]);
-    return Array.from(merged).sort((a, b) => a.localeCompare(b));
-  })();
+  // Locations are first-class entities — no merging with row.values needed
+  // post-restructure. Sorted by sortOrder + name for stable display.
+  const sortedLocations = [...locations].sort((a, b) =>
+    (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name),
+  );
 
-  const getItemCountForLocation = (loc: string): number =>
-    inventoryRows.filter((r) => String(r.values.location ?? "").trim() === loc).length;
+  const getItemCountForLocationId = (locationId: string): number =>
+    inventoryRows.filter((r) => r.locationId === locationId).length;
 
   const onAddLocation = async () => {
     const name = newLocationName.trim();
     if (!name) return;
-    // Client-side case-insensitive duplicate check
-    const duplicate = allLocations.find((l) => l.toLowerCase() === name.toLowerCase());
+    const duplicate = locations.find((l) => l.name.toLowerCase() === name.toLowerCase());
     if (duplicate) {
-      setLocationError(`"${duplicate}" already exists`);
+      setLocationError(`"${duplicate.name}" already exists`);
       return;
     }
     setLocationError(null);
     setSavingLocation(true);
     try {
-      const locs = await addInventoryLocation(name);
-      setRegisteredLocations(locs);
+      const result = await addInventoryLocation(name);
+      setLocations(result.locations);
       setNewLocationName("");
     } catch (err: any) {
       const msg = err?.message ?? String(err);
@@ -380,36 +381,28 @@ export function SettingsPage({
     }
   };
 
-  const onRenameLocation = async (oldName: string) => {
+  const onRenameLocation = async (id: string) => {
+    const target = locations.find((l) => l.id === id);
+    if (!target) return;
     const newName = editingLocationValue.trim();
-    if (!newName || newName === oldName) {
-      setEditingLocationName(null);
+    if (!newName || newName === target.name) {
+      setEditingLocationId(null);
       setRenameLocationError(null);
       return;
     }
-    // Client-side case-insensitive duplicate check (ignore the one being renamed)
-    const duplicate = allLocations.find(
-      (l) => l !== oldName && l.toLowerCase() === newName.toLowerCase(),
+    const duplicate = locations.find(
+      (l) => l.id !== id && l.name.toLowerCase() === newName.toLowerCase(),
     );
     if (duplicate) {
-      setRenameLocationError(`"${duplicate}" already exists`);
+      setRenameLocationError(`"${duplicate.name}" already exists`);
       return;
     }
     setRenameLocationError(null);
     setSavingLocation(true);
     try {
-      const result = await renameInventoryLocation(oldName, newName);
-      setRegisteredLocations(result.locations);
-      // Update local row data to reflect the rename
-      setInventoryRows((prev) =>
-        prev.map((r) => {
-          if (String(r.values.location ?? "").trim() === oldName) {
-            return { ...r, values: { ...r.values, location: newName } };
-          }
-          return r;
-        }),
-      );
-      setEditingLocationName(null);
+      const result = await renameInventoryLocation(id, newName);
+      setLocations(result.locations);
+      setEditingLocationId(null);
     } catch (err: any) {
       const msg = err?.message ?? String(err);
       if (msg.includes("already exists")) {
@@ -422,17 +415,22 @@ export function SettingsPage({
     }
   };
 
-  const onRemoveLocation = async (name: string) => {
+  const onRemoveLocation = async (id: string) => {
     setSavingLocation(true);
+    setDeleteLocationError(null);
     try {
-      const locs = await removeInventoryLocation(name);
-      setRegisteredLocations(locs);
-      setInventoryRows((prev) =>
-        prev.filter((r) => String(r.values.location ?? "").trim() !== name),
-      );
-      setPendingDeleteLocation(null);
-    } catch (err) {
-      console.error(err);
+      const updated = await removeInventoryLocation(id);
+      setLocations(updated);
+      setPendingDeleteLocationId(null);
+    } catch (err: any) {
+      if (isLocationNotEmptyError(err)) {
+        setDeleteLocationError(
+          `This location still has ${err.itemCount} item${err.itemCount === 1 ? "" : "s"}. Move them out before deleting.`,
+        );
+      } else {
+        console.error(err);
+        setDeleteLocationError(err?.message ?? "Failed to remove location");
+      }
     } finally {
       setSavingLocation(false);
     }
@@ -534,17 +532,47 @@ export function SettingsPage({
     }
   };
 
-  const onAddColumn = async () => {
-    if (!canManageInventoryColumns || !newColumnName.trim()) return;
+  /** Open-state for the Add Column dialog. The dialog now collects name +
+   *  type + locations in one step, replacing the previous inline form that
+   *  silently auto-attached new columns to every location. */
+  const [showAddColumnDialog, setShowAddColumnDialog] = useState(false);
+
+  const onCreateColumn = async (input: {
+    label: string;
+    type: "text" | "number" | "date" | "link" | "boolean";
+    attachedLocationIds: string[];
+  }) => {
+    if (!canManageInventoryColumns) return;
     setSavingColumn(true);
     try {
-      const created = await createInventoryColumn({
-        label: newColumnName.trim(),
-      });
+      const created = await createInventoryColumn(input);
       setColumns((prev) => [...prev, created].sort((a, b) => a.sortOrder - b.sortOrder));
-      setNewColumnName("");
+      setShowAddColumnDialog(false);
     } catch (err: any) {
       toast.error(err?.message ?? "Failed to add column");
+    } finally {
+      setSavingColumn(false);
+    }
+  };
+
+  /** Column whose attachment is currently being edited via the location
+   *  picker dialog. `null` when the dialog is closed. */
+  const [attachmentEditTarget, setAttachmentEditTarget] = useState<InventoryColumn | null>(null);
+
+  /** Saves the picker's selection for the editing column. */
+  const onSaveAttachment = async (column: InventoryColumn, nextIds: string[]) => {
+    if (!canManageInventoryColumns) return;
+    setSavingColumn(true);
+    try {
+      await updateInventoryColumnAttachments(column.id, nextIds);
+      setColumns((prev) =>
+        prev.map((c) =>
+          c.id === column.id ? { ...c, attachedLocationIds: nextIds } : c,
+        ),
+      );
+      setAttachmentEditTarget(null);
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to update column attachments");
     } finally {
       setSavingColumn(false);
     }
@@ -1006,9 +1034,10 @@ export function SettingsPage({
             <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
           </summary>
           <div className="settings-field-group">
-            <label className="settings-field-label">Display Name</label>
+            <label className="field-label" htmlFor="settings-display-name">Display Name</label>
             <div className="settings-field-row">
               <input
+                id="settings-display-name"
                 className={`field settings-profile-field${!editingDisplayName ? " settings-profile-field-locked" : ""}`}
                 type="text"
                 placeholder="Your name"
@@ -1048,9 +1077,10 @@ export function SettingsPage({
           </div>
 
           <div className="settings-field-group">
-            <label className="settings-field-label">Email</label>
+            <label className="field-label" htmlFor="settings-email">Email</label>
             <div className="settings-field-row">
               <input
+                id="settings-email"
                 className={`field settings-profile-field${!editingEmail ? " settings-profile-field-locked" : ""}`}
                 type="email"
                 placeholder="your@email.com"
@@ -1153,44 +1183,9 @@ export function SettingsPage({
           </div>
         </details>
 
-        {canManageInventoryColumns && (
-          <details
-            className="settings-section"
-            open={disclosures.importData}
-            onToggle={(event) => onDisclosureToggle("importData", event.currentTarget.open)}
-          >
-            <summary className="settings-section-title">
-              Import Data
-              <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
-            </summary>
-            <p className="settings-section-copy">
-              Import inventory items from a spreadsheet or paste data directly.
-            </p>
-            <div className="settings-import-actions">
-              <button
-                type="button"
-                className="button button-secondary button-sm"
-                onClick={() => onNavigateToImport("import-csv")}
-              >
-                Upload CSV / XLSX
-              </button>
-              <button
-                type="button"
-                className="button button-secondary button-sm"
-                onClick={() => onNavigateToImport("paste-import")}
-              >
-                Paste Data
-              </button>
-              <button
-                type="button"
-                className="button button-ghost button-sm"
-                onClick={() => onNavigateToImport("download-template")}
-              >
-                Download Template
-              </button>
-            </div>
-          </details>
-        )}
+        {/* Import Data section removed — moved to the Inventory page toolbar
+         *  so imports always carry an explicit destination location (a
+         *  Settings-page import couldn't naturally pick a location). */}
 
         {canManageInventoryColumns && (
           <details
@@ -1408,11 +1403,15 @@ export function SettingsPage({
             <>
               <div className="settings-field-row" style={{ marginBottom: locationError ? "0.25rem" : "0.5rem" }}>
                 <input
+                  id="settings-new-location"
                   className={`field${locationError ? " field--error" : ""}`}
                   placeholder="New location name"
                   value={newLocationName}
                   onChange={(e) => { setNewLocationName(e.target.value); setLocationError(null); }}
                   onKeyDown={(e) => { if (e.key === "Enter") void onAddLocation(); }}
+                  aria-invalid={!!locationError || undefined}
+                  aria-describedby={locationError ? "settings-new-location-error" : undefined}
+                  aria-label="New location name"
                 />
                 <button
                   className="button button-secondary"
@@ -1423,31 +1422,34 @@ export function SettingsPage({
                 </button>
               </div>
               {locationError ? (
-                <p className="settings-field-error">{locationError}</p>
+                <p id="settings-new-location-error" className="field-error">{locationError}</p>
               ) : null}
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading locations...</div> : null}
-                {!loadingColumns && allLocations.length === 0 ? (
+                {!loadingColumns && sortedLocations.length === 0 ? (
                   <div className="settings-section-copy">No locations yet. Add one above.</div>
                 ) : null}
-                {allLocations.map((loc) => {
-                  const itemCount = getItemCountForLocation(loc);
+                {sortedLocations.map((loc) => {
+                  const itemCount = getItemCountForLocationId(loc.id);
                   return (
-                    <div key={loc} className="settings-column-row">
+                    <div key={loc.id} className="settings-column-row">
                       <div className="settings-column-visibility">
-                        {editingLocationName === loc ? (
+                        {editingLocationId === loc.id ? (
                           <span className="settings-column-edit">
                             <input
                               className={`field settings-column-edit-input${renameLocationError ? " field--error" : ""}`}
                               value={editingLocationValue}
                               onChange={(e) => { setEditingLocationValue(e.target.value); setRenameLocationError(null); }}
-                              onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc); if (e.key === "Escape") { setEditingLocationName(null); setRenameLocationError(null); } }}
+                              onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc.id); if (e.key === "Escape") { setEditingLocationId(null); setRenameLocationError(null); } }}
                               disabled={savingLocation}
                               autoFocus
+                              aria-invalid={!!renameLocationError || undefined}
+                              aria-describedby={renameLocationError ? `settings-rename-location-error-${loc.id}` : undefined}
+                              aria-label={`Rename ${loc.name}`}
                             />
                             <button
                               className="button button-secondary settings-inline-action"
-                              onClick={() => void onRenameLocation(loc)}
+                              onClick={() => void onRenameLocation(loc.id)}
                               disabled={savingLocation || !editingLocationValue.trim()}
                               type="button"
                             >
@@ -1455,18 +1457,18 @@ export function SettingsPage({
                             </button>
                             <button
                               className="button button-ghost settings-inline-action"
-                              onClick={() => { setEditingLocationName(null); setRenameLocationError(null); }}
+                              onClick={() => { setEditingLocationId(null); setRenameLocationError(null); }}
                               type="button"
                             >
                               Cancel
                             </button>
                             {renameLocationError ? (
-                              <span className="settings-field-error" style={{ width: "100%" }}>{renameLocationError}</span>
+                              <p id={`settings-rename-location-error-${loc.id}`} className="field-error" style={{ width: "100%" }}>{renameLocationError}</p>
                             ) : null}
                           </span>
                         ) : (
                           <span>
-                            {loc}
+                            {loc.name}
                             <span className="settings-location-count">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
                           </span>
                         )}
@@ -1475,7 +1477,7 @@ export function SettingsPage({
                         <div className="settings-action-wrap">
                           <button
                             className="settings-action-icon"
-                            onClick={() => { setEditingLocationName(loc); setEditingLocationValue(loc); }}
+                            onClick={() => { setEditingLocationId(loc.id); setEditingLocationValue(loc.name); }}
                             disabled={savingLocation}
                             aria-label="Rename location"
                             type="button"
@@ -1487,7 +1489,7 @@ export function SettingsPage({
                         <div className="settings-action-wrap">
                           <button
                             className="settings-action-icon settings-action-icon--danger"
-                            onClick={() => setPendingDeleteLocation((prev) => prev === loc ? null : loc)}
+                            onClick={() => { setDeleteLocationError(null); setPendingDeleteLocationId((prev) => prev === loc.id ? null : loc.id); }}
                             disabled={savingLocation}
                             aria-label="Remove location"
                             type="button"
@@ -1501,22 +1503,25 @@ export function SettingsPage({
                   );
                 })}
               </div>
-              {pendingDeleteLocation ? (() => {
-                const locName = pendingDeleteLocation;
-                const deleteLocItemCount = getItemCountForLocation(locName);
+              {pendingDeleteLocationId ? (() => {
+                const target = locations.find((l) => l.id === pendingDeleteLocationId);
+                if (!target) return null;
+                const deleteLocItemCount = getItemCountForLocationId(target.id);
                 return (
                   <ConfirmDialog
                     title="Remove Location"
                     message={
-                      deleteLocItemCount > 0
-                        ? `"${locName}" has ${deleteLocItemCount} item${deleteLocItemCount !== 1 ? "s" : ""} that will become unassigned.`
-                        : `Remove "${locName}"?`
+                      deleteLocationError
+                        ? deleteLocationError
+                        : deleteLocItemCount > 0
+                          ? `"${target.name}" has ${deleteLocItemCount} item${deleteLocItemCount !== 1 ? "s" : ""}. Move them to another location first.`
+                          : `Remove "${target.name}"?`
                     }
                     confirmLabel="Remove"
                     loading={savingLocation}
                     loadingLabel="Removing…"
-                    onConfirm={() => { void onRemoveLocation(locName); }}
-                    onCancel={() => setPendingDeleteLocation(null)}
+                    onConfirm={() => { void onRemoveLocation(target.id); }}
+                    onCancel={() => { setPendingDeleteLocationId(null); setDeleteLocationError(null); }}
                   />
                 );
               })() : null}
@@ -1541,11 +1546,15 @@ export function SettingsPage({
             <>
               <div className="settings-field-row" style={{ marginBottom: vendorError ? "0.25rem" : "0.5rem" }}>
                 <input
+                  id="settings-new-vendor"
                   className={`field${vendorError ? " field--error" : ""}`}
                   placeholder="New vendor name"
                   value={newVendorName}
                   onChange={(e) => { setNewVendorName(e.target.value); setVendorError(null); }}
                   onKeyDown={(e) => { if (e.key === "Enter") void onAddVendor(); }}
+                  aria-invalid={!!vendorError || undefined}
+                  aria-describedby={vendorError ? "settings-new-vendor-error" : undefined}
+                  aria-label="New vendor name"
                 />
                 <button
                   className="button button-secondary"
@@ -1556,7 +1565,7 @@ export function SettingsPage({
                 </button>
               </div>
               {vendorError ? (
-                <p className="settings-field-error">{vendorError}</p>
+                <p id="settings-new-vendor-error" className="field-error">{vendorError}</p>
               ) : null}
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading vendors...</div> : null}
@@ -1577,6 +1586,9 @@ export function SettingsPage({
                               onKeyDown={(e) => { if (e.key === "Enter") void onRenameVendor(vendor); if (e.key === "Escape") { setEditingVendorName(null); setRenameVendorError(null); } }}
                               disabled={savingVendor}
                               autoFocus
+                              aria-invalid={!!renameVendorError || undefined}
+                              aria-describedby={renameVendorError ? `settings-rename-vendor-error-${vendor}` : undefined}
+                              aria-label={`Rename ${vendor}`}
                             />
                             <button
                               className="button button-secondary settings-inline-action"
@@ -1594,7 +1606,7 @@ export function SettingsPage({
                               Cancel
                             </button>
                             {renameVendorError ? (
-                              <span className="settings-field-error" style={{ width: "100%" }}>{renameVendorError}</span>
+                              <p id={`settings-rename-vendor-error-${vendor}`} className="field-error" style={{ width: "100%" }}>{renameVendorError}</p>
                             ) : null}
                           </span>
                         ) : (
@@ -1673,7 +1685,7 @@ export function SettingsPage({
           {canManageInventoryColumns ? (
             <>
               <p className="settings-section-copy">
-                Drag the handle to reorder columns. Show or hide columns with the checkbox. Core columns (Item Name, Quantity, Min Quantity, Expiration Date, Product URL) are required and cannot be deleted.
+                Drag the handle to reorder columns. Show or hide columns with the checkbox. Required columns cannot be deleted.
               </p>
               <div className="settings-columns-toolbar">
                 <div className="inventory-search-wrap settings-columns-toolbar-search">
@@ -1696,18 +1708,13 @@ export function SettingsPage({
                   ) : null}
                 </div>
                 <div className="settings-columns-add settings-columns-add-inline">
-                  <input
-                    className="field"
-                    placeholder="Column name"
-                    value={newColumnName}
-                    onChange={(event) => setNewColumnName(event.target.value)}
-                  />
                   <button
                     className="button button-secondary"
-                    onClick={onAddColumn}
-                    disabled={savingColumn || !newColumnName.trim()}
+                    onClick={() => setShowAddColumnDialog(true)}
+                    disabled={savingColumn}
+                    type="button"
                   >
-                    Add Column
+                    + Add Column
                   </button>
                 </div>
               </div>
@@ -1738,8 +1745,10 @@ export function SettingsPage({
                           userColumnOverrides={userColumnOverrides}
                           editingColumnId={editingColumnId}
                           editingLabel={editingLabel}
+                          allLocations={locations}
                           setEditingLabel={setEditingLabel}
                           onToggleColumnVisibility={onToggleColumnVisibility}
+                          onEditAttachment={(c) => setAttachmentEditTarget(c)}
                           onSaveEditColumn={onSaveEditColumn}
                           onCancelEditColumn={onCancelEditColumn}
                           onStartEditColumn={onStartEditColumn}
@@ -1770,6 +1779,24 @@ export function SettingsPage({
                   />
                 );
               })() : null}
+              {attachmentEditTarget ? (
+                <LocationPickerDialog
+                  title={`Where should "${attachmentEditTarget.label}" appear?`}
+                  subtitle="Pick the locations where this column should render. Use All to enable everywhere or None to hide it everywhere."
+                  locations={locations}
+                  initialSelectedIds={attachmentEditTarget.attachedLocationIds ?? []}
+                  confirmLabel="Save"
+                  onConfirm={(ids) => onSaveAttachment(attachmentEditTarget, ids)}
+                  onCancel={() => setAttachmentEditTarget(null)}
+                />
+              ) : null}
+              {showAddColumnDialog ? (
+                <AddColumnDialog
+                  locations={locations}
+                  onCreate={onCreateColumn}
+                  onCancel={() => setShowAddColumnDialog(false)}
+                />
+              ) : null}
             </>
           ) : (
             <p className="settings-section-copy">
@@ -1791,7 +1818,7 @@ export function SettingsPage({
             Have a question, bug report, or feature request? Send us a message and we'll get back to you.
           </p>
           <div className="settings-field-group">
-            <label className="settings-field-label" htmlFor="contact-subject">Subject</label>
+            <label className="field-label" htmlFor="contact-subject">Subject</label>
             <input
               id="contact-subject"
               className="field"
@@ -1802,7 +1829,7 @@ export function SettingsPage({
             />
           </div>
           <div className="settings-field-group">
-            <label className="settings-field-label" htmlFor="contact-message">Message</label>
+            <label className="field-label" htmlFor="contact-message">Message</label>
             <textarea
               id="contact-message"
               className="settings-contact-textarea"
@@ -1837,8 +1864,17 @@ interface SortableColumnRowProps {
   userColumnOverrides: ColumnVisibilityOverrides;
   editingColumnId: string | null;
   editingLabel: string;
+  /** All locations in the org. Used both to compute the checkbox state
+   *  (all-on / mixed / all-off) and to populate the location picker dialog
+   *  the checkbox triggers. */
+  allLocations: InventoryLocation[];
   setEditingLabel: (value: string) => void;
+  /** Required-column visibility toggle (the per-user override path).
+   *  Required columns always render in every location structurally; this
+   *  toggle lets a user hide them from their personal view. */
   onToggleColumnVisibility: (column: InventoryColumn) => void;
+  /** Custom-column attachment editor. Opens the location picker dialog. */
+  onEditAttachment: (column: InventoryColumn) => void;
   onSaveEditColumn: (column: InventoryColumn) => Promise<void> | void;
   onCancelEditColumn: () => void;
   onStartEditColumn: (column: InventoryColumn) => void;
@@ -1854,8 +1890,10 @@ function SortableColumnRow({
   userColumnOverrides,
   editingColumnId,
   editingLabel,
+  allLocations,
   setEditingLabel,
   onToggleColumnVisibility,
+  onEditAttachment,
   onSaveEditColumn,
   onCancelEditColumn,
   onStartEditColumn,
@@ -1892,12 +1930,56 @@ function SortableColumnRow({
           <GripVertical aria-hidden="true" />
         </button>
         <div className="settings-column-visibility">
-          <input
-            type="checkbox"
-            checked={userColumnOverrides[column.id] !== undefined ? userColumnOverrides[column.id] : column.isVisible}
-            onChange={() => onToggleColumnVisibility(column)}
-            disabled={savingColumn}
-          />
+          {(() => {
+            // Required (core) columns always render in every location — the
+            // checkbox is the per-user "show in MY view" override and stays
+            // a simple boolean.
+            //
+            // Custom columns: the checkbox represents attachment across
+            // locations (all / mixed / none). Clicking it opens a picker
+            // dialog instead of toggling directly, so the user can choose
+            // exactly where the column appears.
+            if (isLocked) {
+              const visible = userColumnOverrides[column.id] !== undefined
+                ? userColumnOverrides[column.id]
+                : column.isVisible;
+              return (
+                <input
+                  type="checkbox"
+                  checked={visible}
+                  onChange={() => onToggleColumnVisibility(column)}
+                  disabled={savingColumn}
+                />
+              );
+            }
+            const attached = column.attachedLocationIds ?? [];
+            const total = allLocations.length;
+            const onCount = attached.filter((id) => allLocations.some((l) => l.id === id)).length;
+            const allOn = total > 0 && onCount === total;
+            const someOn = onCount > 0 && onCount < total;
+            return (
+              <input
+                type="checkbox"
+                checked={allOn}
+                ref={(el) => {
+                  // React's checked prop doesn't cover the indeterminate
+                  // visual state — must be set on the DOM node imperatively.
+                  if (el) el.indeterminate = someOn;
+                }}
+                onChange={() => onEditAttachment(column)}
+                onClick={(e) => {
+                  // Clicking a checkbox normally fires onChange after
+                  // toggling its checked state. We hijack to open the
+                  // picker without mutating state directly — the dialog is
+                  // the source of truth for the new attachment set.
+                  e.preventDefault();
+                  onEditAttachment(column);
+                }}
+                disabled={savingColumn}
+                aria-label={`Edit locations for ${column.label}`}
+              />
+            );
+          })()}
           {editingColumnId === column.id ? (
             <span className="settings-column-edit">
               <input
@@ -1929,7 +2011,12 @@ function SortableColumnRow({
       </div>
       <div className="settings-column-bottom">
         {isLocked ? (
-          <span className="settings-core-pill">*Required</span>
+          // "Required" reads as "you can't get rid of this" — which is what
+          // the pill actually represents. Internally we still call these
+          // "core" columns (system-defined, can't be deleted, can't have
+          // type changed), but customers find "Required" clearer than the
+          // engineering word.
+          <span className="settings-core-pill">Required</span>
         ) : (
           <>
             <select

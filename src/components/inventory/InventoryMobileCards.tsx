@@ -1,7 +1,6 @@
 import { ChevronDown } from "lucide-react";
-import type { ActiveTab, InventoryColumn, InventoryRow } from "./inventoryTypes";
+import type { ActiveTab, InventoryColumn, InventoryLocation, InventoryRow } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
-import { isDeletableRow } from "./inventoryUtils";
 
 export type InventoryMobileCardsProps = {
   paginatedRows: { row: InventoryRow; index: number }[];
@@ -14,8 +13,10 @@ export type InventoryMobileCardsProps = {
   canEdit: boolean;
   canEditTable: boolean;
   showLocationPills: boolean;
-  locationOptions: string[];
-  effectiveLocationFilter: string;
+  /** Available locations (sorted). Replaces the previous string[] of names. */
+  locations: InventoryLocation[];
+  /** Currently-scoped location id, or "" for All Locations. */
+  effectiveLocationId: string;
   rows: InventoryRow[];
   filteredRowsLength: number;
   onToggleRowSelection: (rowId: string) => void;
@@ -23,11 +24,16 @@ export type InventoryMobileCardsProps = {
   onExpandCard: (rowId: string | null) => void;
   onSetSelectMode: (mode: boolean) => void;
   onSetSelectedRowId: (rowId: string | null) => void;
-  onMoveSelectedRows: (location: string) => void;
-  onRequestDelete: () => void;
-  /** Scope selection to one row + open delete confirm. Used by per-card
-   *  inline Delete buttons so other selected rows don't get caught up. */
-  onRequestDeleteRow: (rowId: string) => void;
+  onMoveSelectedRows: (locationId: string) => void;
+  /** Opens the unified Remove dialog for the current selection. Replaces the
+   *  prior bulk-Delete affordance — same call site, but the dialog asks
+   *  what happened so the action can be retire-with-reason or hard-delete. */
+  onRequestRemove: () => void;
+  /** Opens the unified Remove dialog for a single row. Used by the per-card
+   *  Remove button in the expanded action row. Replaces the prior split
+   *  between per-card Retire (Expired tab only) and per-card Delete (qty 0
+   *  only) — Remove works on any row, dialog handles routing. */
+  onRequestRemoveRow: (rowId: string) => void;
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
   getReadOnlyCellText: (column: InventoryColumn, value: unknown) => string;
   toDateInputValue: (raw: unknown) => string;
@@ -40,7 +46,6 @@ export type InventoryMobileCardsProps = {
   isEditingLinkCell: (rowId: string, columnKey: string) => boolean;
   setEditingLinkCell: (cell: { rowId: string; columnKey: string } | null) => void;
   activeTab?: ActiveTab;
-  onRetireRow?: (rowId: string) => void;
 };
 
 /**
@@ -55,8 +60,8 @@ export function InventoryMobileCards({
   selectMode,
   canEditTable,
   showLocationPills,
-  locationOptions,
-  effectiveLocationFilter,
+  locations,
+  effectiveLocationId,
   rows,
   filteredRowsLength,
   onToggleRowSelection,
@@ -64,8 +69,8 @@ export function InventoryMobileCards({
   onSetSelectMode,
   onSetSelectedRowId,
   onMoveSelectedRows,
-  onRequestDelete,
-  onRequestDeleteRow,
+  onRequestRemove,
+  onRequestRemoveRow,
   onCellChange,
   getReadOnlyCellText,
   toDateInputValue,
@@ -75,56 +80,45 @@ export function InventoryMobileCards({
   getDaysUntilExpiration,
   isEditingLinkCell,
   setEditingLinkCell,
-  activeTab,
-  onRetireRow,
+  activeTab: _activeTab,
 }: InventoryMobileCardsProps) {
-  const showRetire = activeTab === "expired" && !!onRetireRow;
-  // Bulk Delete shows when every selected row has zero on-hand quantity. Rows
-  // with stock have to be drained (Log Usage) or retired first.
-  const allSelectedDeletable =
-    selectedRowIds.size > 0 &&
-    rows
-      .filter((r) => selectedRowIds.has(r.id))
-      .every(isDeletableRow);
   return (
     <div className="inventory-cards-wrap">
       {selectMode && canEditTable && selectedRowIds.size > 0 && rows.length > 1 && (
         <div className="inventory-cards-toolbar">
-          {showLocationPills && locationOptions.length > 1 ? (
+          {showLocationPills && locations.length > 1 ? (
             <details className="inventory-move-menu">
               <summary className="button button-secondary button-sm">
                 Move to…
               </summary>
               <div className="inventory-move-panel">
-                {locationOptions
-                  .filter((loc) => loc !== effectiveLocationFilter)
+                {locations
+                  .filter((loc) => loc.id !== effectiveLocationId)
                   .map((loc) => (
                     <button
-                      key={loc}
+                      key={loc.id}
                       type="button"
                       className="inventory-move-option"
                       onClick={(e) => {
-                        onMoveSelectedRows(loc);
+                        onMoveSelectedRows(loc.id);
                         const details = e.currentTarget.closest("details");
                         details?.removeAttribute("open");
                       }}
                     >
-                      {loc}
+                      {loc.name}
                     </button>
                   ))}
               </div>
             </details>
           ) : null}
-          {allSelectedDeletable ? (
-            <button
-              type="button"
-              className="button button-secondary button-sm"
-              onClick={onRequestDelete}
-              title="Delete the selected rows"
-            >
-              Delete ({selectedRowIds.size})
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="button button-secondary button-sm"
+            onClick={onRequestRemove}
+            title="Remove the selected rows"
+          >
+            Remove ({selectedRowIds.size})
+          </button>
           <button
             type="button"
             className="button button-ghost button-sm"
@@ -286,23 +280,14 @@ export function InventoryMobileCards({
                     );
                   })}
                   <div className="inventory-card-actions" onClick={(e) => e.stopPropagation()}>
-                    {showRetire && (
-                      <button
-                        type="button"
-                        className="inventory-retire-btn"
-                        onClick={() => onRetireRow!(row.id)}
-                      >
-                        Retire Item
-                      </button>
-                    )}
-                    {canEditTable && isDeletableRow(row) && (
+                    {canEditTable && (
                       <button
                         type="button"
                         className="inventory-card-delete-btn"
-                        onClick={() => onRequestDeleteRow(row.id)}
-                        title="Delete this item"
+                        onClick={() => onRequestRemoveRow(row.id)}
+                        title="Remove this item"
                       >
-                        Delete
+                        Remove
                       </button>
                     )}
                     <button

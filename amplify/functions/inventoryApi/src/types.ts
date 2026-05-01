@@ -14,10 +14,22 @@ export type UserRecord = {
   columnVisibility?: string;
 };
 
+/** Discriminator for the rows stored in a per-org "columns" table.
+ *  Pre-migration rows (the original column shape) lack this field — readers
+ *  treat absent `kind` as `"column"`. The migration backfills.
+ *  - "column"   → InventoryColumn metadata
+ *  - "location" → InventoryLocation entity
+ *  - "meta"     → singletons like the vendors registry, migration version stamp
+ */
+export type InventoryRowKind = "column" | "location" | "meta";
+
 export type InventoryColumn = {
   id: string;
   organizationId: string;
   module: "inventory";
+  /** Always "column" for column rows. Optional in the type because pre-migration
+   *  rows lack the field; readers default to "column". */
+  kind?: "column";
   key: string;
   label: string;
   type: InventoryColumnType;
@@ -25,6 +37,29 @@ export type InventoryColumn = {
   isRequired: boolean;
   isVisible: boolean;
   isEditable: boolean;
+  /** Whether this column shows a "filter by value" header dropdown.
+   *  Replaces the previous hardcoded `column.key === "category"` branch.
+   *  Absent in pre-migration rows; readers default to false. */
+  isGroupable?: boolean;
+  sortOrder: number;
+  /** Locations where this custom column renders. Ignored for core columns
+   *  (they render everywhere). Empty array = dormant (defined but unrendered).
+   *  Absent in pre-migration rows; the migration auto-attaches every existing
+   *  custom column to every location to preserve current behavior. */
+  attachedLocationIds?: string[];
+  createdAt: string;
+};
+
+/** Per-org location entity. Stored as a row in the same DynamoDB table as
+ *  columns, distinguished by `kind: "location"`. Replaces the previous
+ *  `inventory-meta-locations` singleton blob.
+ */
+export type InventoryLocation = {
+  id: string;
+  organizationId: string;
+  module: "inventory";
+  kind: "location";
+  name: string;
   sortOrder: number;
   createdAt: string;
 };
@@ -34,6 +69,10 @@ export type InventoryItem = {
   organizationId: string;
   module: "inventory";
   position: number;
+  /** Structural location pointer. Required after migration v1. Pre-migration
+   *  rows lack this field; readers fall back to the legacy `values.location`
+   *  string only inside the migration code path itself. */
+  locationId?: string;
   valuesJson: string;
   createdAt: string;
   updatedAtCustom: string;
@@ -68,7 +107,11 @@ export type AuditAction =
   | "ITEM_CREATE"
   | "ITEM_EDIT"
   | "ITEM_DELETE"
-  /** Quantity decrement with a loss reason (expired/damaged/lost/recalled). */
+  /** Structural location move. Body shape: { fromLocationId, fromLocationName,
+   *  toLocationId, toLocationName }. Replaces the prior pattern of recording
+   *  location changes as ordinary ITEM_EDIT diffs. */
+  | "ITEM_MOVE"
+  /** Quantity decrement with a loss reason (see RetireReason). */
   | "ITEM_RETIRE"
   /** Reverses a previous ITEM_RETIRE: clears the retire markers and marks the
    *  original event as undone. Soft-delete becomes "still in service" again. */
@@ -86,18 +129,40 @@ export type AuditAction =
    *  preserved (delete only removes the column metadata, not per-row values). */
   | "COLUMN_RESTORE"
   | "COLUMN_UPDATE"
+  /** Per-org location lifecycle. The previous behavior buried this inside
+   *  the values-JSON of every affected row; now it's a first-class event. */
+  | "LOCATION_CREATE"
+  | "LOCATION_RENAME"
+  | "LOCATION_DELETE"
   | "CSV_IMPORT"
   | "TEMPLATE_APPLY"
   | "RESTOCK_ORDER_CREATE"
   | "RESTOCK_RECEIVED"
   | "RESTOCK_ORDER_CLOSED"
   /** Fast Restock: quantity added directly to an inventory row (not via an order). */
-  | "RESTOCK_ADDED";
+  | "RESTOCK_ADDED"
+  /** One-shot record of a schema migration applying to the org (e.g. v0 → v1
+   *  when location goes structural). Body shape: { fromVersion, toVersion,
+   *  itemsMovedToDefault, locationsCreated }. */
+  | "MIGRATION_APPLY";
 
-/** Reason codes attached to ITEM_RETIRE events. Drives loss analytics. */
-export type RetireReason = "expired" | "damaged" | "lost" | "recalled";
+/** Reason codes attached to ITEM_RETIRE events. Drives loss analytics.
+ *
+ *  - expired: past expiration date.
+ *  - damaged: physically broken or otherwise unusable.
+ *  - lost: stock can't be found.
+ *  - recalled: pulled per a manufacturer/safety recall.
+ *  - discontinued: org no longer carries this item; pulled and discarded
+ *    while still otherwise usable. Separable from "lost" so analytics can
+ *    distinguish intentional discards from missing stock.
+ *
+ *  Note: a row that was a setup mistake (never actually stocked) is
+ *  hard-deleted via ITEM_DELETE rather than retired — there's no loss to
+ *  record. The Remove dialog surfaces that as a separate option.
+ */
+export type RetireReason = "expired" | "damaged" | "lost" | "recalled" | "discontinued";
 
-export const RETIRE_REASONS: RetireReason[] = ["expired", "damaged", "lost", "recalled"];
+export const RETIRE_REASONS: RetireReason[] = ["expired", "damaged", "lost", "recalled", "discontinued"];
 
 export type PendingEntry = {
   itemId: string;
@@ -145,9 +210,13 @@ export type RestockOrderItem = {
   // item is later added to inventory on receive, the link is persisted on the
   // new inventory row.
   reorderLink?: string;
-  // For freeform items: location the item was ordered for. Persisted to the
-  // new inventory row on receive (addToInventory) or on cancel materialization
-  // so location-filtered views can find it.
+  /** For freeform items: structural location pointer captured at order time.
+   *  Persisted to the new inventory row's `locationId` on receive. Preferred
+   *  over the legacy `location` (name) field. */
+  locationId?: string;
+  /** Legacy: location name captured at order time for orders created before
+   *  the v1 restructure. Receive falls back to resolving this to a locationId
+   *  if `locationId` is absent. */
   location?: string;
   // For freeform items: user-provided reorder threshold captured at order
   // time. When the item is later added to inventory on receive (or materialized

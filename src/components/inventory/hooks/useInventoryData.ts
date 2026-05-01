@@ -7,10 +7,12 @@ import {
   isInventoryProvisioningError,
   loadInventoryBootstrap,
   loadInventoryItems,
+  moveInventoryItems,
   saveInventoryItems,
   saveInventoryItemsSync,
   type ColumnVisibilityOverrides,
   type InventoryColumn,
+  type InventoryLocation,
   type InventoryRow,
 } from "../../../lib/inventoryApi";
 import { pickLoadingLine } from "../../../lib/loadingLines";
@@ -33,23 +35,21 @@ import { useToast } from "../../shared/Toast";
 interface UseInventoryDataParams {
   canEditInventory: boolean;
   initialEditCell?: { rowId: string; columnKey: string };
-  selectedLocation: string | null;
-  onLocationChange: (location: string | null) => void;
+  selectedLocationId: string | null;
+  onSelectedLocationIdChange: (locationId: string | null) => void;
   onSaveFnChange?: (fn: (() => Promise<void>) | null) => void;
-  /** From the filters hook */
-  effectiveLocationFilter: string;
+  /** From the filters hook — the location id currently in scope (or ALL_LOCATIONS). */
+  effectiveLocationId: string;
+  /** From the filters hook — the "All Locations" sentinel. */
+  ALL_LOCATIONS: string;
   /** From the filters hook */
   allColumns: InventoryColumn[];
-  /** From the filters hook */
-  locationColumn: InventoryColumn | undefined;
   /** From the filters hook */
   filteredRows: { row: InventoryRow; index: number }[];
   /** From the filters hook */
   filteredRowIds: string[];
   /** From the filters hook */
   visibleColumns: InventoryColumn[];
-  /** From the filters hook — the "Unassigned" sentinel */
-  UNASSIGNED_LOCATION: string;
   /** From the filters hook */
   setSelectedRowIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   /** Current inventory tab. Used to disable table edits when in Log Usage mode. */
@@ -68,16 +68,15 @@ const ORDERED_CLEAR_KEYS = new Set(["quantity", "expirationDate"]);
 export function useInventoryData({
   canEditInventory,
   initialEditCell,
-  selectedLocation: _selectedLocation,
-  onLocationChange: _onLocationChange,
+  selectedLocationId: _selectedLocationId,
+  onSelectedLocationIdChange: _onSelectedLocationIdChange,
   onSaveFnChange,
-  effectiveLocationFilter,
+  effectiveLocationId,
+  ALL_LOCATIONS,
   allColumns,
-  locationColumn,
   filteredRows,
   filteredRowIds,
   visibleColumns: _visibleColumns,
-  UNASSIGNED_LOCATION,
   setSelectedRowIds,
   activeTab,
   selectedRowIds,
@@ -107,12 +106,17 @@ export function useInventoryData({
   const [importingCsv, setImportingCsv] = useState(false);
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
-  const [registeredLocations, setRegisteredLocations] = useState<string[]>([]);
+  const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [addingLocation, setAddingLocation] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [addLocationError, setAddLocationError] = useState<string | null>(null);
   const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
-  const [pendingDeleteRows, setPendingDeleteRows] = useState(false);
+  const [migrationToastShown, setMigrationToastShown] = useState(false);
+  /** Open-state for the unified Remove dialog. The rowIds are captured at
+   *  the moment of opening so subsequent selection changes don't shift the
+   *  target (matters for the mobile per-row case where selectedRowIds may
+   *  not even reflect the row that triggered the dialog). Null = closed. */
+  const [removeTarget, setRemoveTarget] = useState<{ rowIds: string[] } | null>(null);
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
 
   // ── Refs ──
@@ -177,14 +181,28 @@ export function useInventoryData({
     );
     const persistedRows = bootstrap.items;
     setOrganizationId(String(bootstrap.access?.organizationId ?? ""));
-    setRegisteredLocations(bootstrap.registeredLocations ?? []);
+    setLocations(bootstrap.locations ?? []);
     setRegisteredVendors(bootstrap.registeredVendors ?? []);
     setColumns(resolvedColumns);
     setUserColumnOverrides(bootstrap.columnVisibilityOverrides ?? {});
+    // Show the migration toast once per session per org. The server only sets
+    // migrationNotice on the bootstrap that actually ran the migration, so a
+    // page refresh after the toast was dismissed won't re-trigger it.
+    if (bootstrap.migrationNotice && !migrationToastShown) {
+      toast.info(bootstrap.migrationNotice.message);
+      setMigrationToastShown(true);
+    }
+    // Pick a fallback locationId for new blank rows when there are no items.
+    const seedLocationId = bootstrap.locations?.[0]?.id;
     const nextRows =
       persistedRows.length > 0
         ? persistedRows
-        : [createBlankInventoryRow(resolvedColumns, 0)];
+        : [
+            {
+              ...createBlankInventoryRow(resolvedColumns, 0),
+              locationId: seedLocationId,
+            },
+          ];
     setRows(nextRows);
     rowsRef.current = nextRows;
     setDirtyRowIds(new Set());
@@ -512,9 +530,12 @@ export function useInventoryData({
         : 0;
       const created = createBlankInventoryRow(allColumns, insertIndex);
       created.id = newRowId;
-      if (locationColumn && effectiveLocationFilter !== "All Locations" && effectiveLocationFilter !== UNASSIGNED_LOCATION) {
-        created.values[locationColumn.key] = effectiveLocationFilter;
-      }
+      // Stamp the structural location pointer. We never create rows in the
+      // "All Locations" view (the toolbar disables Add Row there); fall back
+      // to the first available location if the scope is somehow ALL.
+      const fallbackLoc = locations[0]?.id;
+      created.locationId =
+        effectiveLocationId !== ALL_LOCATIONS ? effectiveLocationId : fallbackLoc;
       const next = [
         ...prev.slice(0, insertIndex),
         created,
@@ -633,25 +654,14 @@ export function useInventoryData({
     }
   };
 
-  const onRequestDeleteSelectedRows = () => {
-    if (!canEditTable || selectedRowIds.size === 0) return;
-    setPendingDeleteRows(true);
-  };
-
-  /** Per-row delete: scope selection to exactly this row, then open the
-   *  confirm. Avoids the toggle-and-bulk-delete pattern which mis-fires when
-   *  the user already had other rows selected. */
-  const onRequestDeleteRow = (rowId: string) => {
-    if (!canEditTable) return;
-    setSelectedRowIds(new Set([rowId]));
-    setPendingDeleteRows(true);
-  };
-
-  const onConfirmDeleteSelectedRows = () => {
-    setPendingDeleteRows(false);
-    if (!canEditTable || selectedRowIds.size === 0) return;
+  /**
+   * Hard-delete the given rows. Used by the unified Remove dialog when the
+   * user picks "Created by mistake". Server-side guard still enforces
+   * qty == 0; this is the client-side optimistic update.
+   */
+  const performDeleteRows = (idsToDelete: Set<string>) => {
+    if (!canEditTable || idsToDelete.size === 0) return;
     pushUndoSnapshot();
-    const idsToDelete = new Set(selectedRowIds);
     const persistedIdsToDelete = rows
       .filter((row) => idsToDelete.has(row.id) && Boolean(row.createdAt))
       .map((row) => row.id);
@@ -717,45 +727,77 @@ export function useInventoryData({
     setSelectedRowIds(new Set());
   };
 
-  const onMoveSelectedRows = (targetLocation: string) => {
-    if (!canEditTable || !locationColumn) return;
-    const idsToMove = selectedRowIds.size > 0 ? selectedRowIds : (selectedRowId ? new Set([selectedRowId]) : new Set<string>());
+  // ── Unified Remove flow ────────────────────────────────────────────────
+  // The dialog asks "what happened?" and routes to either retire (with
+  // reason + optional notes) or hard delete. Capture rowIds at open time so
+  // the action targets exactly the rows the user clicked, even if the
+  // global selection changes underneath us before the user confirms.
+  const onRequestRemoveRow = (rowId: string) => {
+    if (!canEditTable) return;
+    setRemoveTarget({ rowIds: [rowId] });
+  };
+
+  const onRequestRemoveSelectedRows = () => {
+    if (!canEditTable || selectedRowIds.size === 0) return;
+    setRemoveTarget({ rowIds: Array.from(selectedRowIds) });
+  };
+
+  const onCancelRemove = () => setRemoveTarget(null);
+
+  const onConfirmRemove = async (
+    choice: import("../RemoveItemDialog").RemoveChoice,
+  ) => {
+    const target = removeTarget;
+    setRemoveTarget(null);
+    if (!target || !canEditTable || target.rowIds.length === 0) return;
+
+    if (choice.kind === "delete") {
+      performDeleteRows(new Set(target.rowIds));
+      return;
+    }
+
+    // Retire path: reuse the existing onRetireRows handler so the qty-zero
+    // stub logic, audit metadata, and reorder-list bookkeeping stay in one
+    // place. Clear any selection used to populate the target so the
+    // toolbar's "N selected" affordance resets afterward.
+    await onRetireRows(target.rowIds, choice.reason, choice.notes);
+    if (selectedRowIds.size > 0) setSelectedRowIds(new Set());
+  };
+
+  /** Structural location move. Calls the new server endpoint that emits an
+   *  ITEM_MOVE audit event per row, then optimistically updates local state.
+   *  Replaces the prior "edit values.location and shovel through autosave"
+   *  flow — locations are no longer column values, so the move endpoint is
+   *  the only way to change them. */
+  const onMoveSelectedRows = async (targetLocationId: string) => {
+    if (!canEditTable) return;
+    const idsToMove = selectedRowIds.size > 0
+      ? selectedRowIds
+      : (selectedRowId ? new Set([selectedRowId]) : new Set<string>());
     if (idsToMove.size === 0) return;
     pushUndoSnapshot();
-    // Capture source locations before the move so we can keep them visible
-    // (via a blank placeholder row) when we'd otherwise empty them out.
-    const sourceLocations = new Set<string>();
-    for (const row of rowsRef.current) {
-      if (!idsToMove.has(row.id)) continue;
-      const loc = String(row.values[locationColumn.key] ?? "").trim();
-      if (loc && loc !== targetLocation) sourceLocations.add(loc);
-    }
+    // Optimistic update: stamp locationId locally so the table reflects the
+    // move before the server roundtrip completes.
     setRows((prev) => {
-      let next = prev.map((row) =>
-        idsToMove.has(row.id)
-          ? { ...row, values: { ...row.values, [locationColumn.key]: targetLocation } }
-          : row,
+      const next = prev.map((row) =>
+        idsToMove.has(row.id) ? { ...row, locationId: targetLocationId } : row,
       );
-      for (const sourceLoc of sourceLocations) {
-        const stillHasRows = next.some(
-          (row) => String(row.values[locationColumn.key] ?? "").trim() === sourceLoc,
-        );
-        if (!stillHasRows) {
-          const blank = createBlankInventoryRow(allColumns, next.length);
-          blank.values[locationColumn.key] = sourceLoc;
-          next = [...next, blank];
-        }
-      }
       rowsRef.current = next;
       return next;
     });
-    setDirtyRowIds((prev) => {
-      const next = new Set(prev);
-      for (const id of idsToMove) next.add(id);
-      dirtyRowIdsRef.current = next;
-      return next;
-    });
     setSelectedRowIds(new Set());
+
+    try {
+      await moveInventoryItems(Array.from(idsToMove), targetLocationId);
+    } catch (err: any) {
+      // Revert the optimistic update on failure. Reload bootstrap to be safe —
+      // partial moves are possible if the server moved some but not all.
+      try {
+        const bootstrap = await loadInventoryBootstrap();
+        applyBootstrap(bootstrap);
+      } catch { /* fall through to error toast */ }
+      toast.error(err?.message ?? "Failed to move items");
+    }
   };
 
   // ── Display helpers ──
@@ -809,14 +851,12 @@ export function useInventoryData({
       const serialized = serializeRowForSnapshot(row, i);
       if (prev === serialized) continue;
       // New row (not in snapshot) with all-default values -- skip until user edits it.
-      // Ignore the location key: it's auto-set when adding rows under a location filter
-      // and doesn't count as user-entered content.
+      // Post-restructure: location is structural (no longer in values), so we
+      // don't need to special-case any value keys here.
       if (prev === undefined && !row.createdAt) {
-        const locationKey = locationColumn?.key;
-        const hasContent = Object.entries(row.values).some(([k, v]) => {
-          if (k === locationKey) return false;
-          return typeof v === "string" ? v.trim() !== "" : typeof v === "number" ? v !== 0 : v != null;
-        });
+        const hasContent = Object.entries(row.values).some(([_k, v]) =>
+          typeof v === "string" ? v.trim() !== "" : typeof v === "number" ? v !== 0 : v != null,
+        );
         if (!hasContent) continue;
       }
       changed.push({ ...row, position: i });
@@ -1013,11 +1053,19 @@ export function useInventoryData({
       toast.info("Select at least one column to import.");
       return;
     }
+    // CSV imports require an explicit destination location. The toolbar's
+    // import flow (via handleChooseCsvImport) only opens the dialog when
+    // we're scoped to a real location — but defensively reject if somehow
+    // the user is in "All Locations" view here.
+    if (effectiveLocationId === ALL_LOCATIONS) {
+      toast.error("Pick a specific location before importing a CSV.");
+      return;
+    }
 
     setImportingCsv(true);
     try {
       const beforeImportSignature = buildRowsSignature(rows);
-      const result = await importInventoryCsv(csvImportDialog.csvText, selectedHeaders);
+      const result = await importInventoryCsv(csvImportDialog.csvText, effectiveLocationId, selectedHeaders);
       const bootstrap = await loadInventoryBootstrap();
       const afterImportSignature = buildRowsSignature(bootstrap.items);
 
@@ -1241,19 +1289,20 @@ export function useInventoryData({
     return () => window.clearInterval(id);
   }, [canEditInventory]);
 
-  // Location auto-add on creation
+  // Location auto-add on creation. After a user creates a new location we
+  // navigate to it and immediately drop in a blank row to type into.
   useEffect(() => {
-    if (pendingNewLocationRef.current && effectiveLocationFilter === pendingNewLocationRef.current && canEditTable) {
+    if (pendingNewLocationRef.current && effectiveLocationId === pendingNewLocationRef.current && canEditTable) {
       pendingNewLocationRef.current = null;
       onAddRow("above");
     }
-  }, [effectiveLocationFilter]);
+  }, [effectiveLocationId]);
 
   // Clear selections when switching locations
   useEffect(() => {
     setSelectedRowIds(new Set());
     setSelectedRowId(null);
-  }, [effectiveLocationFilter]);
+  }, [effectiveLocationId]);
 
   // Selection validation
   useEffect(() => {
@@ -1314,14 +1363,14 @@ export function useInventoryData({
   // (passed through from filters hook locationOptions)
 
   // ── Retire rows ──
-  // Retirement is a qty-to-zero event with a reason code (expired/damaged/lost/recalled).
+  // Retirement is a qty-to-zero event with a reason code (see RetireReason).
   // The row is preserved in storage so retirement history survives for loss
   // analytics and the Activity audit trail, but it's hidden from the inventory
   // grid and the Reorder tab (see useInventoryFilters + ReorderTab). The reason
   // is captured in an ITEM_RETIRE audit event that drives loss analytics.
   const onRetireRows = async (
     rowIds: string[],
-    reason: "expired" | "damaged" | "lost" | "recalled" = "expired",
+    reason: import("../../../lib/inventoryApi").RetireReason = "expired",
     notes?: string,
   ) => {
     if (!canEditInventory || rowIds.length === 0) return;
@@ -1366,23 +1415,25 @@ export function useInventoryData({
     //   - we've already queued a stub for this group in the current batch
     //     (retiring 3 lots of the same item should spawn 1 stub, not 3)
     const retiredRowIdSet = new Set(retiredRowsToSave.map((r) => r.id));
-    const groupKey = (name: string, loc: string) => `${name}\x00${loc}`;
+    // Group key uses structural locationId now. Empty string for items
+    // without a location (shouldn't happen post-migration, but defensive).
+    const groupKey = (name: string, locId: string) => `${name}\x00${locId}`;
     const groupHasRemainingActiveLot = new Set<string>();
     for (const row of rowsRef.current) {
       if (retiredRowIdSet.has(row.id)) continue;
       if (row.values.retiredAt) continue;
       const name = String(row.values.itemName ?? "").trim();
       if (!name) continue;
-      const loc = String(row.values.location ?? "").trim();
-      groupHasRemainingActiveLot.add(groupKey(name, loc));
+      const locId = String(row.locationId ?? "");
+      groupHasRemainingActiveLot.add(groupKey(name, locId));
     }
     const stubGroupsQueued = new Set<string>();
     const stubsToCreate: InventoryRow[] = [];
     for (const retiredRow of retiredRowsToSave) {
       const name = String(retiredRow.values.itemName ?? "").trim();
       if (!name) continue;
-      const loc = String(retiredRow.values.location ?? "").trim();
-      const key = groupKey(name, loc);
+      const locId = String(retiredRow.locationId ?? "");
+      const key = groupKey(name, locId);
       if (groupHasRemainingActiveLot.has(key)) continue;
       if (stubGroupsQueued.has(key)) continue;
       const minQty = Number(retiredRow.values.minQuantity);
@@ -1393,11 +1444,12 @@ export function useInventoryData({
         itemName: name,
         quantity: 0,
         minQuantity: minQty,
-        location: loc,
         parentItemId: String(retiredRow.values.parentItemId ?? stubId),
       };
       // Carry reorder-relevant metadata forward so the stub behaves like the
-      // original lot for reorder purposes (vendor link, pack sizing, price).
+      // original lot for reorder purposes (vendor link, pack sizing, price,
+      // category). Category is no longer treated specially — it's just one
+      // more field to copy forward like any other.
       for (const field of ["reorderLink", "packSize", "packCost", "unitCost", "category"] as const) {
         const v = retiredRow.values[field];
         if (v !== undefined && v !== null && v !== "") stubValues[field] = v;
@@ -1405,6 +1457,7 @@ export function useInventoryData({
       stubsToCreate.push({
         id: stubId,
         position: rowsRef.current.length + stubsToCreate.length,
+        locationId: locId || undefined,
         values: stubValues,
         createdAt: now,
       });
@@ -1502,8 +1555,8 @@ export function useInventoryData({
     pasteImportDialog,
     setPasteImportDialog,
     // Locations
-    registeredLocations,
-    setRegisteredLocations,
+    locations,
+    setLocations,
     addingLocation,
     setAddingLocation,
     newLocationName,
@@ -1513,9 +1566,12 @@ export function useInventoryData({
     // Vendors
     registeredVendors,
     setRegisteredVendors,
-    // Delete
-    pendingDeleteRows,
-    setPendingDeleteRows,
+    // Remove (unified dialog: routes to retire or delete based on reason)
+    removeTarget,
+    onRequestRemoveRow,
+    onRequestRemoveSelectedRows,
+    onConfirmRemove,
+    onCancelRemove,
     // Refs
     importInputRef,
     selectAllCheckboxRef,
@@ -1545,9 +1601,6 @@ export function useInventoryData({
     onToggleSelectAllFiltered,
     onCopySelectedRow,
     onPasteToSelectedRow,
-    onRequestDeleteSelectedRows,
-    onRequestDeleteRow,
-    onConfirmDeleteSelectedRows,
     onMoveSelectedRows,
     onRetireRows,
     onCellChange,

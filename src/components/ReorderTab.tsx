@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { InventoryRow } from "../lib/inventoryApi";
+import type { InventoryLocation, InventoryRow } from "../lib/inventoryApi";
 import { formatCurrency, parseCurrency } from "../lib/currency";
-import { Check, ExternalLink, Link2Off, Minus, Package, X } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, Link2Off, Minus, Package, X } from "lucide-react";
 import { EmptyState } from "./shared/EmptyState";
 
 // ── Reorder-selection persistence ───────────────────────────────────────
@@ -82,13 +82,23 @@ export type OrderItem = {
 
 interface ReorderTabProps {
   rows: InventoryRow[];
+  /** Location names for legacy free-text pickers. */
   availableLocations?: string[];
+  /** Full structural location list (id + name). Used to translate row.locationId
+   *  to display names for the per-location grouping. */
+  availableLocationsFull?: InventoryLocation[];
   availableVendors?: string[];
   /** Add a vendor to the org registry from inside the Reorder UI (Missing
    *  Info dropdown / bulk toolbar). Parent is responsible for refreshing
    *  `availableVendors` so the new entry appears in the dropdown. */
   onAddVendor?: (name: string) => Promise<void>;
-  selectedLocation?: string | null;
+  /** Currently-scoped location id from App-level state. */
+  selectedLocationId?: string | null;
+  /** Optional: lets the Reorder header render a location dropdown so the
+   *  user can change scope from inside this tab. When omitted, the header
+   *  shows nothing for location (used by callers that handle scope
+   *  externally). */
+  onSelectedLocationIdChange?: (locationId: string | null) => void;
   /** Patch values on one or more inventory rows. Used by the Missing
    *  Information card to fill in `vendor` / `unitCost` / `packCost` /
    *  `packSize`. Same patch is applied to every rowId. */
@@ -187,8 +197,8 @@ type LineState = {
  *  key used when building vendor groups so checked/qty state survives filter
  *  changes and any in-place row churn. */
 const itemStateKey = (item: ReorderItem): string => {
-  const location = String(item.row.values.location ?? "").trim();
-  return `${item.itemName}\x00${location}`;
+  const locationId = String(item.row.locationId ?? "");
+  return `${item.itemName}\x00${locationId}`;
 };
 
 function VendorChecklistCard({
@@ -514,6 +524,7 @@ const suggestVendorNameFromUrl = (url: string): string => {
  *  When `value` is set, the input renders as readonly showing the selected
  *  vendor with an × clear button — mirrors the Log Usage item autocomplete. */
 export function VendorSelect({
+  inputId,
   value,
   availableVendors,
   onChange,
@@ -523,6 +534,7 @@ export function VendorSelect({
   ariaLabel,
   placeholder,
 }: {
+  inputId?: string;
   value: string;
   availableVendors: string[];
   onChange: (next: string) => void;
@@ -640,6 +652,7 @@ export function VendorSelect({
       <div className="usage-autocomplete-input-wrap">
         <input
           ref={inputRef}
+          id={inputId}
           type="text"
           className="usage-autocomplete-input"
           value={value || search}
@@ -1138,8 +1151,11 @@ function MissingInfoCard({
 
 export function ReorderTab({
   rows,
+  availableLocationsFull = [],
   availableVendors = [],
   onAddVendor,
+  selectedLocationId,
+  onSelectedLocationIdChange,
   onSaveItemFields,
   onCountChange,
   onMarkOrdered,
@@ -1159,12 +1175,19 @@ export function ReorderTab({
 
     const groupMap = new Map<string, ItemAgg>();
 
+    // Scope filter:
+    //   - All Locations  → aggregate by itemName only. Moving stock between
+    //     locations doesn't change org-wide need; the reorder list reflects
+    //     "the org needs N of this item total."
+    //   - Specific loc   → aggregate by itemName + locationId. Each cabinet's
+    //     restock decision is its own; rows at other locations are ignored.
+    const isAllLocations = selectedLocationId === null || selectedLocationId === "";
     for (const row of rows) {
       const itemName = String(row.values.itemName ?? "").trim();
       if (!itemName) continue;
-      // Include location in key so items at different locations stay separate
-      const location = String(row.values.location ?? "").trim();
-      const key = `${itemName}\x00${location}`;
+      const locationId = String(row.locationId ?? "");
+      if (!isAllLocations && locationId !== selectedLocationId) continue;
+      const key = isAllLocations ? itemName : `${itemName}\x00${locationId}`;
 
       const quantity = Number.isFinite(Number(row.values.quantity)) ? Number(row.values.quantity) : 0;
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
@@ -1233,7 +1256,9 @@ export function ReorderTab({
     const incomplete: ReorderItem[] = [];
 
     for (const [key, agg] of groupMap.entries()) {
-      // Only show if actively low — expired qty doesn't count toward stock
+      // Only show if actively low — expired qty doesn't count toward stock.
+      // Items without a min set are intentionally excluded; min=0 is a valid
+      // "we're discontinuing this" signal and should not be surfaced.
       if (!agg.hasMin || agg.activeQty >= agg.minQuantity) continue;
       // Already-ordered items live in the Pending Receipt section; skip here.
       if (agg.latestOrderedAt) continue;
@@ -1321,7 +1346,9 @@ export function ReorderTab({
     incomplete.sort(nameCompare);
 
     return { vendorGroups: groups, incompleteItems: incomplete };
-  }, [rows]);
+    // selectedLocationId controls the scope: All Locations collapses items
+    // org-wide; a specific location filters to that one's rows.
+  }, [rows, selectedLocationId]);
 
   // Rows the user has explicitly picked for this reorder via the panel (not
   // low-stock). Stored as rowId — we look up the live row from inventoryRows
@@ -1351,7 +1378,7 @@ export function ReorderTab({
     type PickedAgg = {
       rows: InventoryRow[];
       itemName: string;
-      location: string;
+      locationId: string;
       reorderLink: string;
       vendor: string;
       minQuantity: number;
@@ -1360,12 +1387,16 @@ export function ReorderTab({
     };
     const pickedMap = new Map<string, PickedAgg>();
     const pickedIdSet = new Set(extraPickRowIds);
+    const isAllLocationsPick = selectedLocationId === null || selectedLocationId === "";
     for (const row of rows) {
       if (!pickedIdSet.has(row.id)) continue;
       if (alreadyCoveredRowIds.has(row.id)) continue;
       const itemName = String(row.values.itemName ?? "").trim() || `Item ${row.id.slice(0, 8)}`;
-      const rowLocation = String(row.values.location ?? "").trim();
-      const key = `${itemName}\x00${rowLocation}`;
+      const rowLocationId = String(row.locationId ?? "");
+      // Mirror the auto-low aggregation scope: collapse cross-location at "All",
+      // keep them separate when scoped to a single location.
+      if (!isAllLocationsPick && rowLocationId !== selectedLocationId) continue;
+      const key = isAllLocationsPick ? itemName : `${itemName}\x00${rowLocationId}`;
       const rowLink = normalizeLinkValue(String(row.values.reorderLink ?? "").trim());
       const rowVendor = String(row.values.vendor ?? "").trim();
       const minQuantity = Number(row.values.minQuantity);
@@ -1392,7 +1423,7 @@ export function ReorderTab({
         pickedMap.set(key, {
           rows: [row],
           itemName,
-          location: rowLocation,
+          locationId: rowLocationId,
           reorderLink: rowLink,
           vendor: rowVendor,
           minQuantity: hasMin ? minQuantity : 0,
@@ -1438,7 +1469,7 @@ export function ReorderTab({
       });
     }
     return out;
-  }, [extraPickRowIds, vendorGroups, incompleteItems, rows]);
+  }, [extraPickRowIds, vendorGroups, incompleteItems, rows, selectedLocationId]);
 
   // Merge extra picks into the same vendor grouping as low-stock items.
   // Items with vendor + price route to the matching vendor card; the rest go
@@ -1648,20 +1679,62 @@ export function ReorderTab({
   }, 0);
   const missingPriceCount = priceableItems.filter((i) => i.unitCost === null).length;
 
+  // Org-wide Estimated total is intentionally omitted: an order is placed
+  // PER VENDOR, not across vendors, so the actionable totals are the vendor
+  // pills (each one is effectively its own cart with its own subtotal).
+  // Showing an org-wide sum on top of the per-vendor sums was decoration.
+  const sortedLocationsForHeader = [...availableLocationsFull].sort((a, b) =>
+    (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name),
+  );
+  const headerLocationName =
+    selectedLocationId === "" || selectedLocationId === null
+      ? "All Locations"
+      : sortedLocationsForHeader.find((l) => l.id === selectedLocationId)?.name ?? "All Locations";
+  void estimatedTotal;
+  void missingPriceCount;
+
   return (
     <div className="reorder-tab">
       <div className="reorder-header">
         <div className="reorder-header-left">
-          {!isEmpty && (estimatedTotal > 0 || missingPriceCount > 0) && (
-            <span className="reorder-estimate">
-              Estimated:{" "}
-              <strong>{formatCurrency(estimatedTotal)}</strong>
-              {missingPriceCount > 0 && (
-                <span className="reorder-estimate-missing">
-                  {" "}({missingPriceCount} item{missingPriceCount !== 1 ? "s" : ""} without prices)
-                </span>
-              )}
-            </span>
+          {/* Location scope lives here now — replaces the org-wide Estimated
+           *  total. Reads as "you're looking at <location>'s reorder list."
+           *  When the parent doesn't pass a change handler we fall back to a
+           *  read-only label so the surface still makes sense. */}
+          {onSelectedLocationIdChange && sortedLocationsForHeader.length > 0 ? (
+            <details className="inventory-dropdown">
+              <summary className="inventory-dropdown-trigger">
+                {headerLocationName}
+                <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
+              </summary>
+              <div className="inventory-dropdown-panel">
+                <button
+                  type="button"
+                  className={`inventory-dropdown-option${(selectedLocationId === "" || selectedLocationId === null) ? " active" : ""}`}
+                  onClick={(e) => {
+                    onSelectedLocationIdChange("");
+                    e.currentTarget.closest("details")?.removeAttribute("open");
+                  }}
+                >
+                  All Locations
+                </button>
+                {sortedLocationsForHeader.map((loc) => (
+                  <button
+                    key={loc.id}
+                    type="button"
+                    className={`inventory-dropdown-option${selectedLocationId === loc.id ? " active" : ""}`}
+                    onClick={(e) => {
+                      onSelectedLocationIdChange(loc.id);
+                      e.currentTarget.closest("details")?.removeAttribute("open");
+                    }}
+                  >
+                    {loc.name}
+                  </button>
+                ))}
+              </div>
+            </details>
+          ) : (
+            <span className="reorder-estimate">{headerLocationName}</span>
           )}
         </div>
         {!isEmpty && (

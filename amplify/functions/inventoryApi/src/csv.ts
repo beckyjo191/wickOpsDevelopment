@@ -210,12 +210,21 @@ export const parseNonNegativeNumberOrBlank = (
   return { ok: true, value: parsed };
 };
 
-export const buildImportMatchKey = (values: Record<string, unknown>): string => {
+/**
+ * Dedupe key for CSV imports. Post-restructure, location is structural (not in
+ * values), so the importer passes `locationId` explicitly. We accept it as the
+ * second argument; falling back to `values.location` keeps the helper safe to
+ * call against legacy item rows during the migration window.
+ */
+export const buildImportMatchKey = (
+  values: Record<string, unknown>,
+  locationId?: string,
+): string => {
   const itemName = String(values.itemName ?? "").trim().toLowerCase();
   if (!itemName) return "";
-  const location = String(values.location ?? "").trim().toLowerCase();
+  const locationKey = locationId ?? String(values.location ?? "").trim().toLowerCase();
   const expirationDate = parseDateToIsoDay(String(values.expirationDate ?? ""));
-  return `${itemName}||${location}||${expirationDate}`;
+  return `${itemName}||${locationKey}||${expirationDate}`;
 };
 
 export const normalizeFingerprintValue = (column: InventoryColumn, value: unknown): string => {

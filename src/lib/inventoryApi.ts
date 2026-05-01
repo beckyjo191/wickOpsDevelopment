@@ -15,15 +15,36 @@ type ApiColumn = {
   isRequired: boolean;
   isVisible: boolean;
   isEditable: boolean;
+  /** Whether the column shows a "filter by value" header dropdown. Replaces
+   *  the previous hardcoded `column.key === "category"` branch. Optional in
+   *  the wire shape because pre-migration rows lack the field. */
+  isGroupable?: boolean;
+  /** Locations where this custom column renders. Ignored for core columns
+   *  (they render everywhere). Empty array = dormant. Optional in the wire
+   *  shape because core columns omit the field. */
+  attachedLocationIds?: string[];
   sortOrder: number;
 };
 
 type ApiItem = {
   id: string;
   position: number;
+  /** Structural location pointer. Required after migration v1. */
+  locationId?: string;
   valuesJson: string;
   createdAt: string;
   updatedAtCustom: string;
+};
+
+/** First-class location entity. Replaces the old `registeredLocations: string[]` bootstrap field. */
+export type InventoryLocation = {
+  id: string;
+  organizationId: string;
+  module: "inventory";
+  kind: "location";
+  name: string;
+  sortOrder: number;
+  createdAt: string;
 };
 
 type InventoryProvisioningPayload = {
@@ -58,6 +79,8 @@ export type ModuleAccessUser = {
 export type InventoryRow = {
   id: string;
   position: number;
+  /** Structural location pointer. Required for new rows post-migration. */
+  locationId?: string;
   values: Record<string, string | number | boolean | null>;
   createdAt?: string;
 };
@@ -66,7 +89,6 @@ export type InventoryUsageEntryInput = {
   itemId: string;
   quantityUsed: number;
   notes?: string;
-  location?: string;
 };
 
 export class InventoryProvisioningError extends Error {
@@ -134,10 +156,12 @@ export const loadInventoryBootstrap = async (): Promise<{
   access: InventoryAccess;
   columns: InventoryColumn[];
   items: InventoryRow[];
-  registeredLocations: string[];
+  locations: InventoryLocation[];
   registeredVendors: string[];
   columnVisibilityOverrides: ColumnVisibilityOverrides;
   nextToken: string | null;
+  /** Set when the server just ran a schema migration; clients render a toast. */
+  migrationNotice: { message: string } | null;
 }> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/bootstrap`);
@@ -166,18 +190,23 @@ export const loadInventoryBootstrap = async (): Promise<{
       .map((item) => ({
         id: item.id,
         position: Number(item.position ?? 0),
+        locationId: item.locationId,
         values: parseValues(item.valuesJson),
         createdAt: item.createdAt,
       }))
       .sort((a, b) => a.position - b.position),
-    registeredLocations: Array.isArray(data.registeredLocations)
-      ? (data.registeredLocations as string[]).filter((l: string) => typeof l === "string" && l.length > 0)
+    locations: Array.isArray(data.locations)
+      ? (data.locations as InventoryLocation[]).filter((l) => l && typeof l.id === "string")
       : [],
     registeredVendors: Array.isArray(data.registeredVendors)
       ? (data.registeredVendors as string[]).filter((v: string) => typeof v === "string" && v.length > 0)
       : [],
     columnVisibilityOverrides: (data.columnVisibilityOverrides ?? {}) as ColumnVisibilityOverrides,
     nextToken: data.nextToken ?? null,
+    migrationNotice:
+      data.migrationNotice && typeof data.migrationNotice.message === "string"
+        ? { message: String(data.migrationNotice.message) }
+        : null,
   };
 };
 
@@ -198,6 +227,7 @@ export const loadInventoryItems = async (
       .map((item) => ({
         id: item.id,
         position: Number(item.position ?? 0),
+        locationId: item.locationId,
         values: parseValues(item.valuesJson),
         createdAt: item.createdAt,
       }))
@@ -230,7 +260,18 @@ export type RestockMetadata = {
   location?: string;
 };
 
-export type RetireReason = "expired" | "damaged" | "lost" | "recalled";
+export type RetireReason = "expired" | "damaged" | "lost" | "recalled" | "discontinued";
+
+/** Human-friendly labels for each RetireReason. Keep in sync with backend
+ *  types.ts. Used by the Remove dialog and any analytics surface that renders
+ *  reason names. */
+export const RETIRE_REASON_LABEL: Record<RetireReason, string> = {
+  expired: "Expired",
+  damaged: "Damaged or broken",
+  lost: "Lost — can't find it",
+  recalled: "Recalled by manufacturer",
+  discontinued: "We don't carry this anymore",
+};
 
 export type RetireMetadata = {
   reason: RetireReason;
@@ -254,6 +295,7 @@ export const saveInventoryItems = async (
       rows: rows.map((row, index) => ({
         id: row.id,
         position: index,
+        locationId: row.locationId,
         values: row.values,
         createdAt: row.createdAt,
       })),
@@ -310,6 +352,7 @@ export const saveInventoryItemsSync = (
         rows: rows.map((row, index) => ({
           id: row.id,
           position: index,
+          locationId: row.locationId,
           values: row.values,
           createdAt: row.createdAt,
         })),
@@ -463,6 +506,7 @@ export const undoColumnDeleteEvent = async (
 
 export const importInventoryCsv = async (
   csvText: string,
+  locationId: string,
   selectedHeaders?: string[],
 ): Promise<{
   ok: boolean;
@@ -479,6 +523,7 @@ export const importInventoryCsv = async (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       csvText,
+      locationId,
       selectedHeaders,
     }),
   });
@@ -574,6 +619,13 @@ export const convertImportFileToCsv = async (file: File): Promise<string> => {
 
 export const createInventoryColumn = async (input: {
   label: string;
+  /** Defaults to "text" server-side. */
+  type?: "text" | "number" | "date" | "link" | "boolean";
+  /** Whether the column shows the header dropdown filter. */
+  isGroupable?: boolean;
+  /** Locations where the column should render. Omit (or pass empty) to fall
+   *  back to the server default of "attach to every existing location". */
+  attachedLocationIds?: string[];
 }): Promise<InventoryColumn> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/columns`, {
@@ -856,7 +908,7 @@ export const fetchInventoryAlertSummary = async (): Promise<InventoryAlertSummar
   }
 };
 
-// ─── Location Registry ───────────────────────────────────────────────────────
+// ─── Location Registry (id-keyed post-restructure) ───────────────────────────
 
 /** Try to extract a human-readable error from a JSON response body. */
 const extractApiError = async (res: Response, fallback: string): Promise<string> => {
@@ -867,7 +919,18 @@ const extractApiError = async (res: Response, fallback: string): Promise<string>
   return fallback;
 };
 
-export const addInventoryLocation = async (name: string): Promise<string[]> => {
+export const listInventoryLocations = async (): Promise<InventoryLocation[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/locations`);
+  if (!res.ok) throw new Error(await extractApiError(res, "Failed to load locations"));
+  const data = await res.json();
+  return Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [];
+};
+
+export const addInventoryLocation = async (name: string): Promise<{
+  location: InventoryLocation;
+  locations: InventoryLocation[];
+}> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/locations`, {
     method: "POST",
@@ -876,34 +939,114 @@ export const addInventoryLocation = async (name: string): Promise<string[]> => {
   });
   if (!res.ok) throw new Error(await extractApiError(res, "Failed to add location"));
   const data = await res.json();
-  return Array.isArray(data.locations) ? data.locations : [];
+  return {
+    location: data.location as InventoryLocation,
+    locations: Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [],
+  };
 };
 
-export const renameInventoryLocation = async (oldName: string, newName: string): Promise<{ locations: string[]; renamedCount: number }> => {
+export const renameInventoryLocation = async (
+  id: string,
+  newName: string,
+): Promise<{ location: InventoryLocation; locations: InventoryLocation[] }> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/locations/rename`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ oldName, newName }),
+    body: JSON.stringify({ id, newName }),
   });
   if (!res.ok) throw new Error(await extractApiError(res, "Failed to rename location"));
   const data = await res.json();
   return {
-    locations: Array.isArray(data.locations) ? data.locations : [],
-    renamedCount: Number(data.renamedCount ?? 0),
+    location: data.location as InventoryLocation,
+    locations: Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [],
   };
 };
 
-export const removeInventoryLocation = async (name: string): Promise<string[]> => {
+/**
+ * Returned by removeInventoryLocation when the server refuses because items
+ * still live in the target. The frontend uses this shape to populate a
+ * confirm dialog ("Move these N items first or pick another action").
+ */
+export class LocationNotEmptyError extends Error {
+  readonly itemCount: number;
+  constructor(message: string, itemCount: number) {
+    super(message);
+    this.name = "LocationNotEmptyError";
+    this.itemCount = itemCount;
+  }
+}
+
+export const isLocationNotEmptyError = (v: unknown): v is LocationNotEmptyError =>
+  v instanceof LocationNotEmptyError;
+
+export const removeInventoryLocation = async (id: string): Promise<InventoryLocation[]> => {
   const base = requireBaseUrl();
   const res = await authFetch(`${base}/inventory/locations`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ id }),
   });
-  if (!res.ok) throw new Error((await res.text()) || "Failed to remove location");
+  if (!res.ok) {
+    if (res.status === 409) {
+      const text = await res.text();
+      try {
+        const parsed = JSON.parse(text) as { error?: string; code?: string; itemCount?: number };
+        if (parsed.code === "LOCATION_NOT_EMPTY") {
+          throw new LocationNotEmptyError(
+            parsed.error ?? "Location still has items",
+            Number(parsed.itemCount ?? 0),
+          );
+        }
+        throw new Error(parsed.error ?? text ?? "Failed to remove location");
+      } catch (err) {
+        if (err instanceof LocationNotEmptyError) throw err;
+        throw new Error(text || "Failed to remove location");
+      }
+    }
+    throw new Error((await res.text()) || "Failed to remove location");
+  }
   const data = await res.json();
-  return Array.isArray(data.locations) ? data.locations : [];
+  return Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [];
+};
+
+/** Bulk structural location move. Emits one ITEM_MOVE audit event per row. */
+export const moveInventoryItems = async (
+  rowIds: string[],
+  locationId: string,
+): Promise<{ movedCount: number }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/items/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rowIds, locationId }),
+  });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to move items"));
+  const data = await res.json();
+  return { movedCount: Number(data.movedCount ?? 0) };
+};
+
+/**
+ * Update the per-location attachments on a custom column. Setting an empty
+ * array hides the column everywhere; setting all location ids attaches it
+ * to all of them (matching pre-restructure org-wide behavior).
+ */
+export const updateInventoryColumnAttachments = async (
+  columnId: string,
+  attachedLocationIds: string[],
+  isGroupable?: boolean,
+): Promise<void> => {
+  const base = requireBaseUrl();
+  const body: Record<string, unknown> = { attachedLocationIds };
+  if (typeof isGroupable === "boolean") body.isGroupable = isGroupable;
+  const res = await authFetch(`${base}/inventory/columns/${encodeURIComponent(columnId)}/attachments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(await getApiErrorMessage(res, "Failed to update column attachments"));
+  }
 };
 
 export const addInventoryVendor = async (name: string): Promise<string[]> => {
@@ -1009,24 +1152,32 @@ export const exportInventoryData = async (): Promise<void> => {
     nextToken = page.nextToken;
   }
 
+  const locationNameById = new Map(bootstrap.locations.map((l) => [l.id, l.name]));
+
   // --- Sheet 1: Inventory ---
-  const headers = columns.map((c) => c.label);
-  const rows = allItems.map((item) =>
-    columns.map((col) => {
+  // Synthesize a "Location" column at export time so the spreadsheet stays
+  // human-readable. Location is structural (not a column) in the data model,
+  // but exported XLSX rows have always carried it as a visible field.
+  const headers = ["Location", ...columns.map((c) => c.label)];
+  const rows = allItems.map((item) => {
+    const loc = item.locationId ? locationNameById.get(item.locationId) ?? "" : "";
+    const cells = columns.map((col) => {
       const val = item.values[col.key];
       if (val == null) return "";
       if (col.type === "boolean") return val ? "Yes" : "No";
       return val;
-    }),
-  );
+    });
+    return [loc, ...cells];
+  });
 
   const inventoryWs = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-  inventoryWs["!cols"] = columns.map((col) => ({
-    wch: Math.max(col.label.length + 4, 15),
-  }));
+  inventoryWs["!cols"] = [
+    { wch: 20 },
+    ...columns.map((col) => ({ wch: Math.max(col.label.length + 4, 15) })),
+  ];
 
   // --- Sheet 2: Locations ---
-  const locationRows = (bootstrap.registeredLocations ?? []).map((loc) => [loc]);
+  const locationRows = bootstrap.locations.map((loc) => [loc.name]);
   const locationsWs = XLSX.utils.aoa_to_sheet([["Location"], ...locationRows]);
   locationsWs["!cols"] = [{ wch: 30 }];
 
@@ -1151,8 +1302,11 @@ export type RestockOrderItem = {
   // For freeform items: vendor URL captured at order time, persisted onto
   // the new inventory row when received with addToInventory.
   reorderLink?: string;
-  // For freeform items: location captured at order time. Persisted to the new
-  // inventory row on receive/cancel-materialization.
+  /** For freeform items: structural location captured at order time.
+   *  Preferred over the legacy `location` (name) field. */
+  locationId?: string;
+  /** Legacy: location name captured at order time on pre-v1 orders. The
+   *  receive flow falls back to this when locationId is absent. */
   location?: string;
   // For freeform items: user-entered reorder threshold. Persisted to the new
   // inventory row on receive (addToInventory) or cancel-materialization. When
@@ -1231,14 +1385,36 @@ export const createRestockOrder = async (payload: {
 export const receiveRestockOrder = async (
   orderId: string,
   payload: { lines: RestockReceiveLine[]; closeOrder: boolean },
-): Promise<{ status: string }> => {
+): Promise<{ status: string; receiveTrace?: Array<Record<string, unknown>> }> => {
+  // Diagnostic block: log entry, request payload, and full response so we
+  // can debug "qty didn't go up" symptoms entirely from the browser console.
+  // Console.log (not console.info) so it shows up under the default filter
+  // in every browser.
+  // console.warn so the log shows up regardless of the browser's default
+  // info/log filtering. If even this doesn't appear in the console, the
+  // frontend is serving stale code — hard refresh required.
+  console.warn("[receive] →", { orderId, payload });
   const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders/${encodeURIComponent(orderId)}/receive`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to receive restock order."));
-  return res.json();
+  if (!res.ok) {
+    const msg = await getApiErrorMessage(res, "Failed to receive restock order.");
+    console.error("[receive] ← FAILED", res.status, msg);
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  console.warn("[receive] ← response", data);
+  if (Array.isArray(data?.receiveTrace) && data.receiveTrace.length > 0) {
+    console.warn("[receive trace]", data.receiveTrace);
+  } else {
+    console.warn(
+      "[receive trace] EMPTY/MISSING — most likely the deployed Lambda is on the older build (before the trace was added). " +
+      "Verify by opening Network tab, finding the /receive POST, and checking whether the response body contains 'receiveTrace'.",
+    );
+  }
+  return data;
 };
 
 export const closeRestockOrder = async (orderId: string, note?: string): Promise<void> => {

@@ -17,7 +17,7 @@ import { json } from "../http";
 import { CORE_KEYS } from "../config";
 import { normalizeOrgId, toKey } from "../normalize";
 import { buildAuditEvent, findAuditEventByEventId, writeAuditEvents } from "../audit";
-import { ensureColumns } from "../columns";
+import { ensureColumns, listLocations } from "../columns";
 import { deleteStorageForOrganization } from "../storage";
 
 export const handleCreateColumn = async (ctx: RouteContext) => {
@@ -31,6 +31,30 @@ export const handleCreateColumn = async (ctx: RouteContext) => {
   if (!label) return json(400, { error: "Column label is required" });
   if (!["text", "number", "date", "link", "boolean"].includes(type)) {
     return json(400, { error: "Invalid column type" });
+  }
+
+  const isGroupable = body?.isGroupable === true;
+
+  // Resolve attachedLocationIds. Three paths:
+  //  1. Caller provided a list → validate against existing locations
+  //  2. Caller passed `attachToAllLocations: true` → attach to every location
+  //  3. Caller omitted both → default to "all locations" (preserves the
+  //     pre-restructure behavior where new columns were org-wide)
+  const allLocations = await listLocations(storage);
+  const allLocationIds = allLocations.map((l) => l.id);
+  const knownLocationIds = new Set(allLocationIds);
+  let attachedLocationIds: string[];
+  if (Array.isArray(body?.attachedLocationIds)) {
+    const requested = (body.attachedLocationIds as unknown[])
+      .map((v) => String(v ?? "").trim())
+      .filter((v) => v.length > 0);
+    const unknown = requested.find((id) => !knownLocationIds.has(id));
+    if (unknown) {
+      return json(400, { error: `Unknown locationId in attachedLocationIds: ${unknown}` });
+    }
+    attachedLocationIds = requested;
+  } else {
+    attachedLocationIds = allLocationIds;
   }
 
   const columns = await ensureColumns(access.organizationId);
@@ -48,6 +72,7 @@ export const handleCreateColumn = async (ctx: RouteContext) => {
     id: randomUUID(),
     organizationId: access.organizationId,
     module: "inventory",
+    kind: "column",
     key,
     label,
     type,
@@ -55,6 +80,8 @@ export const handleCreateColumn = async (ctx: RouteContext) => {
     isRequired: false,
     isVisible: true,
     isEditable: true,
+    isGroupable,
+    attachedLocationIds,
     sortOrder,
     createdAt: new Date().toISOString(),
   };
@@ -67,10 +94,95 @@ export const handleCreateColumn = async (ctx: RouteContext) => {
       columnKey: key,
       columnLabel: label,
       columnType: type,
+      isGroupable,
+      attachedLocationIds,
     }),
   ]);
 
   return json(200, { column: created });
+};
+
+/**
+ * Update the `isGroupable` flag and/or `attachedLocationIds` array on an
+ * existing column. Sibling to the older field-specific update endpoints
+ * (label, type, visibility); kept separate for routing simplicity.
+ */
+export const handleUpdateColumnAttachments = async (ctx: RouteContext) => {
+  const { access, storage, path, body } = ctx;
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can manage inventory columns" });
+  }
+  const match = path.match(/\/inventory\/columns\/([^/]+)\/attachments$/);
+  const columnId = match?.[1];
+  if (!columnId) return json(400, { error: "Column id is required" });
+
+  const columnRes = await ddb.send(
+    new GetCommand({ TableName: storage.columnTable, Key: { id: columnId } }),
+  );
+  const column = columnRes.Item as InventoryColumn | undefined;
+  if (!column) return json(404, { error: "Column not found" });
+  if (normalizeOrgId(column.organizationId) !== access.organizationId) {
+    return json(403, { error: "Column does not belong to organization" });
+  }
+
+  const sets: string[] = [];
+  const values: Record<string, unknown> = {};
+  const auditDetails: Record<string, unknown> = {
+    columnId,
+    columnKey: column.key,
+    columnLabel: column.label,
+  };
+
+  if (Array.isArray(body?.attachedLocationIds)) {
+    const allLocations = await listLocations(storage);
+    const known = new Set(allLocations.map((l) => l.id));
+    // Defensively drop ids that don't match any current location. The
+    // migration auto-attached every existing column to every location at
+    // upgrade time, so a column may carry stale ids for locations that
+    // were later deleted. Returning 400 in that case would block the user
+    // from making any attachment change at all on that column. We log the
+    // dropped ids for debugging but proceed.
+    const requested = (body.attachedLocationIds as unknown[])
+      .map((v) => String(v ?? "").trim())
+      .filter((v) => v.length > 0);
+    const filtered = requested.filter((id) => known.has(id));
+    const dropped = requested.filter((id) => !known.has(id));
+    if (dropped.length > 0) {
+      console.warn(`Dropping unknown locationIds during column-attachment update: ${dropped.join(", ")}`);
+    }
+    sets.push("attachedLocationIds = :att");
+    values[":att"] = filtered;
+    auditDetails.changeType = "attachments";
+    auditDetails.from = column.attachedLocationIds ?? [];
+    auditDetails.to = filtered;
+  }
+
+  if (typeof body?.isGroupable === "boolean") {
+    sets.push("isGroupable = :ig");
+    values[":ig"] = body.isGroupable;
+    auditDetails.changeType = sets.length > 1 ? "attachments+groupable" : "groupable";
+    auditDetails.isGroupableFrom = Boolean(column.isGroupable);
+    auditDetails.isGroupableTo = body.isGroupable;
+  }
+
+  if (sets.length === 0) {
+    return json(400, { error: "Nothing to update" });
+  }
+
+  await ddb.send(
+    new UpdateCommand({
+      TableName: storage.columnTable,
+      Key: { id: columnId },
+      UpdateExpression: `SET ${sets.join(", ")}`,
+      ExpressionAttributeValues: values,
+    }),
+  );
+
+  await writeAuditEvents(storage.auditTable, [
+    buildAuditEvent(access, "COLUMN_UPDATE", null, null, auditDetails),
+  ]);
+
+  return json(200, { ok: true, columnId });
 };
 
 export const handleDeleteColumn = async (ctx: RouteContext) => {
@@ -268,6 +380,7 @@ export const handleUpdateColumnVisibility = async (ctx: RouteContext) => {
     buildAuditEvent(access, "COLUMN_UPDATE", null, null, {
       columnId,
       columnKey: column.key,
+      columnLabel: column.label,
       changeType: "visibility",
       from: column.isVisible,
       to: isVisible,
@@ -322,6 +435,9 @@ export const handleUpdateColumnLabel = async (ctx: RouteContext) => {
     buildAuditEvent(access, "COLUMN_UPDATE", null, null, {
       columnId,
       columnKey: column.key,
+      // Capture the post-rename label so the activity feed shows the
+      // current name. The pre-rename name is in `from` for audit trail.
+      columnLabel: label,
       changeType: "label",
       from: column.label,
       to: label,
@@ -376,6 +492,7 @@ export const handleUpdateColumnType = async (ctx: RouteContext) => {
     buildAuditEvent(access, "COLUMN_UPDATE", null, null, {
       columnId,
       columnKey: column.key,
+      columnLabel: column.label,
       changeType: "type",
       from: column.type,
       to: type,

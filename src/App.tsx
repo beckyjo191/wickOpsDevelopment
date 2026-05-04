@@ -510,6 +510,7 @@ function AppInner() {
       <InventoryPage
         key={inventoryKey}
         canEditInventory={canEditInventory}
+        canManageInventoryColumns={canManageInventoryColumns}
         canLogUsage={canAccessInventory}
         initialFilter={inventoryInitialFilter}
         initialSearch={inventoryInitialSearch}

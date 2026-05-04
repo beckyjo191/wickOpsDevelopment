@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Plus, X } from "lucide-react";
-import { useToast } from "./shared/Toast";
 import { LoadingState } from "./shared/LoadingState";
+import { QtyStepper } from "./shared/QtyStepper";
 import {
   isInventoryProvisioningError,
   loadInventoryBootstrap,
@@ -11,6 +12,20 @@ import {
   type InventoryRow,
   type InventoryUsageEntryInput,
 } from "../lib/inventoryApi";
+
+/** Compact time labels for the recent-submissions list. Today shows the
+ *  clock; other dates show month/day. Identical pattern the original
+ *  pending-queue panel used so the visual rhythm stays familiar. */
+function formatActivityTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
 
 type UsageEntry = {
   id: string;
@@ -45,7 +60,11 @@ const createUsageEntry = (): UsageEntry => ({
   id: crypto.randomUUID(),
   itemId: "",
   itemSearch: "",
-  quantityUsed: "0",
+  // Default to 1 — the most common case is "I used one of this item." The
+  // QtyStepper input is select-on-focus so users can replace the value with a
+  // single keystroke when the qty is something else. Beats starting at 0
+  // which forces an extra keystroke for every line in the typical workflow.
+  quantityUsed: "1",
   notes: "",
   notesOpen: false,
   error: "",
@@ -99,6 +118,15 @@ function ItemAutocomplete({
 }) {
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(-1);
+  // The dropdown is rendered into a portal at document.body so it escapes
+  // any clipping ancestor — notably the bounded `.usage-entries` scroll
+  // inset, which would otherwise crop the dropdown's bottom rows. We track
+  // viewport-relative coords + an "open upward" flag and apply them via
+  // inline styles on the rendered list.
+  const [coords, setCoords] = useState<
+    | { top: number; left: number; width: number; upward: boolean }
+    | null
+  >(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -115,9 +143,14 @@ function ItemAutocomplete({
 
   useEffect(() => {
     const onClickOutside = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      // The dropdown lives in a portal so it isn't a DOM child of wrapRef.
+      // Treat clicks inside either the input wrap OR the portaled list as
+      // "inside" — otherwise selecting an option would close the dropdown
+      // before the click handler fires.
+      if (wrapRef.current?.contains(target)) return;
+      if (listRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
@@ -159,6 +192,39 @@ function ItemAutocomplete({
       el?.scrollIntoView({ block: "nearest" });
     }
   }, [highlightIndex]);
+
+  // Compute viewport coords for the portaled dropdown. Re-runs on open +
+  // window scroll/resize (capture-phase scroll so it catches scrolling inside
+  // the bounded `.usage-entries` inset, not just the document). Flips upward
+  // when there's not enough free space below the input.
+  useEffect(() => {
+    if (!open) return;
+    const DROPDOWN_MAX_HEIGHT = 240;
+    const recompute = () => {
+      const input = inputRef.current;
+      if (!input) return;
+      const rect = input.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      const upward = spaceBelow < DROPDOWN_MAX_HEIGHT && spaceAbove > spaceBelow;
+      setCoords({
+        top: upward ? rect.top - 4 : rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        upward,
+      });
+    };
+    recompute();
+    // Capture-phase scroll listener catches scroll events on any ancestor
+    // (the `.usage-entries` inset, the page itself, etc.) — keeps the portal
+    // glued to the input no matter where the user scrolls.
+    window.addEventListener("scroll", recompute, true);
+    window.addEventListener("resize", recompute);
+    return () => {
+      window.removeEventListener("scroll", recompute, true);
+      window.removeEventListener("resize", recompute);
+    };
+  }, [open]);
 
   const showDropdown = open && !selectedId && filtered.length > 0;
 
@@ -213,8 +279,25 @@ function ItemAutocomplete({
             : ""}
         </span>
       )}
-      {showDropdown && (
-        <ul className="usage-autocomplete-list" ref={listRef} role="listbox">
+      {showDropdown && coords && createPortal(
+        <ul
+          className={`usage-autocomplete-list${coords.upward ? " usage-autocomplete-list--up" : ""}`}
+          ref={listRef}
+          role="listbox"
+          style={{
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            width: coords.width,
+            // Translate up by 100% so the dropdown's bottom edge sits at the
+            // computed `top` — that's the input's top minus 4px when upward.
+            transform: coords.upward ? "translateY(-100%)" : "none",
+            // Override the default absolute-position offsets so the inline
+            // top/left win regardless of CSS source order.
+            right: "auto",
+            bottom: "auto",
+          }}
+        >
           {filtered.map((opt, i) => (
             <li
               key={opt.id}
@@ -231,50 +314,9 @@ function ItemAutocomplete({
               </span>
             </li>
           ))}
-        </ul>
+        </ul>,
+        document.body,
       )}
-    </div>
-  );
-}
-
-/* ── Quantity Input ────────────────────────────────────────────────────── */
-
-function QtyStepper({
-  inputId,
-  value,
-  max,
-  onChange,
-  disabled,
-  ariaInvalid,
-  ariaDescribedBy,
-}: {
-  inputId?: string;
-  value: string;
-  max: number;
-  onChange: (v: string) => void;
-  disabled: boolean;
-  ariaInvalid?: boolean;
-  ariaDescribedBy?: string;
-}) {
-  return (
-    <div className="usage-qty-stepper">
-      <input
-        id={inputId}
-        type="number"
-        className="usage-qty-input"
-        inputMode="numeric"
-        min={0}
-        max={max}
-        step="any"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onFocus={(e) => e.currentTarget.select()}
-        onClick={(e) => e.currentTarget.select()}
-        onBlur={(e) => { if (e.currentTarget.value === "") onChange("0"); }}
-        disabled={disabled}
-        aria-invalid={ariaInvalid || undefined}
-        aria-describedby={ariaDescribedBy}
-      />
     </div>
   );
 }
@@ -295,10 +337,58 @@ export function InventoryUsagePage({
    *  Viewers can still submit usage; they just can't reverse it themselves. */
   canEditInventory?: boolean;
 }) {
-  const toast = useToast();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState("");
+  // Error-only banner. Successful submissions don't need a banner because
+  // the Recent Usage panel below the form already shows what landed and
+  // persists across reloads — a transient success banner just repeats the
+  // same info less reliably. Errors still need a conspicuous surface.
+  const [feedback, setFeedback] = useState<{ type: "error"; message: string } | null>(null);
+  // History of recent submissions — capped at 10, persisted to localStorage
+  // so a reload doesn't wipe context when a coworker walks up to verify
+  // something just got logged. Audit feed remains the canonical record;
+  // this is a quick-glance affordance.
+  type RecentUsageSubmission = {
+    id: string;
+    submittedAt: string;
+    entries: Array<{ itemName: string; quantityUsed: number }>;
+  };
+  const RECENT_USAGE_STORAGE_KEY = "wickops.recentUsageSubmissions";
+  const [recentSubmissions, setRecentSubmissions] = useState<RecentUsageSubmission[]>(() => {
+    try {
+      const raw = localStorage.getItem(RECENT_USAGE_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      // Defensive shape check — malformed entries from an older schema get
+      // dropped silently rather than crashing the form.
+      return parsed.filter(
+        (s): s is RecentUsageSubmission =>
+          s
+          && typeof s.id === "string"
+          && typeof s.submittedAt === "string"
+          && Array.isArray(s.entries),
+      );
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        RECENT_USAGE_STORAGE_KEY,
+        JSON.stringify(recentSubmissions),
+      );
+    } catch {
+      // Storage may be unavailable (private mode, full disk) — fall back to
+      // memory-only and don't crash the form.
+    }
+  }, [recentSubmissions]);
+  // Per-section refs for the scrollable entries inset. Used by addLine to
+  // scroll the freshly-added entry into view at the bottom of the inset, so
+  // the user sees the new card right next to the Add Item button.
+  const entriesRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const [loadingMessage, setLoadingMessage] = useState(() => pickLoadingLine());
   const [, setColumns] = useState<InventoryColumn[]>([]);
   const [rows, setRows] = useState<InventoryRow[]>([]);
@@ -451,7 +541,7 @@ export function InventoryUsagePage({
           );
           next.entries = next.entries.map((entry) => {
             if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-            return { ...entry, itemId: "", itemSearch: "", quantityUsed: "0", notes: "", notesOpen: false, error: "" };
+            return { ...entry, itemId: "", itemSearch: "", quantityUsed: "1", notes: "", notesOpen: false, error: "" };
           });
         }
         return next;
@@ -492,6 +582,10 @@ export function InventoryUsagePage({
   };
 
   const addLine = (groupId: string) => {
+    // Append the new entry; the entries list is now a bounded scrollable
+    // inset so the Submit Usage / Add Location row at the bottom stays
+    // anchored. After state flushes we scroll the inset to the bottom so
+    // the freshly-added entry is visible right next to the Add Item button.
     setGroups((prev) =>
       prev.map((group) =>
         group.id === groupId
@@ -499,6 +593,10 @@ export function InventoryUsagePage({
           : group,
       ),
     );
+    requestAnimationFrame(() => {
+      const el = entriesRefs.current.get(groupId);
+      if (el) el.scrollTop = el.scrollHeight;
+    });
   };
 
   const removeLine = (groupId: string, entryId: string) => {
@@ -590,26 +688,31 @@ export function InventoryUsagePage({
       return;
     }
 
-    const submittedLines = normalized.map((entry) => {
-      const row = rowById.get(entry.itemId);
-      const name = row ? getItemDisplayName(row) : entry.itemId;
-      return `${name} -${entry.quantityUsed}`;
-    });
-
     setSubmitting(true);
+    setFeedback(null);
     try {
       await submitInventoryUsage(normalized);
       setGroups([createUsageGroup()]);
-      const itemList = submittedLines.join(", ");
-      toast.success(
-        canEditInventory
-          ? `Logged: ${itemList} — quantities updated. Undo from the Activity feed if needed.`
-          : `Logged: ${itemList} — quantities updated.`,
-      );
+      // Capture the submission for the recent-usage panel below the form.
+      // Snapshot the resolved item names + quantities so the row reads cleanly
+      // regardless of subsequent inventory edits.
+      const snapshotEntries = normalized.map((entry) => {
+        const row = rowById.get(entry.itemId);
+        const name = row ? getItemDisplayName(row) : entry.itemId;
+        return { itemName: name, quantityUsed: entry.quantityUsed };
+      });
+      setRecentSubmissions((prev) => [
+        {
+          id: crypto.randomUUID(),
+          submittedAt: new Date().toISOString(),
+          entries: snapshotEntries,
+        },
+        ...prev,
+      ].slice(0, 10));
       // Re-fetch inventory so the in-form quantities reflect the new totals.
       void refreshInventoryRows({ silent: true });
     } catch (err: any) {
-      toast.error(err?.message ?? "Failed to submit usage");
+      setFeedback({ type: "error", message: err?.message ?? "Failed to submit usage" });
     } finally {
       setSubmitting(false);
     }
@@ -649,6 +752,21 @@ export function InventoryUsagePage({
             )}
           </p>
         </header>
+
+        {feedback && (
+          <div className={`usage-banner usage-banner--${feedback.type}`} role="alert">
+            <span className="usage-banner-icon">!</span>
+            <span className="usage-banner-text">{feedback.message}</span>
+            <button
+              type="button"
+              className="usage-banner-dismiss"
+              onClick={() => setFeedback(null)}
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {formError && (
           <p className="field-error" role="alert">{formError}</p>
@@ -699,7 +817,16 @@ export function InventoryUsagePage({
                   </div>
                 )}
 
-                <div className="usage-entries">
+                {/* Entries are a bounded scrollable inset. Submit Usage and
+                    Add Location stay anchored at the bottom of the form
+                    regardless of how many lines the user has logged — the
+                    list scrolls inside its own pane instead of pushing the
+                    page taller. addLine scrolls this pane to its bottom on
+                    add so the new entry lands next to the Add Item button. */}
+                <div
+                  className="usage-entries"
+                  ref={(el) => { entriesRefs.current.set(group.id, el); }}
+                >
                   {group.entries.map((entry) => {
                     const selectedItem = itemOptions.find((o) => o.id === entry.itemId);
                     const maxQty = selectedItem?.quantity ?? 9999;
@@ -856,6 +983,43 @@ export function InventoryUsagePage({
             {submitting ? "Submitting..." : "Submit Usage"}
           </button>
         </div>
+
+        {recentSubmissions.length > 0 && (
+          <div className="usage-activity">
+            <h3 className="usage-activity-title">Recent Usage</h3>
+            <ul className="usage-activity-list">
+              {recentSubmissions.map((sub) => {
+                // Full label is always available via the title attr for
+                // hover-to-see-everything. Visible label simplifies once the
+                // line gets long: shows the first two items + a "+N more"
+                // count so a 12-item submission doesn't sprawl across the
+                // whole panel.
+                const fullLabel = sub.entries
+                  .map((e) => `${e.itemName} -${e.quantityUsed}`)
+                  .join(", ");
+                const PREVIEW_LIMIT = 2;
+                const isTrimmed = sub.entries.length > PREVIEW_LIMIT + 1;
+                const visibleLabel = isTrimmed
+                  ? `${sub.entries
+                      .slice(0, PREVIEW_LIMIT)
+                      .map((e) => `${e.itemName} -${e.quantityUsed}`)
+                      .join(", ")}, +${sub.entries.length - PREVIEW_LIMIT} more`
+                  : fullLabel;
+                return (
+                  <li key={sub.id} className="usage-activity-row">
+                    <span
+                      className="usage-activity-items"
+                      title={isTrimmed ? fullLabel : undefined}
+                    >
+                      {visibleLabel}
+                    </span>
+                    <span className="usage-activity-when">{formatActivityTime(sub.submittedAt)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
       </div>
     </section>
   );

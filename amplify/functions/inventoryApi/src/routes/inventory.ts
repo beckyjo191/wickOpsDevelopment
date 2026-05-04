@@ -580,3 +580,127 @@ export const handleMoveItems = async (ctx: RouteContext) => {
 
   return json(200, { ok: true, movedCount });
 };
+
+/**
+ * Bulk-update pricing fields (unitCost / packSize / packCost / reorderLink)
+ * across many inventory items in one request. Used by the Analytics tab's
+ * "items missing prices" backfill panel and the future bulk price editor.
+ *
+ * Only the fields explicitly provided in each entry get written — leaving a
+ * field undefined preserves whatever the row currently has. This is the
+ * narrow alternative to handleSaveItems for cases where the caller only
+ * wants to touch pricing and doesn't have the full row data on hand.
+ */
+export const handleUpdateItemPricing = async (ctx: RouteContext) => {
+  const { storage, access, body } = ctx;
+  if (!access.canEditInventory) {
+    return json(403, { error: "Insufficient permissions" });
+  }
+  const updates = Array.isArray(body?.updates) ? body.updates : [];
+  if (updates.length === 0) {
+    return json(400, { error: "At least one update is required." });
+  }
+
+  // Pull existing valuesJson for every itemId so we can patch on top.
+  const ids = updates
+    .map((u: any) => String(u?.itemId ?? "").trim())
+    .filter((id: string) => id.length > 0);
+  if (ids.length === 0) return json(400, { error: "Each update needs an itemId." });
+
+  const existingByValues = new Map<string, Record<string, unknown>>();
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const batch = await ddb.send(new BatchGetCommand({
+      RequestItems: {
+        [storage.itemTable]: {
+          Keys: chunk.map((id: string) => ({ id })),
+          ProjectionExpression: "id, valuesJson, organizationId, #module",
+          ExpressionAttributeNames: { "#module": "module" },
+        },
+      },
+    }));
+    const items = batch.Responses?.[storage.itemTable] ?? [];
+    for (const item of items) {
+      if (item.organizationId !== access.organizationId || item.module !== "inventory") continue;
+      try {
+        existingByValues.set(String(item.id), JSON.parse(String(item.valuesJson ?? "{}")));
+      } catch {
+        existingByValues.set(String(item.id), {});
+      }
+    }
+  }
+
+  const now = new Date().toISOString();
+  const auditEvents: Record<string, unknown>[] = [];
+  let updatedCount = 0;
+
+  for (const update of updates) {
+    const itemId = String(update?.itemId ?? "").trim();
+    if (!itemId) continue;
+    const existing = existingByValues.get(itemId);
+    if (!existing) continue;
+
+    const patch: Record<string, unknown> = {};
+    if (update.unitCost !== undefined && update.unitCost !== null && update.unitCost !== "") {
+      const n = Number(update.unitCost);
+      if (!Number.isFinite(n) || n < 0) {
+        return json(400, { error: `Item ${itemId}: unit cost must be a non-negative number.` });
+      }
+      patch.unitCost = n;
+    }
+    if (update.packSize !== undefined && update.packSize !== null && update.packSize !== "") {
+      const n = Number(update.packSize);
+      if (!Number.isFinite(n) || n <= 0) {
+        return json(400, { error: `Item ${itemId}: pack size must be greater than 0.` });
+      }
+      patch.packSize = n;
+    }
+    if (update.packCost !== undefined && update.packCost !== null && update.packCost !== "") {
+      const n = Number(update.packCost);
+      if (!Number.isFinite(n) || n < 0) {
+        return json(400, { error: `Item ${itemId}: pack cost must be a non-negative number.` });
+      }
+      patch.packCost = n;
+    }
+    if (typeof update.reorderLink === "string" && update.reorderLink.trim()) {
+      patch.reorderLink = update.reorderLink.trim();
+    }
+    if (Object.keys(patch).length === 0) continue;
+
+    const nextValues = { ...existing, ...patch };
+    try {
+      await ddb.send(new UpdateCommand({
+        TableName: storage.itemTable,
+        Key: { id: itemId },
+        ConditionExpression: "organizationId = :org AND #module = :module",
+        UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":module": "inventory",
+          ":values": JSON.stringify(nextValues),
+          ":updatedAtCustom": now,
+        },
+      }));
+      updatedCount += 1;
+      // Audit each pricing change so the activity feed reflects the
+      // backfill. Build a minimal change list mirroring ITEM_EDIT shape.
+      const changes = Object.entries(patch).map(([field, to]) => ({
+        field,
+        from: existing[field] ?? null,
+        to,
+      }));
+      const itemName = String(existing.itemName ?? "").trim() || `Item ${itemId.slice(0, 8)}`;
+      auditEvents.push(buildAuditEvent(access, "ITEM_EDIT", itemId, itemName, { changes }));
+    } catch (err: any) {
+      if (err?.name === "ConditionalCheckFailedException") continue;
+      throw err;
+    }
+  }
+
+  if (auditEvents.length > 0) {
+    await writeAuditEventsCoalesced(storage.auditTable, auditEvents);
+  }
+
+  return json(200, { ok: true, updatedCount });
+};

@@ -1216,32 +1216,67 @@ export type AuditFeedResponse = {
   nextCursor: string | null;
 };
 
-export type AuditAnalytics = {
-  period: string;
-  days: number;
+/** Period-bound aggregations. Returned for both the current period and (when
+ *  compareYoY is requested) the same window one year prior — letting the
+ *  client render YoY deltas without a second round trip. */
+export type AuditAnalyticsSlice = {
   totals: {
-    /** Sum of USAGE_APPROVE.quantityUsed in the period. */
     qtyUsed: number;
-    /** Sum of (qty × unitCost) from RESTOCK_RECEIVED + RESTOCK_ADDED, excluding donations. */
     spend: number;
-    /** Sum of ITEM_RETIRE.qty across all reason codes. */
     lossQty: number;
-    /** Sum of lossQty × last-known-unitCost per item at the moment of retirement. */
     lossValue: number;
-  };
-  /** Calendar-anchored usage cost (qtyUsed × current item unit cost). Always
-   *  computed across the full year regardless of the period selector so the
-   *  user can compare today vs week vs YTD at a glance. */
-  usageSpend: {
-    today: number;
-    week: number;
-    ytd: number;
   };
   usageOverTime: Array<{ date: string; totalUsed: number; totalSpend: number }>;
   byVendor: Array<{ vendor: string; spend: number; orderCount: number }>;
   bySpendItem: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }>;
   byUsageItem: Array<{ itemId: string; itemName: string; qtyUsed: number }>;
   lossByReason: Array<{ reason: string; qty: number; value: number }>;
+};
+
+export type AuditAnalytics = AuditAnalyticsSlice & {
+  period: string;
+  days: number;
+  /** Calendar-anchored usage cost (qtyUsed × current item unit cost). Always
+   *  computed across the full year regardless of the period selector so the
+   *  user can compare today vs week vs YTD at a glance. Kept for back-compat;
+   *  the Analytics tab no longer renders this card. */
+  usageSpend: {
+    today: number;
+    week: number;
+    ytd: number;
+  };
+  /** Same shape, computed for the same window one year ago. Present only when
+   *  the request set `compareYoY`. */
+  previous?: AuditAnalyticsSlice;
+  /** Inventory items currently missing both unit and pack cost — surfaced
+   *  on the Analytics tab so users can backfill prices for items that
+   *  accumulated usage data without ever having a price set. Sorted by
+   *  on-hand quantity descending so high-stock items float to the top. */
+  missingPriceItems?: Array<{
+    itemId: string;
+    parentItemId: string;
+    itemName: string;
+    quantity: number;
+  }>;
+};
+
+/** Bulk-update pricing fields on inventory items. Each entry only writes
+ *  the fields it carries — leaving a field undefined preserves the row's
+ *  existing value. Used by the Analytics tab's missing-prices backfill. */
+export const updateItemPricing = async (updates: Array<{
+  itemId: string;
+  unitCost?: number;
+  packSize?: number;
+  packCost?: number;
+  reorderLink?: string;
+}>): Promise<{ updatedCount: number }> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/items/pricing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ updates }),
+  });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to update pricing."));
+  return res.json();
 };
 
 export const fetchAuditFeed = async (params: {
@@ -1282,10 +1317,59 @@ export const fetchItemHistory = async (
 
 export const fetchAuditAnalytics = async (params: {
   period: "7d" | "30d" | "90d";
+  /** When true, the server also returns a `previous` aggregation for the same
+   *  window one year ago — used to render YoY deltas. Defaults to false. */
+  compareYoY?: boolean;
 }): Promise<AuditAnalytics> => {
-  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/analytics?period=${params.period}`;
+  const qs = new URLSearchParams({ period: params.period });
+  if (params.compareYoY) qs.set("compareYoY", "1");
+  // Send the user's local-time day / week / year boundaries so the server's
+  // calendar-anchored usageSpend buckets reflect the user's clock instead of
+  // the Lambda's UTC. Without this, a usage event from 7 PM MDT yesterday
+  // (= 01:00 UTC today) gets counted as "today" by a UTC-only server.
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // 7-day window = the last 7 days INCLUDING today (7 buckets total).
+  const weekStart = new Date(dayStart.getTime() - 6 * 86400000);
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  qs.set("dayStartMs", String(dayStart.getTime()));
+  qs.set("weekStartMs", String(weekStart.getTime()));
+  qs.set("yearStartMs", String(yearStart.getTime()));
+  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/analytics?${qs.toString()}`;
   const res = await authFetch(url);
   if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load analytics."));
+  return res.json();
+};
+
+/** Slice C: drill into a single vendor — items bought from them in the
+ *  selected period with per-item spend, qty, and average unit cost. */
+export type VendorBreakdown = {
+  vendor: string;
+  period: string;
+  totals: {
+    spend: number;
+    orderCount: number;
+    itemCount: number;
+  };
+  items: Array<{
+    itemId: string;
+    itemName: string;
+    spend: number;
+    qty: number;
+    avgUnitCost: number;
+    minUnitCost: number;
+    maxUnitCost: number;
+  }>;
+};
+
+export const fetchVendorBreakdown = async (params: {
+  vendor: string;
+  period: "7d" | "30d" | "90d";
+}): Promise<VendorBreakdown> => {
+  const qs = new URLSearchParams({ period: params.period, vendor: params.vendor });
+  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/analytics/vendor?${qs.toString()}`;
+  const res = await authFetch(url);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load vendor breakdown."));
   return res.json();
 };
 

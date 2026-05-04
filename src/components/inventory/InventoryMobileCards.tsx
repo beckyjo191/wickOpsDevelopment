@@ -46,6 +46,11 @@ export type InventoryMobileCardsProps = {
   isEditingLinkCell: (rowId: string, columnKey: string) => boolean;
   setEditingLinkCell: (cell: { rowId: string; columnKey: string } | null) => void;
   activeTab?: ActiveTab;
+  /** Registered vendors + add-vendor callback for the vendor column's
+   *  autocomplete picker. Same data Reorder/New Order use, so vendor names
+   *  stay canonical across the app. */
+  availableVendors?: string[];
+  onAddVendor?: (name: string) => Promise<void>;
 };
 
 /**
@@ -81,6 +86,8 @@ export function InventoryMobileCards({
   isEditingLinkCell,
   setEditingLinkCell,
   activeTab: _activeTab,
+  availableVendors,
+  onAddVendor,
 }: InventoryMobileCardsProps) {
   return (
     <div className="inventory-cards-wrap">
@@ -275,6 +282,8 @@ export function InventoryMobileCards({
                         beginCellEditSession={beginCellEditSession}
                         endCellEditSession={endCellEditSession}
                         onSetSelectedRowId={onSetSelectedRowId}
+                        availableVendors={availableVendors}
+                        onAddVendor={onAddVendor}
                       />
                     </div>
                     );

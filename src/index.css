@@ -242,6 +242,13 @@ p {
     --caution: #FACC15;
     --caution-border: #422006;
     --caution-surface: #1A1504;
+    /* Mirror the explicit dark-theme block — without these, success toasts
+       on auto-theme dark mode rendered the light-default surface (#F0FDF4)
+       on a dark page with a light --text-heading, which painted a white
+       box with invisible message text. */
+    --success: #86EFAC;
+    --success-border: #14532D;
+    --success-surface: #052E16;
     --notice: #93C5FD;
     --notice-border: #1E3A5F;
     --notice-surface: #0F1D2D;

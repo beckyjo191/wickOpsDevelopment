@@ -16,6 +16,7 @@ import {
 import { HelpModal } from "./shared/HelpModal";
 import { EmptyState } from "./shared/EmptyState";
 import { LoadingState } from "./shared/LoadingState";
+import { QtyStepper } from "./shared/QtyStepper";
 import { DaySection } from "../lib/dayGroups";
 import { dayGroupLabel } from "../lib/dayGroupLabel";
 import {
@@ -549,8 +550,15 @@ function OrderCard({
   const [cancelNote, setCancelNote] = useState("");
 
   const total = orderTotalCost(order.items);
-  const totalReceived = order.items.reduce((s, i) => s + i.qtyReceived, 0);
-  const totalOrdered = order.items.reduce((s, i) => s + i.qtyOrdered, 0);
+  // Per-line progress instead of per-unit qty totals. Per-unit math gets
+  // misleading when an item was ordered as units but received as boxes (or
+  // vice versa) because qtyOrdered and qtyReceived end up in different units
+  // of measure. Counting lines is the same regardless of pack-size: a line is
+  // either fully received or it isn't.
+  const linesFullyReceived = order.items.filter(
+    (i) => i.qtyReceived >= i.qtyOrdered,
+  ).length;
+  const totalLines = order.items.length;
   // An order was "cancelled" (vs. closed after at least one receive) when it
   // was closed without anything being received.
   const isCancelled = order.status === "closed" && order.receives.length === 0;
@@ -599,8 +607,12 @@ function OrderCard({
             <span className="order-card-date">{formatDate(order.createdAt)}</span>
           </div>
           <div className="order-card-summary">
-            <span className="order-card-items-count">{order.items.length} item{order.items.length !== 1 ? "s" : ""}</span>
-            <span className="order-card-progress">{totalReceived}/{totalOrdered} received</span>
+            <span className="order-card-items-count">{totalLines} item{totalLines !== 1 ? "s" : ""}</span>
+            <span className="order-card-progress">
+              {linesFullyReceived === totalLines
+                ? `${totalLines} received`
+                : `${linesFullyReceived}/${totalLines} received`}
+            </span>
             {total !== null && <span className="order-card-cost">{formatCurrency(total)}</span>}
           </div>
           <div className="order-card-actions">
@@ -721,14 +733,24 @@ function OrderCard({
                   ? rowPack
                   : (item.packSize ?? 0);
                 const isPack = packSize > 0;
+                // Pack-aware qty rendering. Three branches:
+                //   - No pack: just the raw number
+                //   - Clean multiple of packSize: "N box of M"
+                //   - Otherwise: render as full boxes + a units remainder so
+                //     mixed quantities (e.g. 15 units of pack-10) read as
+                //     "1 box of 10, 5 units" instead of "1.5 boxes" garbage.
                 const formatQtyWithBoxes = (unitQty: number) => {
-                  if (!isPack || unitQty === 0) return String(unitQty);
-                  const boxes = unitQty / packSize;
-                  const whole = Number.isInteger(boxes);
-                  const label = whole
-                    ? `${boxes} box${boxes === 1 ? "" : "es"}`
-                    : `${(Math.round(boxes * 10) / 10)} boxes`;
-                  return `${unitQty} (${label})`;
+                  if (unitQty === 0) return "0";
+                  if (!isPack) return String(unitQty);
+                  const fullBoxes = Math.floor(unitQty / packSize);
+                  const remainder = unitQty - fullBoxes * packSize;
+                  const boxLabel = (n: number) =>
+                    `${n} box${n === 1 ? "" : "es"} of ${packSize}`;
+                  const unitLabel = (n: number) =>
+                    `${n} unit${n === 1 ? "" : "s"}`;
+                  if (fullBoxes === 0) return unitLabel(remainder);
+                  if (remainder === 0) return boxLabel(fullBoxes);
+                  return `${boxLabel(fullBoxes)}, ${unitLabel(remainder)}`;
                 };
                 return (
                   <tr key={item.itemId} className={item.qtyReceived >= item.qtyOrdered ? "order-detail-row--done" : ""}>
@@ -1139,6 +1161,15 @@ type ComposeOrderSubmitLine = {
   qtyOrdered: number;
   minQuantity?: number;
   reorderLink?: string;
+  /** Per-unit cost. Persists to the order line for analytics and back to the
+   *  inventory item's `unitCost` when provided — fills in pricing for items
+   *  that didn't have it before. */
+  unitCost?: number;
+  /** Pack size + pack cost. When both are set, unitCost = packCost / packSize.
+   *  Send pack values explicitly so the server can persist them on the item
+   *  record (analytics needs the per-pack figure for "spend by pack"). */
+  packSize?: number;
+  packCost?: number;
 };
 
 type ComposeLine = {
@@ -1157,9 +1188,25 @@ type ComposeLine = {
   /** Product URL (where to reorder). Persisted on the order item and on
    *  the inventory row when received with addToInventory. */
   productUrl: string;
-  /** True when the user expanded the line to expose URL / min-qty fields.
-   *  Freeform lines start expanded so the user sees the optional fields. */
-  expanded: boolean;
+  /** Per-unit cost (currency input string — e.g. "$0.89"). Pre-filled from
+   *  the inventory row when an existing item is picked; user can edit. On
+   *  submit any non-empty value writes back to the inventory row's unitCost
+   *  so future analytics see the up-to-date price. */
+  unitCost: string;
+  /** Pack size (units per box). Pre-filled from inventory row. */
+  packSize: string;
+  /** Pack cost (price per box). Pre-filled from inventory row. */
+  packCost: string;
+  /** Which pricing mode is shown for this line — mirrors the Reorder tab's
+   *  Unit/Box switcher. Drives which inputs are visible (per-unit cost vs.
+   *  pack size + pack cost). Both groups still write to their respective
+   *  ComposeLine fields, so toggling doesn't lose typed values. */
+  priceMode: "unit" | "box";
+  /** Whether the reorder URL input is visible. Hidden behind a button
+   *  ("+ Reorder URL") when empty so the line stays compact for items the
+   *  user doesn't need to set a URL on; auto-true when a URL is pre-filled
+   *  from the picked inventory row. */
+  urlOpen: boolean;
 };
 
 function ComposeOrderPanel({
@@ -1181,13 +1228,49 @@ function ComposeOrderPanel({
   const blankLineExtras = {
     minQuantity: "",
     productUrl: "",
+    unitCost: "",
+    packSize: "",
+    packCost: "",
   };
   const makeEmptyLine = (): ComposeLine => ({
     itemName: "",
-    qty: "0",
-    expanded: false,
+    qty: "1",
+    priceMode: "unit",
+    urlOpen: false,
     ...blankLineExtras,
   });
+
+  /** Build a partial ComposeLine patch with the existing inventory item's
+   *  pricing + link as defaults — so picking an item pre-fills what the user
+   *  most likely wants to keep. The user can still overwrite any of these
+   *  fields; on submit, only NON-EMPTY values write back to the inventory
+   *  row, so leaving a default alone is a no-op. */
+  const defaultsFromInventoryRow = (row: InventoryRow): Partial<ComposeLine> => {
+    const v = row.values;
+    const unitCost = v.unitCost !== undefined && v.unitCost !== null && String(v.unitCost).trim() !== ""
+      ? formatCurrency(Number(v.unitCost))
+      : "";
+    const packSize = v.packSize !== undefined && v.packSize !== null && String(v.packSize).trim() !== ""
+      ? String(v.packSize)
+      : "";
+    const packCost = v.packCost !== undefined && v.packCost !== null && String(v.packCost).trim() !== ""
+      ? formatCurrency(Number(v.packCost))
+      : "";
+    const reorderLink = typeof v.reorderLink === "string" && v.reorderLink.trim()
+      ? String(v.reorderLink)
+      : "";
+    // Default to Box mode when the row carries any pack data — that's how the
+    // user is already buying it. Otherwise stay in Unit mode.
+    const priceMode: "unit" | "box" = packSize || packCost ? "box" : "unit";
+    return {
+      unitCost,
+      packSize,
+      packCost,
+      productUrl: reorderLink,
+      priceMode,
+      urlOpen: reorderLink.length > 0,
+    };
+  };
 
   const [vendor, setVendor] = useState("");
   const [notes, setNotes] = useState("");
@@ -1209,25 +1292,36 @@ function ComposeOrderPanel({
   };
 
   // Pick an existing inventory item for the given line. Locks in the
-  // itemId + itemName; the line stays in "filled" mode until the user
-  // clicks × to clear it (which restores the autocomplete).
+  // itemId + itemName, and pre-fills cost / pack / link from the inventory
+  // row so the user sees what's currently on file. Anything left untouched
+  // stays as-is on submit (server only writes fields the user actually
+  // populated). The line stays in "filled" mode until the user clicks × to
+  // clear it (which restores the autocomplete).
   const pickExistingForLine = (idx: number, itemId: string, name: string) => {
     if (lines.some((l, i) => i !== idx && l.itemId === itemId)) return;
-    updateLine(idx, { itemId, itemName: name });
+    const row = inventoryRows.find((r) => r.id === itemId);
+    const defaults = row ? defaultsFromInventoryRow(row) : {};
+    updateLine(idx, { itemId, itemName: name, ...defaults });
   };
 
-  // Pick a freeform (brand-new) item for the given line. No itemId; we
-  // expand the line by default since freeform items usually need pack /
-  // expiration / URL / min qty filled in at creation time.
+  // Pick a freeform (brand-new) item for the given line. No itemId; pricing
+  // and min-qty inputs surface inline once a line is filled (for any line),
+  // so freeform items don't need a separate "expanded" flag.
   const pickFreeformForLine = (idx: number, name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    updateLine(idx, { itemId: undefined, itemName: trimmed, expanded: true });
+    updateLine(idx, { itemId: undefined, itemName: trimmed });
   };
 
   // Restore a line to search mode (the autocomplete picker reappears).
   const clearLineItem = (idx: number) => {
-    updateLine(idx, { itemId: undefined, itemName: "", expanded: false });
+    updateLine(idx, {
+      itemId: undefined,
+      itemName: "",
+      ...blankLineExtras,
+      priceMode: "unit",
+      urlOpen: false,
+    });
   };
 
   const addEmptyLine = () => {
@@ -1272,12 +1366,54 @@ function ComposeOrderPanel({
       const reorderLink = productUrl
         ? (/^https?:\/\//i.test(productUrl) ? productUrl : `https://${productUrl}`)
         : undefined;
+
+      // Cost/pack fields. Forward only the values for the active priceMode so
+      // the user's stale typing in the inactive mode (e.g. unit cost left over
+      // from before they switched to Box) doesn't write back to inventory.
+      let unitCost: number | undefined;
+      let packSize: number | undefined;
+      let packCost: number | undefined;
+      if (l.priceMode === "unit" && l.unitCost.trim()) {
+        const parsed = parseCurrency(l.unitCost);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          setError(`${name}: unit cost must be a non-negative number.`);
+          return;
+        }
+        unitCost = parsed;
+      }
+      if (l.priceMode === "box") {
+        if (l.packSize.trim()) {
+          const parsed = Number(l.packSize);
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            setError(`${name}: pack size must be greater than 0.`);
+            return;
+          }
+          packSize = Math.floor(parsed);
+        }
+        if (l.packCost.trim()) {
+          const parsed = parseCurrency(l.packCost);
+          if (!Number.isFinite(parsed) || parsed < 0) {
+            setError(`${name}: pack cost must be a non-negative number.`);
+            return;
+          }
+          packCost = parsed;
+        }
+        // Derive per-unit cost from pack cost + size so analytics still has
+        // the per-unit figure when the user only typed in box terms.
+        if (packCost !== undefined && packSize && packSize > 0) {
+          unitCost = packCost / packSize;
+        }
+      }
+
       payloadLines.push({
         ...(l.itemId ? { itemId: l.itemId } : {}),
         itemName: name,
         qtyOrdered: qty,
         ...(minQuantity !== undefined ? { minQuantity } : {}),
         ...(reorderLink ? { reorderLink } : {}),
+        ...(unitCost !== undefined ? { unitCost } : {}),
+        ...(packSize !== undefined ? { packSize } : {}),
+        ...(packCost !== undefined ? { packCost } : {}),
       });
     }
     setSubmitting(true);
@@ -1355,16 +1491,11 @@ function ComposeOrderPanel({
                   </div>
                   <div className="usage-entry-qty compose-order-line-qty">
                     <label className="field-label" htmlFor={`manual-order-qty-${idx}`}>Qty</label>
-                    <input
-                      id={`manual-order-qty-${idx}`}
-                      className="field compose-order-line-qty-input"
-                      type="number"
-                      min="1"
+                    <QtyStepper
+                      inputId={`manual-order-qty-${idx}`}
                       value={l.qty}
-                      onChange={(e) => updateLine(idx, { qty: e.target.value })}
-                      onFocus={(e) => e.currentTarget.select()}
-                      onClick={(e) => e.currentTarget.select()}
-                      onBlur={(e) => { if (e.currentTarget.value === "") updateLine(idx, { qty: "0" }); }}
+                      min={1}
+                      onChange={(v) => updateLine(idx, { qty: v })}
                       disabled={submitting || !filled}
                     />
                   </div>
@@ -1381,23 +1512,11 @@ function ComposeOrderPanel({
                   )}
                 </div>
 
+                {/* Pricing + URL surface inline (no More-details toggle) once
+                 *  the line has an item picked. Receipts from places like
+                 *  Costco need unit/box pricing captured at order time, so
+                 *  hiding it behind a collapsed section made it invisible. */}
                 {filled ? (
-                  <button
-                    type="button"
-                    className="manual-order-more-toggle"
-                    onClick={() => updateLine(idx, { expanded: !l.expanded })}
-                    disabled={submitting}
-                    aria-expanded={l.expanded}
-                  >
-                    {l.expanded ? (
-                      <>Hide details <ChevronUp size={14} /></>
-                    ) : (
-                      <>More details <ChevronDown size={14} /></>
-                    )}
-                  </button>
-                ) : null}
-
-                {filled && l.expanded ? (
                   <div className="manual-order-line-details">
                     {!l.itemId ? (
                       <div className="manual-order-detail-field">
@@ -1415,17 +1534,131 @@ function ComposeOrderPanel({
                         />
                       </div>
                     ) : null}
+                    {/* Pricing — Unit/Box switcher mirrors the Reorder tab so
+                     *  the same mental model carries across (and so users can
+                     *  enter a Costco box price like "$24.99 / box of 30"
+                     *  without having to do per-unit math). */}
                     <div className="manual-order-detail-field manual-order-detail-field--wide">
-                      <label className="field-label" htmlFor={`manual-order-url-${idx}`}>Product URL</label>
-                      <input
-                        id={`manual-order-url-${idx}`}
-                        className="field"
-                        type="text"
-                        placeholder="https://..."
-                        value={l.productUrl}
-                        onChange={(e) => updateLine(idx, { productUrl: e.target.value })}
-                        disabled={submitting}
-                      />
+                      <label className="field-label">Pricing</label>
+                      <div className="manual-order-price">
+                        <div className="reorder-price-mode" role="tablist" aria-label="Pricing mode">
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={l.priceMode === "unit"}
+                            className={`reorder-price-mode-btn${l.priceMode === "unit" ? " active" : ""}`}
+                            onClick={() => updateLine(idx, { priceMode: "unit" })}
+                            disabled={submitting}
+                          >
+                            Unit
+                          </button>
+                          <button
+                            type="button"
+                            role="tab"
+                            aria-selected={l.priceMode === "box"}
+                            className={`reorder-price-mode-btn${l.priceMode === "box" ? " active" : ""}`}
+                            onClick={() => updateLine(idx, { priceMode: "box" })}
+                            disabled={submitting}
+                          >
+                            Box
+                          </button>
+                        </div>
+                        {l.priceMode === "unit" ? (
+                          <input
+                            id={`manual-order-unitcost-${idx}`}
+                            className="field manual-order-price-input"
+                            type="text"
+                            inputMode="decimal"
+                            placeholder="$ / unit"
+                            aria-label="Unit cost"
+                            value={l.unitCost}
+                            onChange={(e) => updateLine(idx, { unitCost: e.target.value })}
+                            onBlur={(e) => {
+                              const raw = e.currentTarget.value.trim();
+                              if (!raw) return;
+                              const parsed = parseCurrency(raw);
+                              if (Number.isFinite(parsed) && parsed >= 0) {
+                                updateLine(idx, { unitCost: formatCurrency(parsed) });
+                              }
+                            }}
+                            disabled={submitting}
+                          />
+                        ) : (
+                          <div className="manual-order-price-box-inputs">
+                            <input
+                              id={`manual-order-packsize-${idx}`}
+                              className="field manual-order-price-input"
+                              type="number"
+                              min="1"
+                              placeholder="Pack size"
+                              aria-label="Pack size (units per box)"
+                              value={l.packSize}
+                              onChange={(e) => updateLine(idx, { packSize: e.target.value })}
+                              onFocus={(e) => e.currentTarget.select()}
+                              disabled={submitting}
+                            />
+                            <input
+                              id={`manual-order-packcost-${idx}`}
+                              className="field manual-order-price-input"
+                              type="text"
+                              inputMode="decimal"
+                              placeholder="$ / box"
+                              aria-label="Pack cost"
+                              value={l.packCost}
+                              onChange={(e) => updateLine(idx, { packCost: e.target.value })}
+                              onBlur={(e) => {
+                                const raw = e.currentTarget.value.trim();
+                                if (!raw) return;
+                                const parsed = parseCurrency(raw);
+                                if (Number.isFinite(parsed) && parsed >= 0) {
+                                  updateLine(idx, { packCost: formatCurrency(parsed) });
+                                }
+                              }}
+                              disabled={submitting}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {/* Reorder URL is hidden behind a button when empty so the
+                     *  line stays compact for items where the user doesn't
+                     *  bother. Pre-filled URLs (from the inventory row) start
+                     *  expanded so the user sees the value already on file. */}
+                    <div className="manual-order-detail-field manual-order-detail-field--wide">
+                      {l.urlOpen ? (
+                        <>
+                          <label className="field-label" htmlFor={`manual-order-url-${idx}`}>Reorder URL</label>
+                          <div className="manual-order-url-row">
+                            <input
+                              id={`manual-order-url-${idx}`}
+                              className="field"
+                              type="text"
+                              placeholder="https://..."
+                              value={l.productUrl}
+                              onChange={(e) => updateLine(idx, { productUrl: e.target.value })}
+                              disabled={submitting}
+                            />
+                            <button
+                              type="button"
+                              className="usage-remove-line-btn"
+                              onClick={() => updateLine(idx, { productUrl: "", urlOpen: false })}
+                              disabled={submitting}
+                              aria-label="Remove reorder URL"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="button button-secondary button-sm manual-order-add-url"
+                          onClick={() => updateLine(idx, { urlOpen: true })}
+                          disabled={submitting}
+                        >
+                          <Plus size={14} /> Reorder URL
+                        </button>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -1748,6 +1981,9 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
       qtyOrdered: l.qtyOrdered,
       ...(l.minQuantity !== undefined ? { minQuantity: l.minQuantity } : {}),
       ...(l.reorderLink ? { reorderLink: l.reorderLink } : {}),
+      ...(l.unitCost !== undefined ? { unitCost: l.unitCost } : {}),
+      ...(l.packSize !== undefined ? { packSize: l.packSize } : {}),
+      ...(l.packCost !== undefined ? { packCost: l.packCost } : {}),
     }));
     const { orderId } = await createRestockOrder({
       vendor: input.vendor || undefined,

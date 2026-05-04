@@ -2,6 +2,7 @@ import { useState, type ChangeEvent, type FocusEvent } from "react";
 import { ExternalLink, X } from "lucide-react";
 import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../lib/currency";
 import type { InventoryColumn, InventoryRow } from "./inventoryTypes";
+import { VendorSelect } from "../ReorderTab";
 
 export type CellEditorProps = {
   column: InventoryColumn;
@@ -22,6 +23,11 @@ export type CellEditorProps = {
   beginCellEditSession?: (rowId: string, columnKey: string) => void;
   endCellEditSession?: () => void;
   onSetSelectedRowId?: (rowId: string) => void;
+  /** Registered vendors for the vendor cell autocomplete. When provided
+   *  alongside `onAddVendor`, the vendor column renders the same picker the
+   *  Reorder/New Order screens use — keeping vendor names canonical. */
+  availableVendors?: string[];
+  onAddVendor?: (name: string) => Promise<void>;
 };
 
 /**
@@ -47,8 +53,11 @@ export function CellEditor({
   beginCellEditSession,
   endCellEditSession,
   onSetSelectedRowId,
+  availableVendors,
+  onAddVendor,
 }: CellEditorProps) {
   const inputClass = variant === "mobile" ? "inventory-card-input" : undefined;
+  const isVendorCell = column.key === "vendor";
 
   // ---- Read-only rendering ----
   if (!canEdit) {
@@ -247,6 +256,28 @@ export function CellEditor({
           &#x2197;
         </a>
       </div>
+    );
+  }
+
+  // -- Vendor column (text-typed core column) --
+  // Renders the same autocomplete picker used in New Order / Reorder so vendor
+  // names stay canonical across the app. Falls back to the generic textarea
+  // when the parent didn't provide vendor data (e.g. legacy callers).
+  if (isVendorCell && availableVendors) {
+    const currentVendor = String(value ?? "");
+    return (
+      <VendorSelect
+        value={currentVendor}
+        availableVendors={availableVendors}
+        onChange={(next) => {
+          beginCellEditSession?.(row.id, column.key);
+          onCellChange(row.id, column, next);
+          endCellEditSession?.();
+        }}
+        onAddVendor={onAddVendor}
+        disabled={!canEdit}
+        ariaLabel="Vendor"
+      />
     );
   }
 

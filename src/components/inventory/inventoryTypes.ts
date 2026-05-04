@@ -14,6 +14,11 @@ export type InventoryInitialAction = "import-csv" | "paste-import" | "download-t
 
 export interface InventoryPageProps {
   canEditInventory: boolean;
+  /** Admin/Owner-only capability — gates actions that mutate shared registries
+   *  (currently: adding a new vendor from the inventory grid's vendor cell).
+   *  Editors can still pick an existing vendor; only admins can introduce a
+   *  new canonical name. */
+  canManageInventoryColumns?: boolean;
   /** Whether Log Usage is available to the user (currently mirrors inventory module access). */
   canLogUsage?: boolean;
   initialFilter?: ActiveTab;

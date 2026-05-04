@@ -265,6 +265,11 @@ export const handleAuditItemHistory = async (ctx: RouteContext) => {
   return json(200, { events, nextCursor });
 };
 
+/** ms-per-year approximation used for YoY shifting. 365 days is fine for the
+ *  comparisons we care about (year-over-year of a sliding window); leap-year
+ *  off-by-one days don't materially change a 30-day-vs-30-day comparison. */
+const YEAR_MS = 365 * 86400000;
+
 export const handleAuditAnalytics = async (ctx: RouteContext) => {
   const { access, storage, query } = ctx;
   if (!access.canManageColumns) {
@@ -273,21 +278,41 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
 
   const period = query.period ?? "30d";
   const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
-  const periodSinceMs = Date.now() - days * 86400000;
-  const periodSince = new Date(periodSinceMs);
+  const nowMs = Date.now();
+  const periodSinceMs = nowMs - days * 86400000;
+  const compareYoY = query.compareYoY === "1" || query.compareYoY === "true";
+  // Previous-period window: the same N days, shifted back one year. We use
+  // [prevSinceMs, prevUntilMs) as a half-open range so events at the boundary
+  // attribute to exactly one period.
+  const prevSinceMs = periodSinceMs - YEAR_MS;
+  const prevUntilMs = nowMs - YEAR_MS;
 
-  // Day / 7-day / YTD windows for the usage-spend cards. Always anchored to
-  // calendar boundaries (start of today, start of week, Jan 1) — these are
-  // independent of the period selector so the user always sees consistent
-  // "what did we burn this year" totals.
+  // Day / 7-day / YTD windows for the usage-spend cards. Anchored to the
+  // user's LOCAL calendar boundaries — passed in as query params from the
+  // browser so a user in MDT doesn't see yesterday-evening events leaking
+  // into "today UTC". Falls back to a UTC-based midnight if the client
+  // didn't send boundaries (older clients pre-fix), which preserves the
+  // previous-but-imperfect behavior rather than crashing.
   const now = new Date();
-  const dayStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const weekStartMs = dayStartMs - 6 * 86400000;
-  const yearStartMs = new Date(now.getFullYear(), 0, 1).getTime();
+  const fallbackDayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const fallbackYearStart = new Date(now.getFullYear(), 0, 1).getTime();
+  const parseMs = (raw: string | undefined): number | null => {
+    if (typeof raw !== "string" || raw.trim() === "") return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const dayStartMs = parseMs(query.dayStartMs) ?? fallbackDayStart;
+  const weekStartMs = parseMs(query.weekStartMs) ?? (dayStartMs - 6 * 86400000);
+  const yearStartMs = parseMs(query.yearStartMs) ?? fallbackYearStart;
 
-  // Scan window has to reach the older of (period start, year start) so the
-  // YTD usage-spend card has the full year's USAGE_APPROVE events to value.
-  const scanSinceMs = Math.min(periodSinceMs, yearStartMs);
+  // Scan window has to reach the oldest of (period start, year start, prev
+  // year period start when compareYoY is on) so every aggregation has the
+  // events it needs in a single pass.
+  const scanSinceMs = Math.min(
+    periodSinceMs,
+    yearStartMs,
+    compareYoY ? prevSinceMs : Number.POSITIVE_INFINITY,
+  );
   const scanSince = new Date(scanSinceMs).toISOString();
 
   // Fetch all audit events in the scan window (oldest → newest so the
@@ -319,6 +344,17 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   // matters we can stamp unitCost into USAGE_APPROVE event details and prefer
   // that.
   const itemUnitCost = new Map<string, number>();
+  // Items missing pricing — surfaced on the Analytics tab so the user can
+  // backfill quickly. Keyed by parentItemId (preferred) or itemId so
+  // duplicate lots collapse to one row in the picker. We track the
+  // highest-stocked lot's name for display.
+  type MissingPriceItem = {
+    itemId: string;
+    parentItemId: string;
+    itemName: string;
+    quantity: number;
+  };
+  const missingPriceMap = new Map<string, MissingPriceItem>();
   try {
     const allItems = await listAllItems(storage, access.organizationId);
     for (const item of allItems) {
@@ -327,32 +363,114 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
         values = JSON.parse(String((item as { valuesJson?: string }).valuesJson ?? "{}"));
       } catch { /* ignore */ }
       const cost = Number(values.unitCost ?? 0);
-      if (!Number.isFinite(cost) || cost <= 0) continue;
+      const packCost = Number(values.packCost ?? 0);
       const parentId = typeof values.parentItemId === "string" && values.parentItemId.trim()
         ? String(values.parentItemId).trim()
         : item.id;
-      // Prefer the highest unitCost across lots — defensible default when one
-      // lot was bought cheaply long ago and a recent restock came in pricier.
-      const existing = itemUnitCost.get(parentId) ?? 0;
-      if (cost > existing) itemUnitCost.set(parentId, cost);
-      // Also key by raw item id so events with no parentItemId still resolve.
-      const idExisting = itemUnitCost.get(item.id) ?? 0;
-      if (cost > idExisting) itemUnitCost.set(item.id, cost);
+      const itemNameRaw = String(values.itemName ?? "").trim();
+      const isRetired = values.retiredAt !== undefined && values.retiredAt !== null && String(values.retiredAt).trim() !== "";
+
+      if (Number.isFinite(cost) && cost > 0) {
+        // Prefer the highest unitCost across lots — defensible default when
+        // one lot was bought cheaply long ago and a recent restock came in
+        // pricier.
+        const existing = itemUnitCost.get(parentId) ?? 0;
+        if (cost > existing) itemUnitCost.set(parentId, cost);
+        // Also key by raw item id so events with no parentItemId still resolve.
+        const idExisting = itemUnitCost.get(item.id) ?? 0;
+        if (cost > idExisting) itemUnitCost.set(item.id, cost);
+      } else if (!isRetired && itemNameRaw) {
+        // No unit cost AND no pack cost → flag for the missing-prices panel.
+        // Skip items missing a name entirely (system rows, blank drafts).
+        const hasAnyPrice = (Number.isFinite(cost) && cost > 0)
+          || (Number.isFinite(packCost) && packCost > 0);
+        if (!hasAnyPrice) {
+          const qty = Number(values.quantity ?? 0);
+          const safeQty = Number.isFinite(qty) ? qty : 0;
+          const existing = missingPriceMap.get(parentId);
+          if (!existing || safeQty > existing.quantity) {
+            missingPriceMap.set(parentId, {
+              itemId: item.id,
+              parentItemId: parentId,
+              itemName: itemNameRaw,
+              quantity: safeQty,
+            });
+          }
+        }
+      }
     }
   } catch { /* if items table read fails, usage spend silently degrades to 0 */ }
+  const missingPriceItems = [...missingPriceMap.values()]
+    .sort((a, b) => b.quantity - a.quantity);
 
-  // Aggregation buckets. All group by parentItemId (fallback to itemId) so
-  // multi-lot items roll up as one logical SKU in every view.
+  // Run the period-bound aggregation for the current window.
+  const currentSlice = aggregatePeriodSlice(allEvents, periodSinceMs, Number.POSITIVE_INFINITY, itemUnitCost);
+  // YoY: same shape, shifted back one year. Half-open [prevSinceMs, prevUntilMs).
+  const previousSlice = compareYoY
+    ? aggregatePeriodSlice(allEvents, prevSinceMs, prevUntilMs, itemUnitCost)
+    : null;
+
+  // Calendar-anchored usage spend (Today / 7d / YTD) — independent of the
+  // period selector. Single pass over USAGE_APPROVE events.
+  let usageSpendToday = 0;
+  let usageSpendWeek = 0;
+  let usageSpendYTD = 0;
+  for (const evt of allEvents) {
+    if (String(evt.action ?? "") !== "USAGE_APPROVE") continue;
+    let details: Record<string, unknown> = {};
+    try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
+    if (details.undone) continue;
+    const qty = Number(details.quantityUsed ?? 0);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const itemId = String(evt.itemId ?? "");
+    const parentItemId = typeof details.parentItemId === "string" && details.parentItemId.trim()
+      ? String(details.parentItemId).trim()
+      : itemId;
+    const itemKey = parentItemId || itemId;
+    const stampedCost = Number(details.unitCost ?? 0);
+    const cost = Number.isFinite(stampedCost) && stampedCost > 0
+      ? stampedCost
+      : (itemUnitCost.get(itemKey) ?? itemUnitCost.get(itemId) ?? 0);
+    if (cost <= 0) continue;
+    const evtTimeMs = Date.parse(String(evt.timestamp ?? "")) || 0;
+    const spend = qty * cost;
+    if (evtTimeMs >= yearStartMs) usageSpendYTD += spend;
+    if (evtTimeMs >= weekStartMs) usageSpendWeek += spend;
+    if (evtTimeMs >= dayStartMs) usageSpendToday += spend;
+  }
+
+  return json(200, {
+    period,
+    days,
+    ...currentSlice,
+    usageSpend: {
+      today: usageSpendToday,
+      week: usageSpendWeek,
+      ytd: usageSpendYTD,
+    },
+    // Items currently missing both unit cost and pack cost. Surfaced on the
+    // Analytics tab so the user can backfill quickly — every price they set
+    // here automatically values past usage events via the analytics fallback.
+    missingPriceItems,
+    ...(previousSlice ? { previous: previousSlice } : {}),
+  });
+};
+
+/** Period-bound slice of analytics — extracted so we can run it twice
+ *  (current + previous-year) on the same already-loaded event stream. */
+function aggregatePeriodSlice(
+  allEvents: Record<string, unknown>[],
+  periodSinceMs: number,
+  periodUntilMs: number,
+  itemUnitCost: Map<string, number>,
+) {
   const usageByDay = new Map<string, number>();
   const spendByDay = new Map<string, number>();
-  // itemId carries the drill-in target. For a multi-lot item we record the
-  // first itemId seen with that parentItemId — enough for v1 item-history
-  // which queries by a single itemId. Parent-level history is a phase 2b task.
   const usageByItem = new Map<string, { itemName: string; itemId: string; qtyUsed: number }>();
   const vendorSpend = new Map<string, { spend: number; orderIds: Set<string>; restockCount: number }>();
   const itemSpend = new Map<string, { itemName: string; itemId: string; spend: number; qtyReceived: number }>();
   const lossByReason = new Map<string, { qty: number; value: number }>();
-  /** itemKey → most recent unitCost seen so far (within period). Drives loss valuation. */
+  /** itemKey → most recent unitCost seen within this slice. Drives loss valuation. */
   const lastUnitCost = new Map<string, number>();
 
   let totalQtyUsed = 0;
@@ -360,19 +478,14 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   let totalLossQty = 0;
   let totalLossValue = 0;
 
-  // Usage-based spend buckets — calendar-anchored, computed across the full
-  // scan window (which always includes YTD, see scanSince above).
-  let usageSpendToday = 0;
-  let usageSpendWeek = 0;
-  let usageSpendYTD = 0;
-
   for (const evt of allEvents) {
+    const evtTimeMs = Date.parse(String(evt.timestamp ?? "")) || 0;
+    if (evtTimeMs < periodSinceMs || evtTimeMs >= periodUntilMs) continue;
+
     const action = String(evt.action ?? "");
     const day = String(evt.timestamp ?? "").slice(0, 10);
     const itemId = String(evt.itemId ?? "");
     const itemName = String(evt.itemName ?? "");
-    const evtTimeMs = Date.parse(String(evt.timestamp ?? "")) || 0;
-    const inPeriod = evtTimeMs >= periodSinceMs;
 
     let details: Record<string, unknown> = {};
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
@@ -384,29 +497,13 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     if (!itemKey) continue;
 
     if (action === "USAGE_APPROVE") {
-      // Skip events that have been undone — the decrement was reversed, so
-      // counting them would double-spend the analytics totals.
       if (details.undone) continue;
       const qty = Number(details.quantityUsed ?? 0);
       if (!Number.isFinite(qty) || qty <= 0) continue;
-
-      // Prefer the unit cost stamped onto the event when usage was approved
-      // (added in the usage handler) so historical events stay valued at
-      // their then-current price. Fall back to the current item unit cost
-      // for older events (pre-stamping rollout) so they don't drop to $0.
       const stampedCost = Number(details.unitCost ?? 0);
       const cost = Number.isFinite(stampedCost) && stampedCost > 0
         ? stampedCost
         : (itemUnitCost.get(itemKey) ?? itemUnitCost.get(itemId) ?? 0);
-      if (cost > 0) {
-        const spend = qty * cost;
-        if (evtTimeMs >= yearStartMs) usageSpendYTD += spend;
-        if (evtTimeMs >= weekStartMs) usageSpendWeek += spend;
-        if (evtTimeMs >= dayStartMs) usageSpendToday += spend;
-      }
-
-      // Period-bound aggregations only count events within the selected period.
-      if (!inPeriod) continue;
       totalQtyUsed += qty;
       usageByDay.set(day, (usageByDay.get(day) ?? 0) + qty);
       if (cost > 0) spendByDay.set(day, (spendByDay.get(day) ?? 0) + qty * cost);
@@ -418,38 +515,21 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
       continue;
     }
 
-    // Non-usage actions don't drive usage-spend; they only affect the
-    // period-bound aggregations below. Skip pre-period events to avoid
-    // polluting period totals just because we widened the scan for YTD.
-    if (!inPeriod) continue;
-
     if (action === "RESTOCK_RECEIVED" || action === "RESTOCK_ADDED") {
-      // RESTOCK_ORDER_CREATE is intentionally skipped — it represents intent
-      // to purchase. Actual spend is realized when the order is RECEIVED (or
-      // when stock is fast-added outside the order flow). Counting both would
-      // double-count the same restock.
       const qty = Number(
         action === "RESTOCK_RECEIVED" ? details.qtyReceived ?? 0 : details.qtyDelta ?? 0,
       );
       if (!Number.isFinite(qty) || qty <= 0) continue;
-
       const unitCost = Number(details.unitCost ?? 0);
       const vendor = typeof details.vendor === "string" ? details.vendor.trim() : "";
       const source = typeof details.source === "string" ? details.source : "";
       const isDonation = source === "donation";
-
-      // Remember the latest unit cost (even for donations) so loss valuation
-      // can still price an implied market cost if we know it.
       if (Number.isFinite(unitCost) && unitCost > 0) {
         lastUnitCost.set(itemKey, unitCost);
       }
-
-      // Donations don't contribute to spend totals, by definition.
       if (isDonation || !Number.isFinite(unitCost) || unitCost <= 0) continue;
-
       const spend = qty * unitCost;
       totalSpend += spend;
-
       if (vendor) {
         const v = vendorSpend.get(vendor)
           ?? { spend: 0, orderIds: new Set<string>(), restockCount: 0 };
@@ -459,7 +539,6 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
         else v.restockCount += 1;
         vendorSpend.set(vendor, v);
       }
-
       const bucket = itemSpend.get(itemKey) ?? { itemName, itemId: itemId || itemKey, spend: 0, qtyReceived: 0 };
       bucket.spend += spend;
       bucket.qtyReceived += qty;
@@ -524,24 +603,142 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     .map(([reason, v]) => ({ reason, qty: v.qty, value: v.value }))
     .sort((a, b) => b.qty - a.qty);
 
-  return json(200, {
-    period,
-    days,
+  return {
     totals: {
       qtyUsed: totalQtyUsed,
       spend: totalSpend,
       lossQty: totalLossQty,
       lossValue: totalLossValue,
     },
-    usageSpend: {
-      today: usageSpendToday,
-      week: usageSpendWeek,
-      ytd: usageSpendYTD,
-    },
     usageOverTime,
     byVendor,
     bySpendItem,
     byUsageItem,
     lossByReason: lossByReasonArr,
+  };
+}
+
+/** Slice C: per-vendor breakdown for the drill-in drawer. Returns each item
+ *  bought from the vendor in the period with qty, spend, and unit-cost
+ *  range so the user can spot drift across orders ($0.50 → $0.69 → $0.85). */
+export const handleVendorBreakdown = async (ctx: RouteContext) => {
+  const { access, storage, query } = ctx;
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can view analytics." });
+  }
+  const vendor = String(query.vendor ?? "").trim();
+  if (!vendor) return json(400, { error: "Missing vendor parameter." });
+
+  const period = query.period ?? "30d";
+  const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
+  const periodSinceMs = Date.now() - days * 86400000;
+  const since = new Date(periodSinceMs).toISOString();
+
+  // Single pass over the period — query orgId index filtered by timestamp.
+  let allEvents: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const result = await ddb.send(
+      new QueryCommand({
+        TableName: storage.auditTable,
+        IndexName: AUDIT_BY_TIMESTAMP_INDEX,
+        KeyConditionExpression: "orgId = :orgId AND #ts >= :since",
+        ExpressionAttributeValues: { ":orgId": access.organizationId, ":since": since },
+        ExpressionAttributeNames: { "#ts": "timestamp" },
+        ScanIndexForward: true,
+        Limit: 1000,
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      }),
+    );
+    allEvents = allEvents.concat(result.Items ?? []);
+    lastKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastKey && allEvents.length < 10000);
+
+  type Bucket = {
+    itemId: string;
+    itemName: string;
+    spend: number;
+    qty: number;
+    minUnitCost: number;
+    maxUnitCost: number;
+    /** Weighted average accumulator — sum(qty × unitCost) / totalQty at end. */
+    weightedCostSum: number;
+    weightedQty: number;
+  };
+  const items = new Map<string, Bucket>();
+  const orderIds = new Set<string>();
+  let standaloneRestocks = 0;
+
+  for (const evt of allEvents) {
+    const action = String(evt.action ?? "");
+    if (action !== "RESTOCK_RECEIVED" && action !== "RESTOCK_ADDED") continue;
+    let details: Record<string, unknown> = {};
+    try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
+    const evtVendor = typeof details.vendor === "string" ? details.vendor.trim() : "";
+    if (evtVendor !== vendor) continue;
+    const source = typeof details.source === "string" ? details.source : "";
+    if (source === "donation") continue;
+    const qty = Number(
+      action === "RESTOCK_RECEIVED" ? details.qtyReceived ?? 0 : details.qtyDelta ?? 0,
+    );
+    const unitCost = Number(details.unitCost ?? 0);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+    if (!Number.isFinite(unitCost) || unitCost <= 0) continue;
+
+    const itemId = String(evt.itemId ?? "");
+    const itemName = String(evt.itemName ?? "") || "Unnamed item";
+    const parentItemId = typeof details.parentItemId === "string" && details.parentItemId.trim()
+      ? String(details.parentItemId).trim()
+      : itemId;
+    const itemKey = parentItemId || itemId || itemName;
+
+    const orderId = typeof details.orderId === "string" ? details.orderId : "";
+    if (orderId) orderIds.add(orderId);
+    else standaloneRestocks += 1;
+
+    const bucket = items.get(itemKey) ?? {
+      itemId: itemId || itemKey,
+      itemName,
+      spend: 0,
+      qty: 0,
+      minUnitCost: Number.POSITIVE_INFINITY,
+      maxUnitCost: 0,
+      weightedCostSum: 0,
+      weightedQty: 0,
+    };
+    bucket.spend += qty * unitCost;
+    bucket.qty += qty;
+    bucket.weightedCostSum += qty * unitCost;
+    bucket.weightedQty += qty;
+    if (unitCost < bucket.minUnitCost) bucket.minUnitCost = unitCost;
+    if (unitCost > bucket.maxUnitCost) bucket.maxUnitCost = unitCost;
+    if (!bucket.itemName || bucket.itemName === "Unnamed item") bucket.itemName = itemName;
+    if (!bucket.itemId && itemId) bucket.itemId = itemId;
+    items.set(itemKey, bucket);
+  }
+
+  const itemsArr = [...items.values()]
+    .map((b) => ({
+      itemId: b.itemId,
+      itemName: b.itemName,
+      spend: b.spend,
+      qty: b.qty,
+      avgUnitCost: b.weightedQty > 0 ? b.weightedCostSum / b.weightedQty : 0,
+      minUnitCost: b.minUnitCost === Number.POSITIVE_INFINITY ? 0 : b.minUnitCost,
+      maxUnitCost: b.maxUnitCost,
+    }))
+    .sort((a, b) => b.spend - a.spend);
+
+  const totalSpend = itemsArr.reduce((sum, i) => sum + i.spend, 0);
+
+  return json(200, {
+    vendor,
+    period,
+    totals: {
+      spend: totalSpend,
+      orderCount: orderIds.size + standaloneRestocks,
+      itemCount: itemsArr.length,
+    },
+    items: itemsArr,
   });
 };

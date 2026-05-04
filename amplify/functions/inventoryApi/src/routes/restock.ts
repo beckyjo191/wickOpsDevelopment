@@ -131,7 +131,32 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
         } catch { itemName = `Item ${itemId.slice(0, 8)}`; }
       }
       if (!itemName) itemName = `Item ${itemId.slice(0, 8)}`;
-      orderItems.push({ itemId, itemName, qtyOrdered, qtyReceived: 0, ...(unitCost !== undefined ? { unitCost } : {}) });
+
+      // Existing-item path also accepts pack/cost/link enrichment so the
+      // order line carries the same metadata as freeform items, AND so we
+      // can write any provided values back to the inventory row below.
+      const reorderLinkExisting = String(entry?.reorderLink ?? "").trim() || undefined;
+      const packSizeExisting = entry?.packSize !== undefined && entry?.packSize !== null && entry?.packSize !== ""
+        ? Number(entry.packSize) : undefined;
+      if (packSizeExisting !== undefined && (!Number.isFinite(packSizeExisting) || packSizeExisting <= 0)) {
+        return json(400, { error: `Entry ${i + 1}: pack size must be greater than 0.` });
+      }
+      const packCostExisting = entry?.packCost !== undefined && entry?.packCost !== null && entry?.packCost !== ""
+        ? Number(entry.packCost) : undefined;
+      if (packCostExisting !== undefined && (!Number.isFinite(packCostExisting) || packCostExisting < 0)) {
+        return json(400, { error: `Entry ${i + 1}: pack cost must be a non-negative number.` });
+      }
+
+      orderItems.push({
+        itemId,
+        itemName,
+        qtyOrdered,
+        qtyReceived: 0,
+        ...(unitCost !== undefined ? { unitCost } : {}),
+        ...(reorderLinkExisting ? { reorderLink: reorderLinkExisting } : {}),
+        ...(packSizeExisting !== undefined ? { packSize: packSizeExisting } : {}),
+        ...(packCostExisting !== undefined ? { packCost: packCostExisting } : {}),
+      });
     }
   }
 
@@ -154,6 +179,46 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
   };
 
   await ddb.send(new PutCommand({ TableName: storage.restockOrdersTable, Item: order }));
+
+  // Write the order line's pricing + reorder link back to the inventory row
+  // for any existing item that carried provided values. Fills in missing
+  // pricing for items that didn't have a unitCost/packCost yet so future
+  // analytics see the up-to-date figures, and lets users correct stale
+  // pricing when placing the next order. Only writes fields the user
+  // actually supplied — empty fields don't clobber existing data.
+  for (const oi of orderItems) {
+    if (!oi.itemId || oi.itemId.startsWith("freeform-")) continue;
+    const existing = byId.get(oi.itemId);
+    if (!existing) continue;
+    let values: Record<string, unknown> = {};
+    try { values = JSON.parse(String(existing.valuesJson ?? "{}")); } catch { /* ignore */ }
+    const patch: Record<string, unknown> = {};
+    if (oi.unitCost !== undefined) patch.unitCost = oi.unitCost;
+    if (oi.packSize !== undefined) patch.packSize = oi.packSize;
+    if (oi.packCost !== undefined) patch.packCost = oi.packCost;
+    if (oi.reorderLink) patch.reorderLink = oi.reorderLink;
+    if (Object.keys(patch).length === 0) continue;
+    const nextValues = { ...values, ...patch };
+    try {
+      await ddb.send(new UpdateCommand({
+        TableName: storage.itemTable,
+        Key: { id: oi.itemId },
+        ConditionExpression: "organizationId = :org AND #module = :module",
+        UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":module": "inventory",
+          ":values": JSON.stringify(nextValues),
+          ":updatedAtCustom": now,
+        },
+      }));
+    } catch {
+      // Non-critical: if write-back fails the order still records correctly.
+      // The user can retry by editing the item directly. Don't surface as
+      // a 500 because the order create itself succeeded.
+    }
+  }
 
   // Audit: one event per item ordered. parentItemId lets phase 2 analytics
   // roll up cost/order history across lots sharing a logical item.

@@ -307,6 +307,15 @@ function VendorChecklistCard({
     onMarkOrdered(checkedRowIds, group.label, inventoryItems);
   };
 
+  // Per-vendor "cart subtotal" lives on the card header so it's always
+  // visible — even when only one vendor exists and the upstream vendor-tab
+  // pills are hidden. Mirrors the formula used by the (now optional) pills.
+  const vendorEstimate = group.items.reduce((sum, item) => {
+    if (item.unitCost === null) return sum;
+    const qtyUnits = item.packSize > 0 ? item.suggestedQty * item.packSize : item.suggestedQty;
+    return sum + item.unitCost * qtyUnits;
+  }, 0);
+
   return (
     <div className="reorder-vendor-card app-card">
       <div className="reorder-vendor-header">
@@ -314,6 +323,7 @@ function VendorChecklistCard({
           <h4 className="reorder-vendor-name">{group.label}</h4>
           <span className="reorder-vendor-count">
             {group.items.length} item{group.items.length !== 1 ? "s" : ""}
+            {vendorEstimate > 0 ? ` · ${formatCurrency(vendorEstimate)}` : ""}
           </span>
         </div>
       </div>

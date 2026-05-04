@@ -3,6 +3,9 @@ import {
   fetchAuditFeed,
   fetchItemHistory,
   fetchAuditAnalytics,
+  fetchVendorBreakdown,
+  updateItemPricing,
+  type VendorBreakdown,
   undoColumnDeleteEvent,
   undoRetireEvent,
   undoUsageEvent,
@@ -22,7 +25,7 @@ import {
   User,
   X,
 } from "lucide-react";
-import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
+import { formatCurrency, parseCurrency, isCurrencyColumnKey } from "../lib/currency";
 import { DaySection } from "../lib/dayGroups";
 import { EmptyState } from "./shared/EmptyState";
 import { LoadingState } from "./shared/LoadingState";
@@ -57,7 +60,11 @@ const ACTION_LABELS: Record<string, string> = {
   ITEM_RETIRE: "Retired",
   ITEM_UNRETIRE: "Retire undone",
   USAGE_SUBMIT: "Usage logged",
-  USAGE_APPROVE: "Usage approved",
+  // The pending-approval queue is gone — submissions now decrement directly,
+  // so what used to be "approved by a manager" is now just the act of
+  // logging. Action key stays USAGE_APPROVE for back-compat with stored
+  // events; the user-facing label says what actually happens.
+  USAGE_APPROVE: "Usage logged",
   USAGE_REJECT: "Usage rejected",
   USAGE_UNDO: "Usage undone",
   COLUMN_CREATE: "Column added",
@@ -378,8 +385,8 @@ function buildRichRowSummary(event: AuditEvent): string {
   }
   if (derived === "USAGE_APPROVE") {
     const used = details.quantityUsed;
-    if (used !== undefined) return `Approved usage of ${used}`;
-    return "Usage approved";
+    if (used !== undefined) return `Logged usage of ${used}`;
+    return "Usage logged";
   }
   if (derived === "USAGE_REJECT") {
     const reason = typeof details.reason === "string" ? details.reason : "";
@@ -820,7 +827,7 @@ function CostOverTimeChart({ events }: { events: AuditEvent[] }) {
     "edit": "Manual edit",
     "restock-received": "Order received",
     "restock-added": "Fast restock",
-    "usage-approve": "Usage approved",
+    "usage-approve": "Usage logged",
   };
 
   return (
@@ -997,18 +1004,82 @@ const REASON_LABELS: Record<string, string> = {
   unknown: "Unknown",
 };
 
-function SimpleBarChart({ data, labelKey, valueKey, title, formatValue }: {
+/** Per-row YoY comparison summary. `pct` is signed; `direction` controls the
+ *  triangle glyph and color so the same shape works for "spend rose" (▲ red)
+ *  and "loss rose" (▲ red) consistently. `previous` is the comparison value. */
+type DeltaInfo = {
+  pct: number | null;        // null → no comparable previous data
+  direction: "up" | "down" | "flat" | "none";
+  previous: number;
+  /** True when "up" is bad (e.g. spend, loss). Used to flip the color. */
+  upIsBad?: boolean;
+};
+
+/** Computes a DeltaInfo from current/previous values + an upIsBad flag. */
+function computeDelta(current: number, previous: number | undefined, upIsBad = false): DeltaInfo {
+  const prev = Number.isFinite(previous) ? Number(previous) : 0;
+  if (!Number.isFinite(prev) || prev === 0) {
+    // Can't divide by zero — surface "new" instead of fake percentages.
+    if (current > 0) return { pct: null, direction: "up", previous: 0, upIsBad };
+    return { pct: null, direction: "none", previous: 0, upIsBad };
+  }
+  const delta = current - prev;
+  const pct = (delta / prev) * 100;
+  const direction = Math.abs(pct) < 0.5 ? "flat" : pct > 0 ? "up" : "down";
+  return { pct, direction, previous: prev, upIsBad };
+}
+
+function DeltaChip({ delta, compact = false }: { delta: DeltaInfo; compact?: boolean }) {
+  if (delta.direction === "none") return null;
+  const isUp = delta.direction === "up";
+  const isFlat = delta.direction === "flat";
+  // Color logic: "good" = green, "bad" = red, "flat" = muted. upIsBad flips the
+  // sign for spend/loss so a rising loss reads red even though the % is +12%.
+  const goodWhenUp = !delta.upIsBad;
+  const tone = isFlat
+    ? "flat"
+    : (isUp === goodWhenUp ? "good" : "bad");
+  const arrow = isFlat ? "·" : isUp ? "▲" : "▼";
+  const label = delta.pct === null
+    ? (isUp ? "new" : "—")
+    : `${Math.abs(delta.pct).toFixed(delta.pct < 10 ? 1 : 0)}%`;
+  return (
+    <span className={`audit-delta-chip audit-delta-chip--${tone}${compact ? " audit-delta-chip--compact" : ""}`}>
+      {arrow} {label}
+    </span>
+  );
+}
+
+function SimpleBarChart({
+  data,
+  labelKey,
+  valueKey,
+  title,
+  formatValue,
+  onRowClick,
+  rowKey,
+  rowDelta,
+  emptyHint,
+}: {
   data: Array<Record<string, unknown>>;
   labelKey: string;
   valueKey: string;
   title: string;
   /** Optional value formatter — defaults to integer toLocaleString. */
   formatValue?: (value: number) => string;
+  /** When set, each row's label becomes a button. Receives the raw row. */
+  onRowClick?: (row: Record<string, unknown>) => void;
+  /** Optional row key for keying — defaults to label. Use when labels can repeat. */
+  rowKey?: (row: Record<string, unknown>, index: number) => string;
+  /** Optional per-row YoY delta: returns the rendered chip ("▲ 12%") or null. */
+  rowDelta?: (row: Record<string, unknown>) => DeltaInfo | null;
+  /** Override the default empty-state hint. */
+  emptyHint?: string;
 }) {
   if (!data.length) return (
     <div className="audit-chart-card">
       <h4 className="audit-chart-title">{title}</h4>
-      <p className="audit-empty">No data for this period.</p>
+      <p className="audit-empty">{emptyHint ?? "No data for this period."}</p>
     </div>
   );
   const max = Math.max(...data.map((d) => Number(d[valueKey] ?? 0)), 1);
@@ -1020,15 +1091,30 @@ function SimpleBarChart({ data, labelKey, valueKey, title, formatValue }: {
         {data.slice(0, 10).map((d, i) => {
           const val = Number(d[valueKey] ?? 0);
           const pct = Math.max((val / max) * 100, 2);
+          const labelText = String(d[labelKey] ?? "");
+          const k = rowKey ? rowKey(d, i) : `${labelText}::${i}`;
+          const delta = rowDelta ? rowDelta(d) : null;
           return (
-            <div key={i} className="audit-bar-row">
-              <span className="audit-bar-label" title={String(d[labelKey] ?? "")}>
-                {String(d[labelKey] ?? "").slice(0, 24)}
-              </span>
+            <div key={k} className="audit-bar-row">
+              {onRowClick ? (
+                <button
+                  type="button"
+                  className="audit-bar-label audit-bar-label--clickable"
+                  title={labelText}
+                  onClick={() => onRowClick(d)}
+                >
+                  {labelText.slice(0, 24)}
+                </button>
+              ) : (
+                <span className="audit-bar-label" title={labelText}>
+                  {labelText.slice(0, 24)}
+                </span>
+              )}
               <div className="audit-bar-track">
                 <div className="audit-bar-fill" style={{ width: `${pct}%` }} />
               </div>
               <span className="audit-bar-value">{fmt(val)}</span>
+              {delta ? <DeltaChip delta={delta} compact /> : null}
             </div>
           );
         })}
@@ -1056,7 +1142,11 @@ function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: numbe
   return (
     <div className="audit-chart-card audit-chart-card--bars">
       <div className="audit-chart-header">
-        <h4 className="audit-chart-title">Usage over time</h4>
+        {/* Title now reads "Spend over time" because the bars render in $ when
+            we have priced usage. The fallback to qty is kept for orgs that
+            haven't filled in unit costs yet — title stays accurate either way
+            via the summary line. */}
+        <h4 className="audit-chart-title">{useSpend ? "Spend over time" : "Usage over time"}</h4>
         <span className="audit-chart-summary">
           {useSpend ? formatUsd(totalSpend) : `${formatQty(totalQty)} used`}
           <span className="audit-chart-summary-sub">
@@ -1085,98 +1175,284 @@ function UsageLineChart({ data }: { data: Array<{ date: string; totalUsed: numbe
   );
 }
 
-function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function StatCard({ label, value, sub, delta }: {
+  label: string;
+  value: string;
+  sub?: string;
+  /** Optional YoY comparison vs the previous period. Renders a chip below the
+   *  label so the headline number stays the visual anchor. */
+  delta?: DeltaInfo | null;
+}) {
   return (
     <div className="audit-stat-card">
       <div className="audit-stat-card-body">
         <span className="audit-stat-value">{value}</span>
         <span className="audit-stat-label">{label}</span>
         {sub ? <span className="audit-stat-sub">{sub}</span> : null}
+        {delta ? <DeltaChip delta={delta} /> : null}
       </div>
     </div>
   );
 }
 
-/** Three-bucket usage cost card: today / last 7 days / YTD. Replaces the
- *  generic "Spend" purchase-cost card; the user wants to see what's been
- *  *consumed* (priced via current item unit cost), not what was bought. */
-function UsageSpendCard({ today, week, ytd }: { today: number; week: number; ytd: number }) {
+/** Slice C: vendor drill-in. Click a vendor row in "Top vendors by spend" and
+ *  this drawer slides in showing every item bought from that vendor in the
+ *  current period — total spend, qty received, and unit-cost range so you can
+ *  spot price drift across orders. */
+function VendorDrillInPanel({
+  vendor,
+  period,
+  onClose,
+  onViewItemHistory,
+}: {
+  vendor: string;
+  period: "7d" | "30d" | "90d";
+  onClose: () => void;
+  onViewItemHistory?: (itemId: string, name: string) => void;
+}) {
+  const [data, setData] = useState<VendorBreakdown | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchVendorBreakdown({ vendor, period })
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load vendor breakdown."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [vendor, period]);
+
   return (
-    <div className="audit-stat-card audit-stat-card--multi">
-      <span className="audit-stat-label">Usage cost</span>
-      <dl className="audit-stat-bucket-list">
-        <div className="audit-stat-bucket">
-          <dt>Today</dt>
-          <dd>{formatUsd(today)}</dd>
+    <div className="audit-vendor-drawer-overlay" onClick={onClose} role="presentation">
+      <aside
+        className="audit-vendor-drawer"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={`${vendor} breakdown`}
+      >
+        <div className="audit-vendor-drawer-header">
+          <div>
+            <p className="audit-vendor-drawer-eyebrow">Vendor</p>
+            <h3 className="audit-vendor-drawer-title">{vendor}</h3>
+          </div>
+          <button
+            type="button"
+            className="audit-vendor-drawer-close"
+            onClick={onClose}
+            aria-label="Close vendor breakdown"
+            title="Close"
+          >
+            <X size={18} />
+          </button>
         </div>
-        <div className="audit-stat-bucket">
-          <dt>7 days</dt>
-          <dd>{formatUsd(week)}</dd>
-        </div>
-        <div className="audit-stat-bucket">
-          <dt>YTD</dt>
-          <dd>{formatUsd(ytd)}</dd>
-        </div>
-      </dl>
+
+        {loading ? <LoadingState /> : null}
+        {!loading && error ? <p className="audit-error">{error}</p> : null}
+
+        {!loading && !error && data ? (
+          <>
+            <div className="audit-vendor-drawer-totals">
+              <div>
+                <span className="audit-stat-value">{formatUsd(data.totals.spend)}</span>
+                <span className="audit-stat-label">Spend</span>
+              </div>
+              <div>
+                <span className="audit-stat-value">{data.totals.itemCount}</span>
+                <span className="audit-stat-label">Items</span>
+              </div>
+              <div>
+                <span className="audit-stat-value">{data.totals.orderCount}</span>
+                <span className="audit-stat-label">Orders</span>
+              </div>
+            </div>
+
+            {data.items.length === 0 ? (
+              <p className="audit-empty">No priced restocks from this vendor in the period.</p>
+            ) : (
+              <table className="audit-vendor-drawer-table">
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th className="audit-vendor-drawer-num">Qty</th>
+                    <th className="audit-vendor-drawer-num">Spend</th>
+                    <th className="audit-vendor-drawer-num">Avg unit</th>
+                    <th className="audit-vendor-drawer-num">Range</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.items.map((row) => {
+                    const rangeText = row.minUnitCost === row.maxUnitCost
+                      ? "—"
+                      : `${formatUsd(row.minUnitCost)} – ${formatUsd(row.maxUnitCost)}`;
+                    return (
+                      <tr key={row.itemId || row.itemName}>
+                        <td>
+                          {row.itemId && onViewItemHistory ? (
+                            <button
+                              type="button"
+                              className="audit-event-item-link"
+                              onClick={() => onViewItemHistory(row.itemId, row.itemName)}
+                              title={`View activity for ${row.itemName}`}
+                            >
+                              {row.itemName}
+                            </button>
+                          ) : row.itemName}
+                        </td>
+                        <td className="audit-vendor-drawer-num">{formatQty(row.qty)}</td>
+                        <td className="audit-vendor-drawer-num">{formatUsd(row.spend)}</td>
+                        <td className="audit-vendor-drawer-num">{formatUsd(row.avgUnitCost)}</td>
+                        <td className="audit-vendor-drawer-num audit-vendor-drawer-range">{rangeText}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </>
+        ) : null}
+      </aside>
     </div>
   );
 }
 
 /**
- * Feature version of a stat card. Big number + label, plus an inline preview
- * of the top contributing rows — each clickable so you can drill into a single
- * item's history. Used for the headline "items used" stat.
+ * Compact banner that surfaces the count of inventory items missing
+ * prices. Collapsed by default — tapping the header expands an editable
+ * panel underneath. The banner lives at the top of the analytics dashboard
+ * so it's the first thing the user sees if their analytics are missing data.
  */
-function FeatureStatCard({
-  label,
-  value,
-  previewTitle,
+function MissingPricesBanner({
   items,
-  emptyHint,
-  onViewItemHistory,
+  onSaved,
 }: {
-  label: string;
-  value: string;
-  previewTitle: string;
-  items: Array<{ itemId: string; itemName: string; qtyUsed: number }>;
-  emptyHint: string;
-  onViewItemHistory?: (itemId: string, name: string) => void;
+  items: NonNullable<AuditAnalytics["missingPriceItems"]>;
+  onSaved: () => void;
 }) {
-  const max = Math.max(...items.map((r) => r.qtyUsed), 1);
+  const [expanded, setExpanded] = useState(false);
+  const count = items.length;
   return (
-    <div className="audit-stat-card audit-stat-card--feature">
-      <div className="audit-stat-card-body">
-        <span className="audit-stat-value">{value}</span>
-        <span className="audit-stat-label">{label}</span>
+    <div className="audit-missing-prices-banner">
+      <button
+        type="button"
+        className="audit-missing-prices-banner-header"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="audit-missing-prices-banner-icon" aria-hidden="true">!</span>
+        <span className="audit-missing-prices-banner-text">
+          {count} item{count === 1 ? "" : "s"} missing a price.
+          {" "}Set prices to backfill historical analytics.
+        </span>
+        <span className="audit-missing-prices-banner-chevron" aria-hidden="true">
+          {expanded ? "▾" : "▸"}
+        </span>
+      </button>
+      {expanded ? (
+        <MissingPricesPanel items={items} onSaved={() => onSaved()} />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Inline editable list of inventory items currently missing prices. Lets
+ * users backfill unit cost in one place without bouncing into the Inventory
+ * tab to find and edit each row. Saves on blur per row, then re-runs the
+ * analytics fetch so KPIs reflect the new pricing immediately (the analytics
+ * fallback values past USAGE_APPROVE events at the current item unit cost).
+ */
+function MissingPricesPanel({
+  items,
+  onSaved,
+}: {
+  items: NonNullable<AuditAnalytics["missingPriceItems"]>;
+  /** Called after a successful save so the parent can re-fetch analytics. */
+  onSaved: (savedItemIds: string[]) => void;
+}) {
+  // Local draft state — keyed by itemId. Stays in sync as the user types.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+
+  const visibleItems = items.filter((i) => !savedIds.has(i.itemId));
+
+  if (visibleItems.length === 0) {
+    return (
+      <div className="audit-missing-prices-empty">
+        <p>All flagged items have prices set. Reload analytics to refresh totals.</p>
       </div>
-      <div className="audit-feature-preview">
-        <span className="audit-feature-preview-title">{previewTitle}</span>
-        {items.length === 0 ? (
-          <p className="audit-empty audit-empty--inline">{emptyHint}</p>
-        ) : (
-          <ul className="audit-feature-preview-list">
-            {items.slice(0, 8).map((row) => {
-              const pct = Math.max((row.qtyUsed / max) * 100, 2);
-              return (
-                <li key={row.itemId} className="audit-feature-preview-row">
-                  <button
-                    type="button"
-                    className="audit-feature-preview-link"
-                    onClick={() => onViewItemHistory?.(row.itemId, row.itemName)}
-                    title={`View activity for ${row.itemName}`}
-                  >
-                    {row.itemName}
-                  </button>
-                  <div className="audit-bar-track audit-feature-preview-track">
-                    <div className="audit-bar-fill" style={{ width: `${pct}%` }} />
-                  </div>
-                  <span className="audit-feature-preview-value">{formatQty(row.qtyUsed)}</span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+    );
+  }
+
+  const onCommit = async (itemId: string, raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const parsed = parseCurrency(trimmed);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setError("Unit cost must be a positive number.");
+      return;
+    }
+    setError(null);
+    setSavingIds((prev) => new Set(prev).add(itemId));
+    try {
+      await updateItemPricing([{ itemId, unitCost: parsed }]);
+      setSavedIds((prev) => new Set(prev).add(itemId));
+      onSaved([itemId]);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setSavingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(itemId);
+        return next;
+      });
+    }
+  };
+
+  return (
+    <div className="audit-missing-prices-panel">
+      <p className="audit-missing-prices-hint">
+        Setting a unit cost values past usage events at the new price — so
+        historical analytics reflect what the call actually cost.
+      </p>
+      {error ? <p className="audit-error">{error}</p> : null}
+      <ul className="audit-missing-prices-list">
+        {visibleItems.map((item) => {
+          const draft = drafts[item.itemId] ?? "";
+          const saving = savingIds.has(item.itemId);
+          return (
+            <li key={item.itemId} className="audit-missing-prices-row">
+              <span className="audit-missing-prices-name" title={item.itemName}>
+                {item.itemName}
+              </span>
+              <span className="audit-missing-prices-qty">
+                {item.quantity > 0 ? `Qty ${formatQty(item.quantity)}` : "—"}
+              </span>
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="$0.00"
+                className="field audit-missing-prices-input"
+                value={draft}
+                onChange={(e) => setDrafts((prev) => ({ ...prev, [item.itemId]: e.target.value }))}
+                onBlur={(e) => onCommit(item.itemId, e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    (e.currentTarget as HTMLInputElement).blur();
+                  }
+                }}
+                disabled={saving}
+                aria-label={`Unit cost for ${item.itemName}`}
+              />
+              {saving ? <span className="audit-missing-prices-status">Saving…</span> : null}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -1184,17 +1460,45 @@ function FeatureStatCard({
 function AnalyticsDashboard({
   analytics,
   onViewItemHistory,
+  onViewVendor,
+  onPricesSaved,
 }: {
   analytics: AuditAnalytics;
   onViewItemHistory?: (itemId: string, name: string) => void;
+  /** Slice C: click a vendor row → open the vendor drill-in panel. */
+  onViewVendor?: (vendor: string) => void;
+  /** Called after the missing-prices panel saves at least one item — the
+   *  parent re-fetches analytics so the new pricing takes effect. */
+  onPricesSaved?: () => void;
 }) {
-  const { totals, usageSpend, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
+  const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
+  const previous = analytics.previous;
+
   const hasData =
     totals.qtyUsed > 0
     || totals.spend > 0
     || totals.lossQty > 0
-    || usageOverTime.length > 0
-    || usageSpend.ytd > 0;
+    || usageOverTime.length > 0;
+
+  // Per-row delta lookups for the bar charts. When YoY isn't on, these are
+  // undefined and the chart renders without any delta column.
+  const prevByVendor = previous
+    ? new Map(previous.byVendor.map((r) => [r.vendor, r.spend]))
+    : null;
+  const prevBySpendItem = previous
+    ? new Map(previous.bySpendItem.map((r) => [r.itemName, r.spend]))
+    : null;
+  const prevByUsageItem = previous
+    ? new Map(previous.byUsageItem.map((r) => [r.itemName, r.qtyUsed]))
+    : null;
+  const prevLossByReason = previous
+    ? new Map(previous.lossByReason.map((r) => [r.reason, r.qty]))
+    : null;
+
+  // Top-level KPI deltas — computed once so the strip render stays terse.
+  const deltaQtyUsed = previous ? computeDelta(totals.qtyUsed, previous.totals.qtyUsed, false) : null;
+  const deltaSpend = previous ? computeDelta(totals.spend, previous.totals.spend, true) : null;
+  const deltaLoss = previous ? computeDelta(totals.lossQty, previous.totals.lossQty, true) : null;
 
   if (!hasData) {
     return (
@@ -1212,66 +1516,137 @@ function AnalyticsDashboard({
     reasonLabel: REASON_LABELS[r.reason] ?? r.reason,
   }));
 
+  const missingPriceItems = analytics.missingPriceItems ?? [];
+
   return (
     <>
-      <div className="audit-analytics-summary">
-        <FeatureStatCard
-          label="items used"
-          value={formatQty(totals.qtyUsed)}
-          previewTitle="Top items consumed"
-          items={byUsageItem}
-          emptyHint="No usage logged yet for this period."
-          onViewItemHistory={onViewItemHistory}
+      {/* Missing-prices nudge. Setting prices here automatically values past
+          USAGE_APPROVE events (the analytics fallback prefers the current
+          item unitCost when the event itself wasn't stamped). Banner stays
+          collapsible so it doesn't steal real estate after dismiss. */}
+      {missingPriceItems.length > 0 ? (
+        <MissingPricesBanner
+          items={missingPriceItems}
+          onSaved={() => onPricesSaved?.()}
         />
-        <div className="audit-analytics-summary-side">
-          <UsageSpendCard
-            today={usageSpend.today}
-            week={usageSpend.week}
-            ytd={usageSpend.ytd}
-          />
-          <StatCard
-            label="Loss"
-            value={formatQty(totals.lossQty)}
-            sub={totals.lossValue > 0 ? `~${formatUsd(totals.lossValue)}` : undefined}
-          />
-        </div>
+      ) : null}
+
+      {/* KPI strip — three equal-width cards. Replaces the lopsided 1-wide +
+          2-stacked layout. Each card carries an optional YoY delta chip when
+          the user has Compare-to-last-year on. */}
+      <div className="audit-analytics-summary">
+        <StatCard
+          label="Items used"
+          value={formatQty(totals.qtyUsed)}
+          delta={deltaQtyUsed}
+        />
+        <StatCard
+          label="Spend"
+          value={formatUsd(totals.spend)}
+          delta={deltaSpend}
+        />
+        <StatCard
+          label={totals.lossQty === 1 ? "Item lost" : "Items lost"}
+          value={formatQty(totals.lossQty)}
+          sub={totals.lossValue > 0 ? `~${formatUsd(totals.lossValue)}` : undefined}
+          delta={deltaLoss}
+        />
       </div>
 
-      <section className="audit-analytics-section">
-        <h3 className="audit-analytics-section-title">Spend</h3>
-        <div className="audit-analytics-grid">
-          <SimpleBarChart
-            data={byVendor as unknown as Array<Record<string, unknown>>}
-            labelKey="vendor"
-            valueKey="spend"
-            title="Top vendors by spend"
-            formatValue={formatUsd}
-          />
-          <SimpleBarChart
-            data={bySpendItem as unknown as Array<Record<string, unknown>>}
-            labelKey="itemName"
-            valueKey="spend"
-            title="Top items by spend"
-            formatValue={formatUsd}
-          />
-        </div>
-      </section>
+      {/* Spend deep-dive — top items + top vendors, equal columns. */}
+      {(bySpendItem.length > 0 || byVendor.length > 0) ? (
+        <section className="audit-analytics-section">
+          <h3 className="audit-analytics-section-title">Spend</h3>
+          <div className="audit-analytics-grid">
+            <SimpleBarChart
+              data={bySpendItem as unknown as Array<Record<string, unknown>>}
+              labelKey="itemName"
+              valueKey="spend"
+              title="Top items by spend"
+              formatValue={formatUsd}
+              onRowClick={onViewItemHistory ? (row) => {
+                const itemId = String(row.itemId ?? "");
+                const itemName = String(row.itemName ?? "");
+                if (itemId) onViewItemHistory(itemId, itemName);
+              } : undefined}
+              rowKey={(row) => String(row.itemId ?? row.itemName)}
+              rowDelta={prevBySpendItem ? (row) => computeDelta(
+                Number(row.spend ?? 0),
+                prevBySpendItem.get(String(row.itemName ?? "")),
+                true,
+              ) : undefined}
+              emptyHint="No priced restocks in this period."
+            />
+            <SimpleBarChart
+              data={byVendor as unknown as Array<Record<string, unknown>>}
+              labelKey="vendor"
+              valueKey="spend"
+              title="Top vendors by spend"
+              formatValue={formatUsd}
+              onRowClick={onViewVendor ? (row) => {
+                const vendor = String(row.vendor ?? "");
+                if (vendor) onViewVendor(vendor);
+              } : undefined}
+              rowKey={(row) => String(row.vendor)}
+              rowDelta={prevByVendor ? (row) => computeDelta(
+                Number(row.spend ?? 0),
+                prevByVendor.get(String(row.vendor ?? "")),
+                true,
+              ) : undefined}
+              emptyHint="No vendor-tagged restocks in this period."
+            />
+          </div>
+        </section>
+      ) : null}
 
-      <section className="audit-analytics-section">
-        <h3 className="audit-analytics-section-title">Usage over time</h3>
-        <UsageLineChart data={usageOverTime} />
-      </section>
+      {/* Usage deep-dive — top consumed items + spend over time. */}
+      {(byUsageItem.length > 0 || usageOverTime.length > 0) ? (
+        <section className="audit-analytics-section">
+          <h3 className="audit-analytics-section-title">Usage</h3>
+          <div className="audit-analytics-grid">
+            <SimpleBarChart
+              data={byUsageItem as unknown as Array<Record<string, unknown>>}
+              labelKey="itemName"
+              valueKey="qtyUsed"
+              title="Top items consumed"
+              formatValue={formatQty}
+              onRowClick={onViewItemHistory ? (row) => {
+                const itemId = String(row.itemId ?? "");
+                const itemName = String(row.itemName ?? "");
+                if (itemId) onViewItemHistory(itemId, itemName);
+              } : undefined}
+              rowKey={(row) => String(row.itemId ?? row.itemName)}
+              rowDelta={prevByUsageItem ? (row) => computeDelta(
+                Number(row.qtyUsed ?? 0),
+                prevByUsageItem.get(String(row.itemName ?? "")),
+                false,
+              ) : undefined}
+              emptyHint="No usage logged in this period."
+            />
+            <UsageLineChart data={usageOverTime} />
+          </div>
+        </section>
+      ) : null}
 
-      <section className="audit-analytics-section">
-        <h3 className="audit-analytics-section-title">Loss</h3>
-        <SimpleBarChart
-          data={lossRows as unknown as Array<Record<string, unknown>>}
-          labelKey="reasonLabel"
-          valueKey="qty"
-          title="Retired qty by reason"
-          formatValue={formatQty}
-        />
-      </section>
+      {/* Loss section — only renders when there's actually loss to report. */}
+      {lossRows.length > 0 ? (
+        <section className="audit-analytics-section">
+          <h3 className="audit-analytics-section-title">Loss</h3>
+          <SimpleBarChart
+            data={lossRows as unknown as Array<Record<string, unknown>>}
+            labelKey="reasonLabel"
+            valueKey="qty"
+            title="Retired qty by reason"
+            formatValue={formatQty}
+            rowKey={(row) => String(row.reason)}
+            rowDelta={prevLossByReason ? (row) => computeDelta(
+              Number(row.qty ?? 0),
+              prevLossByReason.get(String(row.reason ?? "")),
+              true,
+            ) : undefined}
+          />
+        </section>
+      ) : null}
     </>
   );
 }
@@ -1341,6 +1716,11 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   const [analytics, setAnalytics] = useState<AuditAnalytics | null>(null);
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d" | "90d">("30d");
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  /** Slice B: when true, fetch the same period one year ago and overlay
+   *  YoY deltas on the KPI strip + each bar chart row. */
+  const [analyticsCompareYoY, setAnalyticsCompareYoY] = useState(false);
+  /** Slice C: vendor name currently being drilled into. null = no drawer. */
+  const [vendorDrillIn, setVendorDrillIn] = useState<string | null>(null);
 
   const loadFeed = useCallback(async (append = false, cursor?: string | null) => {
     setLoading(true);
@@ -1372,15 +1752,19 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
+  // Bumped after a successful pricing save in the Missing Prices panel so
+  // the analytics dashboard re-runs and the new prices flow through KPIs.
+  const [analyticsRefreshKey, setAnalyticsRefreshKey] = useState(0);
+
   useEffect(() => {
     if (tab === "analytics" && canManageColumns) {
       setAnalyticsLoading(true);
-      fetchAuditAnalytics({ period: analyticsPeriod })
+      fetchAuditAnalytics({ period: analyticsPeriod, compareYoY: analyticsCompareYoY })
         .then(setAnalytics)
         .catch(() => setAnalytics(null))
         .finally(() => setAnalyticsLoading(false));
     }
-  }, [tab, analyticsPeriod, canManageColumns]);
+  }, [tab, analyticsPeriod, analyticsCompareYoY, canManageColumns, analyticsRefreshKey]);
 
   const viewItemHistory = useCallback(async (itemId: string, itemName: string) => {
     setTab("item-history");
@@ -1725,23 +2109,49 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
       {tab === "analytics" && canManageColumns && (
         <div className="audit-analytics">
           <div className="audit-period-selector">
-            {(["7d", "30d", "90d"] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                className={`button button-sm${analyticsPeriod === p ? " button-primary" : " button-ghost"}`}
-                onClick={() => setAnalyticsPeriod(p)}
-              >
-                {p === "7d" ? "7 Days" : p === "30d" ? "30 Days" : "90 Days"}
-              </button>
-            ))}
+            <div className="audit-period-buttons">
+              {(["7d", "30d", "90d"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={`button button-sm${analyticsPeriod === p ? " button-primary" : " button-ghost"}`}
+                  onClick={() => setAnalyticsPeriod(p)}
+                >
+                  {p === "7d" ? "7 Days" : p === "30d" ? "30 Days" : "90 Days"}
+                </button>
+              ))}
+            </div>
+            {/* YoY toggle — when on, the server returns the same window from a
+                year ago and the dashboard overlays ▲/▼ chips on every metric. */}
+            <label className="audit-yoy-toggle">
+              <input
+                type="checkbox"
+                checked={analyticsCompareYoY}
+                onChange={(e) => setAnalyticsCompareYoY(e.currentTarget.checked)}
+              />
+              <span>Compare to last year</span>
+            </label>
           </div>
 
           {analyticsLoading && <LoadingState />}
 
           {!analyticsLoading && analytics && (
-            <AnalyticsDashboard analytics={analytics} onViewItemHistory={viewItemHistory} />
+            <AnalyticsDashboard
+              analytics={analytics}
+              onViewItemHistory={viewItemHistory}
+              onViewVendor={(vendor) => setVendorDrillIn(vendor)}
+              onPricesSaved={() => setAnalyticsRefreshKey((n) => n + 1)}
+            />
           )}
+
+          {vendorDrillIn ? (
+            <VendorDrillInPanel
+              vendor={vendorDrillIn}
+              period={analyticsPeriod}
+              onClose={() => setVendorDrillIn(null)}
+              onViewItemHistory={viewItemHistory}
+            />
+          ) : null}
         </div>
       )}
     </section>

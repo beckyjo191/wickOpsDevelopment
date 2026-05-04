@@ -2442,8 +2442,30 @@ details[open] > .settings-section-title .settings-section-chevron {
 
 /* Entry rows */
 .usage-entries {
-  display: grid;
+  /* Bounded scrollable inset. Caps the form's vertical sprawl when many
+     items are logged in one session — older entries scroll up inside this
+     pane instead of pushing Submit Usage / Add Location off-screen. The
+     `clamp` keeps the inset comfortably tall on big monitors and compact on
+     phones; `overscroll-behavior: contain` stops the page from also scrolling
+     when the user reaches the inset's top/bottom edge. */
+  display: flex;
+  flex-direction: column;
   gap: 0.5rem;
+  max-height: clamp(220px, 50vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  /* Soft inner edge so cards near the scroll boundary don't bleed into the
+     section border. Matches the section's own padding scale. */
+  padding: 0.25rem;
+  margin: 0 -0.25rem;
+}
+
+/* No need to wrap when there's only one entry — collapse the inset to a
+   plain block so it doesn't reserve scroll-pane real estate for nothing. */
+.usage-entries:has(> .usage-entry:only-child) {
+  max-height: none;
+  overflow-y: visible;
 }
 
 .usage-entry {
@@ -2576,6 +2598,14 @@ details[open] > .settings-section-title .settings-section-chevron {
   margin: 0;
   padding: 0.25rem 0;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Flip-up variant — applied by ItemAutocomplete when the input is near the
+   bottom of the viewport. Anchors to the input's top edge so the dropdown
+   grows upward, keeping every option visible without horizontal scroll. */
+.usage-autocomplete-list--up {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 
 .usage-autocomplete-option {
@@ -2758,6 +2788,11 @@ details[open] > .settings-section-title .settings-section-chevron {
 
 /* Add line button */
 .usage-add-line-btn {
+  /* Full-width dashed-border placeholder treatment. Sits below the bounded
+     scrollable entries inset; reads as "add another row here." Position is
+     fixed relative to the inset (which has its own max-height) so the button
+     never moves down the page as the entries list grows — older entries
+     scroll inside the inset instead of pushing the button further down. */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3101,7 +3136,11 @@ details[open] > .settings-section-title .settings-section-chevron {
 
 .usage-activity-row {
   display: grid;
-  grid-template-columns: max-content 1fr max-content max-content;
+  /* Items take the flex space, time sits right-aligned. The 4-column
+     layout was for the old pending-queue panel that also showed who
+     submitted and a pending/approved chip; with direct decrement those
+     two columns are gone. */
+  grid-template-columns: 1fr max-content;
   gap: 0.5rem;
   align-items: baseline;
   font-size: 0.82rem;
@@ -7193,6 +7232,43 @@ textarea.inventory-card-input {
   grid-column: 1 / -1;
 }
 
+/* Pricing block on a New Order line: the Unit/Box mode tabs stack above the
+ * relevant input(s). Mirrors the Reorder tab's "missing info" pricing UX so
+ * users move between the two without re-learning anything. */
+.manual-order-price {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.manual-order-price-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.manual-order-price-box-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.4rem;
+}
+
+/* Reorder-URL inline editor: text input + a small × to clear the field and
+ * re-collapse the row back to the "+ Reorder URL" button. */
+.manual-order-url-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.manual-order-url-row .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.manual-order-add-url {
+  align-self: flex-start;
+}
+
 @media (max-width: 480px) {
   .manual-order-line-details {
     grid-template-columns: 1fr 1fr;
@@ -8937,15 +9013,21 @@ textarea.inventory-card-input {
 /* Analytics */
 
 .audit-analytics {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* Flex column so each section (KPI strip, Spend, Usage, Loss) stacks
+     full-width. The previous 2-column grid was legacy from the old
+     KPI-side-by-side layout; with the new 3-up KPI strip and full-width
+     section grids, side-by-side sections caused "Spend" and "Loss" to
+     render in adjacent columns whenever Usage was hidden. */
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
 }
 
 .audit-period-selector {
-  grid-column: 1 / -1;
   display: flex;
-  gap: 0.375rem;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
   padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -8955,15 +9037,11 @@ textarea.inventory-card-input {
 .audit-analytics-summary {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  /* Three equal columns. Replaces the lopsided 2/1 layout. Collapses to
+     1-up below the breakpoint defined later in this file. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.75rem;
   align-items: stretch;
-}
-
-.audit-analytics-summary-side {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
 }
 
 .audit-chart-card--line {
@@ -9147,6 +9225,311 @@ textarea.inventory-card-input {
   margin-top: 1rem;
 }
 
+/* ── Missing-prices nudge ───────────────────────────────────────────────── */
+.audit-missing-prices-banner {
+  border: 1px solid var(--warning-border);
+  background: var(--warning-surface);
+  border-radius: var(--radius-lg);
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.audit-missing-prices-banner-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+
+.audit-missing-prices-banner-header:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.audit-missing-prices-banner-icon {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.75rem;
+  background: var(--warning);
+  color: var(--warning-surface);
+}
+
+.audit-missing-prices-banner-text {
+  flex: 1;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.audit-missing-prices-banner-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.audit-missing-prices-panel {
+  padding: 0.75rem 0.85rem 0.85rem;
+  border-top: 1px solid var(--warning-border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.audit-missing-prices-hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.audit-missing-prices-empty {
+  padding: 0.75rem 0.85rem;
+  border-top: 1px solid var(--warning-border);
+  background: var(--surface);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.audit-missing-prices-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  /* Bound the list so a 50-item missing-prices set doesn't take over the
+     whole tab. Overflow scrolls inside this container. */
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.audit-missing-prices-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 7rem auto;
+  gap: 0.6rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.audit-missing-prices-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.audit-missing-prices-qty {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.audit-missing-prices-input {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-missing-prices-status {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* Period buttons live in their own flex group so the YoY toggle stays
+   right-aligned via flex-grow on the gap. */
+.audit-period-buttons {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.audit-yoy-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8125rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.audit-yoy-toggle input[type="checkbox"] {
+  accent-color: var(--primary);
+}
+
+/* ── YoY delta chips ────────────────────────────────────────────────────── */
+.audit-delta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.4rem;
+  margin-top: 0.25rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  border-radius: 4px;
+  align-self: flex-start;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.audit-delta-chip--good {
+  color: var(--success);
+  background: var(--success-surface, rgba(22, 163, 74, 0.1));
+}
+
+.audit-delta-chip--bad {
+  color: var(--danger);
+  background: var(--danger-surface, rgba(220, 38, 38, 0.1));
+}
+
+.audit-delta-chip--flat {
+  color: var(--text-muted);
+  background: var(--surface-alt);
+}
+
+.audit-delta-chip--compact {
+  padding: 0 0.3rem;
+  margin-top: 0;
+  font-size: 0.65rem;
+  line-height: 1.4;
+  background: transparent;
+}
+
+/* ── Bar chart label clickability ───────────────────────────────────────── */
+.audit-bar-label--clickable {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.audit-bar-label--clickable:hover {
+  text-decoration-style: solid;
+}
+
+/* ── Vendor drill-in drawer ─────────────────────────────────────────────── */
+.audit-vendor-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.audit-vendor-drawer {
+  width: min(640px, 100vw);
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  height: 100%;
+  overflow-y: auto;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.2);
+}
+
+.audit-vendor-drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.audit-vendor-drawer-eyebrow {
+  margin: 0 0 0.25rem;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.audit-vendor-drawer-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.audit-vendor-drawer-close {
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  border-radius: 4px;
+}
+
+.audit-vendor-drawer-close:hover {
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+.audit-vendor-drawer-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--surface-alt);
+  border-radius: var(--radius-md, 6px);
+}
+
+.audit-vendor-drawer-totals > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  align-items: flex-start;
+}
+
+.audit-vendor-drawer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.audit-vendor-drawer-table th,
+.audit-vendor-drawer-table td {
+  text-align: left;
+  padding: 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.audit-vendor-drawer-table th {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.audit-vendor-drawer-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-vendor-drawer-range {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
 .audit-chart-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -9170,20 +9553,28 @@ textarea.inventory-card-input {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  /* Right padding so currency strings ("$1,234.56") don't sit flush against
+     the card edge. The card itself has 1rem padding; this just adds breathing
+     room between the value text and that boundary. */
+  padding-right: 0.25rem;
 }
 
 .audit-bar-label {
-  width: 120px;
+  /* Flex-basis instead of fixed width so the label can shrink on narrow
+     cards (e.g. 3-up section grids on smaller viewports) and the bar track
+     gets a usable width. The min-width keeps short labels readable. */
+  flex: 0 1 110px;
+  min-width: 60px;
   font-size: 0.75rem;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .audit-bar-track {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   height: 20px;
   background: var(--surface-alt);
   border-radius: var(--radius-sm);
@@ -9198,12 +9589,16 @@ textarea.inventory-card-input {
 }
 
 .audit-bar-value {
-  min-width: 64px;
+  /* Wider min so longer currency strings ("$4,239.00") don't get squeezed
+     into a clipped box. Text aligns right inside the cell; flex-shrink off
+     so the cell never collapses on narrow cards. */
+  min-width: 80px;
   font-size: 0.75rem;
   font-weight: 600;
   text-align: right;
   flex-shrink: 0;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .audit-line-chart {
@@ -9308,19 +9703,16 @@ textarea.inventory-card-input {
   }
 
   .audit-analytics-summary {
+    /* On narrow viewports stack the 3 KPIs vertically. */
     grid-template-columns: 1fr;
-  }
-
-  .audit-analytics-summary-side {
-    flex-direction: row;
-  }
-
-  .audit-analytics-summary-side > .audit-stat-card {
-    flex: 1;
   }
 
   .audit-analytics-grid {
     grid-template-columns: 1fr;
+  }
+
+  .audit-vendor-drawer {
+    width: 100vw;
   }
 
   .audit-bar-label {

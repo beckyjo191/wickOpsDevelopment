@@ -47,6 +47,11 @@ export type InventoryDesktopTableProps = {
    *  hard-delete based on the answer — replacing the previous split between
    *  per-row Retire (Expired tab only) and per-row Delete (qty-zero only). */
   onRemoveRow?: (rowId: string) => void;
+  /** Registered vendors + add-vendor callback for the vendor column's
+   *  autocomplete picker. Same data Reorder/New Order use, so vendor names
+   *  stay canonical across the app. */
+  availableVendors?: string[];
+  onAddVendor?: (name: string) => Promise<void>;
 };
 
 /**
@@ -85,6 +90,8 @@ export function InventoryDesktopTable({
   setEditingDateCell,
   activeTab: _activeTab,
   onRemoveRow,
+  availableVendors,
+  onAddVendor,
 }: InventoryDesktopTableProps) {
   // Single Remove column replaces the prior separate Retire (Expired tab only)
   // and Delete (qty-zero only) columns. Available on every tab so the user
@@ -257,6 +264,8 @@ export function InventoryDesktopTable({
                     beginCellEditSession={beginCellEditSession}
                     endCellEditSession={endCellEditSession}
                     onSetSelectedRowId={onSetSelectedRowId}
+                    availableVendors={availableVendors}
+                    onAddVendor={onAddVendor}
                   />
                 </td>
                 );

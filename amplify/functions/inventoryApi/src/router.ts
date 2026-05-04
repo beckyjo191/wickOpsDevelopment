@@ -8,12 +8,12 @@ import { ensureStorageForOrganization } from "./storage";
 import { handleGetOrgModules, handleUpdateOrgModules, handleListModuleAccessUsers, handleUpdateUserModuleAccess, handleRevokeUserAccess } from "./routes/modules";
 import { handleUpdateCurrentUserDisplayName, handleSyncCurrentUserEmail, handleSaveUserColumnVisibility } from "./routes/profile";
 import { handleListOnboardingTemplates, handleApplyOnboardingTemplate } from "./routes/onboarding";
-import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics } from "./routes/audit";
+import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics, handleVendorBreakdown } from "./routes/audit";
 import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestockOrder, handleCloseRestockOrder } from "./routes/restock";
 import { handleAddLocation, handleListLocations, handleRemoveLocation, handleRenameLocation } from "./routes/locations";
 import { handleAddVendor, handleRemoveVendor, handleRenameVendor } from "./routes/vendors";
 import { handleAlertSummary, handleBootstrap } from "./routes/dashboard";
-import { handleListItems, handleMoveItems, handleSaveItems, handleUndoRetire } from "./routes/inventory";
+import { handleListItems, handleMoveItems, handleSaveItems, handleUndoRetire, handleUpdateItemPricing } from "./routes/inventory";
 import { handleSubmitUsage, handleListPendingSubmissions, handleApproveSubmission, handleRejectSubmission, handleDeleteSubmission, handleUndoUsage } from "./routes/usage";
 import { handleImportCsv } from "./routes/csv-import";
 import { handleCreateColumn, handleDeleteColumn, handleRestoreColumn, handleUpdateColumnAttachments, handleUpdateColumnVisibility, handleUpdateColumnLabel, handleUpdateColumnType, handleReorderColumns, handleDeleteOrganizationStorage } from "./routes/column-mgmt";
@@ -49,6 +49,7 @@ const routes: Route[] = [
   { method: "GET",    pattern: "/inventory/audit/feed",                 needsStorage: true, module: "inventory", handler: handleAuditFeed },
   { method: "GET",    pattern: /\/inventory\/audit\/item\/[^/]+$/,      needsStorage: true, module: "inventory", handler: handleAuditItemHistory },
   { method: "GET",    pattern: "/inventory/audit/analytics",            needsStorage: true, module: "inventory", handler: handleAuditAnalytics },
+  { method: "GET",    pattern: "/inventory/audit/analytics/vendor",     needsStorage: true, module: "inventory", handler: handleVendorBreakdown },
 
   // Restock
   { method: "GET",    pattern: "/inventory/restock/orders",             needsStorage: true, module: "inventory", handler: handleListRestockOrders },
@@ -75,6 +76,7 @@ const routes: Route[] = [
   { method: "GET",    pattern: "/inventory/items",                      needsStorage: true, module: "inventory", handler: handleListItems },
   { method: "POST",   pattern: "/inventory/items/save",                 needsStorage: true, module: "inventory", handler: handleSaveItems },
   { method: "POST",   pattern: "/inventory/items/move",                 needsStorage: true, module: "inventory", handler: handleMoveItems },
+  { method: "POST",   pattern: "/inventory/items/pricing",              needsStorage: true, module: "inventory", handler: handleUpdateItemPricing },
   { method: "POST",   pattern: "/inventory/items/undo-retire",          needsStorage: true, module: "inventory", handler: handleUndoRetire },
 
   // Usage (feature within the inventory module; role-based gating applies inside handlers)

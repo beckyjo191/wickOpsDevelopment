@@ -9,6 +9,7 @@ import { isDeletableRow, normalizeHeaderKey } from "./inventoryUtils";
 import { RemoveItemDialog } from "./RemoveItemDialog";
 import {
   addInventoryLocation,
+  addInventoryVendor,
   generateAndDownloadInventoryTemplate,
 } from "../../lib/inventoryApi";
 
@@ -33,6 +34,7 @@ import { ROWS_PER_PAGE } from "./inventoryTypes";
 
 export function InventoryPage({
   canEditInventory,
+  canManageInventoryColumns,
   canLogUsage,
   initialFilter,
   initialSearch,
@@ -172,6 +174,15 @@ export function InventoryPage({
       const bootstrap = await (await import("../../lib/inventoryApi")).loadInventoryBootstrap();
       data.applyBootstrap(bootstrap);
     } catch { /* surfaced by the dialog's own error handling */ }
+  };
+
+  // ── Vendor add handler ────────────────────────────────────────────────────
+  // Quick-add a vendor from the inventory grid's vendor cell. Refreshes
+  // registeredVendors so the new entry appears in every dropdown without a
+  // bootstrap reload — same pattern used by OrdersPage/ReorderTab.
+  const handleAddVendor = async (name: string) => {
+    const next = await addInventoryVendor(name);
+    data.setRegisteredVendors(next);
   };
 
   // ── Location add handler ──────────────────────────────────────────────────
@@ -690,6 +701,8 @@ export function InventoryPage({
                 isEditingLinkCell={data.isEditingLinkCell}
                 setEditingLinkCell={data.setEditingLinkCell}
                 activeTab={filters.activeTab}
+                availableVendors={data.registeredVendors}
+                onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
               />
             ) : (
               <InventoryDesktopTable
@@ -730,6 +743,8 @@ export function InventoryPage({
                 setEditingDateCell={data.setEditingDateCell}
                 activeTab={filters.activeTab}
                 onRemoveRow={canEditInventory ? data.onRequestRemoveRow : undefined}
+                availableVendors={data.registeredVendors}
+                onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
               />
             )}
 

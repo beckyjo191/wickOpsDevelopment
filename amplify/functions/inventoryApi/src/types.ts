@@ -99,6 +99,81 @@ export type InventoryStorage = {
   pendingTable: string;
   auditTable: string;
   restockOrdersTable: string;
+  /** 1g: per-(item, vendor) pricing rows. Replaces the previous pattern of
+   *  storing unitCost/packSize/packCost/reorderLink on each inventory item.
+   *  Pricing is vendor-specific (Costco's box of 100 vs BoundTree's box of
+   *  50), so an item can carry multiple rows — one per vendor it's bought
+   *  from. PK is `${itemId}#${vendorLower}` for direct lookup; GSI by
+   *  itemId for "all vendors that sell this item." */
+  vendorPricingTable: string;
+};
+
+/** A row in the vendorPricingTable. */
+export type InventoryItemVendorPricing = {
+  /** `${itemId}#${vendorLower}` — composite PK string. */
+  id: string;
+  orgId: string;
+  module: "inventory";
+  /** Inventory item id this pricing belongs to. */
+  itemId: string;
+  /** Vendor name in canonical (registered) casing — e.g. "BoundTree". */
+  vendor: string;
+  /** Lowercased vendor for case-insensitive lookups. Stored alongside the
+   *  canonical case so the matchup is unambiguous. */
+  vendorLower: string;
+  /** Per-unit price in the item's primary unit. e.g. $0.83/ct.
+   *  1h.7: kept readable for legacy rows but no longer written. New rows
+   *  derive $/ct or $/lb at display time from `packCost ÷ packCount` or
+   *  `packCost ÷ packAmount`. */
+  unitCost?: number;
+  /** 1h.7 legacy: units per pack from this vendor. e.g. 100 for a Costco
+   *  box of pads. New rows store this as `packCount` instead — `packSize`
+   *  stays readable for transitional reads. Frontend prefers packCount
+   *  when present. */
+  packSize?: number;
+  /** Total $ for one pack from this vendor. e.g. $24.99 for the box. The
+   *  single source of cost truth post-1h.7 — both $/ct and $/lb derive
+   *  from this divided by the relevant axis. */
+  packCost?: number;
+
+  // ── 1h.7: dual-axis pack contents ──────────────────────────────────────
+  // A single (item, vendor) pricing row can carry up to TWO independent
+  // measurements of what's inside one pack at this vendor. Both share the
+  // same `packCost`. This lets a row like "5 lb / 10 ct apples for $4.99"
+  // exist as one entity, with both `$/lb` and `$/apple` derivable from it.
+  //
+  // Combinations:
+  //   - `packCount` only          → count-style (gauze, syringes — same
+  //                                 as today's count packs).
+  //   - `packAmount` + `packAmountUnit` only → bulk weight/volume (flour
+  //                                 by lb, milk by fl oz).
+  //   - both                      → mixed (apples sold "5 lb / 10 ct").
+  //                                 Conversion ratio = packAmount ÷
+  //                                 packCount → drives log-usage math.
+
+  /** Number of countable items in one pack. e.g. 10 apples; 100 gauze;
+   *  1 for a single-unit purchase. */
+  packCount?: number;
+  /** Bulk weight or volume in one pack. e.g. 5 (lb); 16 (fl oz); 2.5 (kg).
+   *  Always a positive number; pair with `packAmountUnit`. */
+  packAmount?: number;
+  /** Unit for `packAmount` — must be a weight or volume unit
+   *  (lb/oz/g/kg/fl oz/cup/pt/qt/gal/ml/l). Count units (ct, dozen) belong
+   *  on `packCount` instead. The receive flow + frontend reject mismatched
+   *  pairings. */
+  packAmountUnit?: string;
+
+  /** Optional human label for the pack ("box", "bag", "jug"). Defaults to
+   *  "pack" in display when absent. */
+  packLabel?: string;
+  /** Per-vendor reorder URL — Costco's product page differs from BoundTree's
+   *  for the same item, so this lives per-row instead of on the inventory
+   *  row itself. */
+  reorderUrl?: string;
+  /** Last edit timestamp. Drives optimistic-locking ConditionExpressions on
+   *  multi-user writes. */
+  lastUpdatedAt: string;
+  lastUpdatedByUserId: string;
 };
 
 export type ModuleKey = "inventory";
@@ -196,6 +271,11 @@ export type IndustryTemplate = {
   name: string;
   description: string;
   columns: TemplateColumn[];
+  /** 1h.2d: per-template default allowed-units list. Seeded onto the org's
+   *  meta row when the template is applied so EMS / kitchen / etc. see
+   *  only relevant units in pickers from day one. Optional — templates
+   *  that don't specify get the full KNOWN_UNITS default. */
+  allowedUnits?: string[];
 };
 
 export type RestockOrderStatus = "open" | "partial" | "closed";
@@ -230,6 +310,31 @@ export type RestockOrderItem = {
   // For freeform items: pack cost (price per box). Persisted to the new
   // inventory row on receive.
   packCost?: number;
+  // ── 1b: amount/UoM/price model (additive) ─────────────────────────────────
+  // Captures what the user actually bought in human terms ("2.5 lb beef for
+  // $14.99"). The server derives `pricePerCanonical` via uom.ts so the
+  // shopping-list view (1d) can do per-vendor $/canonical comparisons
+  // without re-running unit math at read time.
+  //
+  // Optional in 1b: old clients still send unitCost/packSize/packCost.
+  // Receipt-entry rebuild (1c) populates these for new orders; migration (1e)
+  // backfills synthetic order lines that carry these fields too.
+  /** Amount the user purchased, in `purchaseUnit` (e.g. 2.5 for "2.5 lb"). */
+  purchaseAmount?: number;
+  /** Unit-of-measure for purchaseAmount (e.g. "lb", "fl oz", "ct"). */
+  purchaseUnit?: string;
+  /** Total $ paid for this purchase line (the receipt amount). */
+  purchasePrice?: number;
+  /** Server-derived $ per canonical unit for the item's dimension. Used by
+   *  per-vendor price comparison queries. Persisted so reads don't re-derive. */
+  pricePerCanonical?: number;
+  /** Item dimension at the time this line was created (count|weight|volume).
+   *  Persisted on the line so a later change to the item's dimension doesn't
+   *  retroactively break price-history math. */
+  dimension?: "count" | "weight" | "volume";
+  /** True for migration-injected historical lines (1e). Lets analytics
+   *  decide whether to include synthesized data in "best price" rollups. */
+  synthetic?: boolean;
 };
 
 export type RestockReceiveLine = {

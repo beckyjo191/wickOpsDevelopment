@@ -126,10 +126,41 @@ export const handleApplyOnboardingTemplate = async (ctx: RouteContext) => {
     sortOrder += 10;
   }
 
+  // 1h.2d: seed allowed units from the template if the template specifies
+  // a list. Templates without `allowedUnits` (e.g. "general") fall through
+  // to the master KNOWN_UNITS default so the org sees the full picker.
+  // Only seed when the org hasn't already curated — checked via
+  // attribute_not_exists so existing meta rows aren't clobbered.
+  if (Array.isArray(template.allowedUnits) && template.allowedUnits.length > 0) {
+    try {
+      await ddb.send(
+        new PutCommand({
+          TableName: storage.columnTable,
+          Item: {
+            id: "inventory-meta-allowed-units",
+            module: "inventory",
+            kind: "meta",
+            units: template.allowedUnits,
+            updatedAt: new Date().toISOString(),
+            updatedByUserId: "system",
+            seededFromTemplate: templateId,
+          },
+          ConditionExpression: "attribute_not_exists(id)",
+        }),
+      );
+    } catch (err: any) {
+      // Already curated → don't overwrite the user's choices.
+      if (err?.name !== "ConditionalCheckFailedException") {
+        console.warn("Allowed-units template seed failed", err);
+      }
+    }
+  }
+
   await writeAuditEvents(storage.auditTable, [
     buildAuditEvent(access, "TEMPLATE_APPLY", null, null, {
       templateId,
       columnsAdded: addedColumns.map((c) => c.key),
+      ...(template.allowedUnits ? { allowedUnitsSeeded: template.allowedUnits } : {}),
     }),
   ]);
 

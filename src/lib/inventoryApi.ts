@@ -158,6 +158,18 @@ export const loadInventoryBootstrap = async (): Promise<{
   items: InventoryRow[];
   locations: InventoryLocation[];
   registeredVendors: string[];
+  /** 1g: per-(item, vendor) pricing rows for the org. Frontend indexes
+   *  these into a Map for fast reads in the item-detail modal + Shop tab. */
+  vendorPricing: ItemVendorPricingEntry[];
+  /** 1h.2: per-org curated unit list. Drives unit pickers across the app
+   *  so EMS/pantry/fire users don't see units that don't apply. Empty
+   *  array fallback uses the full KNOWN_UNITS list. */
+  allowedUnits: string[];
+  /** 1h.7: org-wide gate. When false (default), i modal hides
+   *  Amount/Unit and the dual-axis Pack form is suppressed — basic
+   *  EMS-style flow. Pantry/restaurant orgs flip this on in Settings to
+   *  unlock weight/volume capture and $/lb price-trend math. */
+  tracksUnits: boolean;
   columnVisibilityOverrides: ColumnVisibilityOverrides;
   nextToken: string | null;
   /** Set when the server just ran a schema migration; clients render a toast. */
@@ -201,6 +213,15 @@ export const loadInventoryBootstrap = async (): Promise<{
     registeredVendors: Array.isArray(data.registeredVendors)
       ? (data.registeredVendors as string[]).filter((v: string) => typeof v === "string" && v.length > 0)
       : [],
+    vendorPricing: Array.isArray(data.vendorPricing)
+      ? (data.vendorPricing as ItemVendorPricingEntry[]).filter((e) => e && typeof e.id === "string")
+      : [],
+    allowedUnits: Array.isArray(data.allowedUnits)
+      ? (data.allowedUnits as string[]).filter((u): u is string => typeof u === "string" && u.length > 0)
+      : [],
+    // Default false so legacy bootstrap responses (and 202 retry path)
+    // stay in the EMS-style flow until users explicitly opt in.
+    tracksUnits: typeof data.tracksUnits === "boolean" ? data.tracksUnits : false,
     columnVisibilityOverrides: (data.columnVisibilityOverrides ?? {}) as ColumnVisibilityOverrides,
     nextToken: data.nextToken ?? null,
     migrationNotice:
@@ -1229,7 +1250,7 @@ export type AuditAnalyticsSlice = {
   usageOverTime: Array<{ date: string; totalUsed: number; totalSpend: number }>;
   byVendor: Array<{ vendor: string; spend: number; orderCount: number }>;
   bySpendItem: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }>;
-  byUsageItem: Array<{ itemId: string; itemName: string; qtyUsed: number }>;
+  byUsageItem: Array<{ itemId: string; itemName: string; qtyUsed: number; cost: number }>;
   lossByReason: Array<{ reason: string; qty: number; value: number }>;
 };
 
@@ -1402,6 +1423,23 @@ export type RestockOrderItem = {
   // For freeform items: pack cost (price per box). Persisted to the new
   // inventory row on receive.
   packCost?: number;
+  // ── 1b: amount/UoM/price model (additive) ─────────────────────────────────
+  // Mirrors the backend RestockOrderItem extension. See
+  // amplify/functions/inventoryApi/src/types.ts for full notes. Optional in
+  // 1b — old orders don't carry these fields; readers fall back to legacy
+  // unitCost/packSize/packCost while we transition.
+  /** Amount the user purchased, in `purchaseUnit` (e.g. 2.5 for "2.5 lb"). */
+  purchaseAmount?: number;
+  /** Unit-of-measure for purchaseAmount (e.g. "lb", "fl oz", "ct"). */
+  purchaseUnit?: string;
+  /** Total $ paid for this purchase line. */
+  purchasePrice?: number;
+  /** Server-derived $ per canonical unit. Used by per-vendor price queries. */
+  pricePerCanonical?: number;
+  /** Item dimension at order-create time (count|weight|volume). */
+  dimension?: "count" | "weight" | "volume";
+  /** True for migration-injected historical lines. */
+  synthetic?: boolean;
 };
 
 export type RestockReceiveLine = {
@@ -1455,6 +1493,14 @@ export const createRestockOrder = async (payload: {
     minQuantity?: number;
     packSize?: number;
     packCost?: number;
+    /** 1b: optional amount/UoM/price triplet. Server derives
+     *  pricePerCanonical from these via uom.ts; clients don't compute it. */
+    purchaseAmount?: number;
+    purchaseUnit?: string;
+    purchasePrice?: number;
+    /** 1b: dimension snapshot for the line. Defaults to "count" server-side
+     *  when absent so older clients keep working. */
+    dimension?: "count" | "weight" | "volume";
   }>;
 }): Promise<{ orderId: string }> => {
   const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/restock/orders`, {
@@ -1512,6 +1558,198 @@ export const closeRestockOrder = async (orderId: string, note?: string): Promise
       : {}),
   });
   if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to close restock order."));
+};
+
+// ─── Price history (1d) ───────────────────────────────────────────────────────
+
+export type PriceHistoryEntry = {
+  /** Lowercased item name — cross-vendor grouping key. */
+  itemKey: string;
+  itemName: string;
+  /** Most recent non-freeform itemId across observations, when present. */
+  itemId?: string;
+  vendor: string;
+  /** $ per canonical unit — $/ct for count, $/oz for weight, $/fl oz for volume. */
+  pricePerCanonical: number;
+  canonicalUnit: string;
+  dimension: "count" | "weight" | "volume";
+  sampleCount: number;
+  lastPurchasedAt: string;
+  /** True when the most recent observation is a migration-injected line. */
+  synthetic: boolean;
+};
+
+/** Fetch per-(itemName, vendor) latest-price entries within the recency
+ *  window. Optional filters narrow the result to a single item — useful for
+ *  the item-detail price drawer. The shopping list calls this without
+ *  filters and groups results client-side. */
+export const loadPriceHistory = async (filter?: {
+  itemId?: string;
+  itemName?: string;
+}): Promise<{ history: PriceHistoryEntry[]; recencyWindowDays: number }> => {
+  const params = new URLSearchParams();
+  if (filter?.itemId) params.set("itemId", filter.itemId);
+  if (filter?.itemName) params.set("itemName", filter.itemName);
+  const qs = params.toString();
+  const res = await authFetch(
+    `${INVENTORY_API_BASE_URL}/inventory/price-history${qs ? `?${qs}` : ""}`,
+  );
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load price history."));
+  const data = (await res.json()) as { history?: PriceHistoryEntry[]; recencyWindowDays?: number };
+  return {
+    history: Array.isArray(data.history) ? data.history : [],
+    recencyWindowDays: typeof data.recencyWindowDays === "number" ? data.recencyWindowDays : 180,
+  };
+};
+
+// ─── Vendor pricing per item (1g) ─────────────────────────────────────────────
+
+/** One row in the per-(item, vendor) pricing table. The shape mirrors the
+ *  backend's InventoryItemVendorPricing — keep both copies in sync. */
+export type ItemVendorPricingEntry = {
+  /** `${itemId}#${vendorLower}`. Server-composed; client doesn't construct it
+   *  except for DELETE URLs. */
+  id: string;
+  itemId: string;
+  vendor: string;
+  vendorLower: string;
+  /** 1h.7 legacy: per-unit price stored before the dual-axis split.
+   *  Readable for transitional data; new rows derive $/ct or $/lb at
+   *  display time from `packCost ÷ packCount` or `packCost ÷ packAmount`. */
+  unitCost?: number;
+  /** 1h.7 legacy: items per pack. Reads fall back to `packCount` first. */
+  packSize?: number;
+  /** Total $ for one pack at this vendor. Single source of cost truth. */
+  packCost?: number;
+
+  // ── 1h.7 dual-axis pack contents ────────────────────────────────────────
+  // A row may carry up to two independent measurements of one pack: a
+  // count axis (`packCount`) and a bulk-weight-or-volume axis (`packAmount`
+  // + `packAmountUnit`). Both share `packCost`.
+  //
+  //   - apples: packCount = 10, packAmount = 5, packAmountUnit = "lb",
+  //             packCost = 4.99 → $0.499/ct AND $0.998/lb
+  //   - gauze:  packCount = 100, packCost = 24.99 → $0.25/ct
+  //   - flour:  packAmount = 5, packAmountUnit = "lb", packCost = 4.99
+  //             → $0.998/lb
+  /** Number of countable items in one pack. */
+  packCount?: number;
+  /** Bulk weight or volume in one pack (paired with `packAmountUnit`). */
+  packAmount?: number;
+  /** Unit for `packAmount` — must be a weight or volume unit. */
+  packAmountUnit?: string;
+
+  packLabel?: string;
+  reorderUrl?: string;
+  /** Optimistic-lock token. Pass back on the next upsert as
+   *  `expectedLastUpdatedAt` to detect concurrent edits. */
+  lastUpdatedAt: string;
+  lastUpdatedByUserId: string;
+};
+
+/** Upsert one (item, vendor) pricing row.
+ *  - `expectedLastUpdatedAt`: pass the value the modal last read; server
+ *    rejects with 409 if it's stale. Omit for first-time creates.
+ *  - `expectAnyVersion`: receive flow uses this to bypass the lock — the new
+ *    receipt is authoritatively newer, so last-write-wins is correct there. */
+export const upsertItemVendorPricing = async (input: {
+  itemId: string;
+  vendor: string;
+  /** 1h.7: dual-axis pack contents. Pass either or both. The server
+   *  rejects packAmount without packAmountUnit, and rejects count units
+   *  on packAmountUnit (those belong on packCount). */
+  packCount?: number;
+  packAmount?: number;
+  packAmountUnit?: string;
+  packCost?: number;
+  packLabel?: string;
+  reorderUrl?: string;
+  expectedLastUpdatedAt?: string;
+  expectAnyVersion?: boolean;
+}): Promise<ItemVendorPricingEntry> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/item-vendor-pricing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (res.status === 409) {
+    // Surface a typed error so the modal can re-fetch and re-render.
+    const data = (await res.json()) as { error?: string; current?: ItemVendorPricingEntry | null };
+    throw new VendorPricingConflictError(
+      data.error ?? "Pricing was edited by someone else. Refresh and try again.",
+      data.current ?? null,
+    );
+  }
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to save vendor pricing."));
+  const data = (await res.json()) as { entry: ItemVendorPricingEntry };
+  return data.entry;
+};
+
+/** Thrown when the server rejects an upsert because another writer modified
+ *  the row first. Carries the current server-side row so the caller can
+ *  show the user what changed. */
+export class VendorPricingConflictError extends Error {
+  readonly current: ItemVendorPricingEntry | null;
+  constructor(message: string, current: ItemVendorPricingEntry | null) {
+    super(message);
+    this.name = "VendorPricingConflictError";
+    this.current = current;
+  }
+}
+
+export const isVendorPricingConflictError = (
+  v: unknown,
+): v is VendorPricingConflictError => v instanceof VendorPricingConflictError;
+
+export const deleteItemVendorPricing = async (id: string): Promise<void> => {
+  const res = await authFetch(
+    `${INVENTORY_API_BASE_URL}/inventory/item-vendor-pricing/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to delete vendor pricing."));
+};
+
+// ─── Allowed units (1h.2) ─────────────────────────────────────────────────────
+
+/** Read the org's curated allowed-units list, the full master list, and
+ *  the org-wide tracksUnits gate. Settings UI uses all three. */
+export const loadAllowedUnits = async (): Promise<{
+  units: string[];
+  knownUnits: string[];
+  tracksUnits: boolean;
+}> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/allowed-units`);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load allowed units."));
+  const data = (await res.json()) as {
+    units?: string[];
+    knownUnits?: string[];
+    tracksUnits?: boolean;
+  };
+  return {
+    units: Array.isArray(data.units) ? data.units : [],
+    knownUnits: Array.isArray(data.knownUnits) ? data.knownUnits : [],
+    tracksUnits: typeof data.tracksUnits === "boolean" ? data.tracksUnits : false,
+  };
+};
+
+/** Replace the org's allowed-units list and the tracksUnits gate. Server
+ *  validates each unit against KNOWN_UNITS; persists the units list even
+ *  when tracksUnits=false so re-enabling restores the prior selection. */
+export const setAllowedUnits = async (
+  units: string[],
+  tracksUnits: boolean,
+): Promise<{ units: string[]; tracksUnits: boolean }> => {
+  const res = await authFetch(`${INVENTORY_API_BASE_URL}/inventory/allowed-units`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ units, tracksUnits }),
+  });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to save allowed units."));
+  const data = (await res.json()) as { units?: string[]; tracksUnits?: boolean };
+  return {
+    units: Array.isArray(data.units) ? data.units : [],
+    tracksUnits: typeof data.tracksUnits === "boolean" ? data.tracksUnits : tracksUnits,
+  };
 };
 
 export const createBillingPortalSession = async (): Promise<string> => {

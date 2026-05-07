@@ -36,6 +36,10 @@ interface UseInventoryFiltersParams {
   editingOriginalIndexRef: React.RefObject<number | null>;
   /** Bumped when editing ends to force filteredRows to re-sort */
   sortEpoch: number;
+  /** Per-(item, vendor) pricing rows from the bootstrap (1g). Used to
+   *  power the "Missing pricing" filter — items with no entry in this map
+   *  have no recorded vendor history at all. */
+  vendorPricing: Map<string, Map<string, unknown>>;
 }
 
 /** Sentinel id for the "All Locations" view. Empty string keeps it
@@ -136,12 +140,13 @@ export function useInventoryFilters({
   newRowPositionRef,
   editingOriginalIndexRef,
   sortEpoch,
+  vendorPricing,
 }: UseInventoryFiltersParams) {
   // ── Tab state ──
   // "retired" and "pendingSubmissions" were previously stored here.
   // Retired items are now only visible via the Activity page.
   // Pending submissions moved to the Activity page too.
-  const VALID_TABS: ActiveTab[] = ["all", "expired", "exp30", "exp60", "lowStock", "logUsage"];
+  const VALID_TABS: ActiveTab[] = ["all", "expired", "exp30", "exp60", "lowStock", "missingPricing", "logUsage"];
   const [activeTab, setActiveTabInternal] = useState<ActiveTab>(() => {
     if (initialFilter) return initialFilter;
     try {
@@ -273,6 +278,14 @@ export function useInventoryFilters({
   const visibleColumns = useMemo(
     () => {
       const base = [...columns]
+        // 1h.7: `unit` is no longer a grid column. UoM moved to the i
+        // modal as a per-(item, vendor) field. Existing orgs may still
+        // have a `unit` column row in their columns table (demoted to
+        // non-core by the backend reconcile loop) — hard-filter it here
+        // so it never renders in the grid regardless of stored
+        // isVisible. Users keep the data on item rows; they just don't
+        // see the picker on every Quantity-adjacent row anymore.
+        .filter((column) => column.key !== "unit")
         .filter((column) => {
           const override = userColumnOverrides[column.id];
           return override !== undefined ? override : column.isVisible;
@@ -313,6 +326,7 @@ export function useInventoryFilters({
     let exp60 = 0;
     let lowStock = 0;
     let retired = 0;
+    let missingPricing = 0;
     for (const row of rows) {
       if (effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) continue;
       const isRetired = Boolean(row.values.retiredAt);
@@ -340,9 +354,14 @@ export function useInventoryFilters({
       // tab reads them directly for reorder surfacing.
       const isLowStock = !isRetired && hasMin && Number.isFinite(quantity) && quantity < minQuantity;
       if (isLowStock) lowStock++;
+      // Missing pricing: a non-retired item with no vendorPricing entries.
+      // After 1g.7's migration, items that had vendor + pricing already
+      // carry a row, so anything still missing is genuinely uncovered.
+      const hasAnyPricing = (vendorPricing.get(row.id)?.size ?? 0) > 0;
+      if (!isRetired && !hasAnyPricing) missingPricing++;
     }
-    return { expired, exp30, exp60, lowStock, retired };
-  }, [rows, effectiveLocationId]);
+    return { expired, exp30, exp60, lowStock, retired, missingPricing };
+  }, [rows, effectiveLocationId, vendorPricing]);
 
   // ── THE BIG filteredRows memo ──
   const filteredRows = useMemo(() => {
@@ -409,6 +428,9 @@ export function useInventoryFilters({
         if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil <= 0;
         if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil > 0 && daysUntil <= 30;
         if (activeFilter === "exp60") passesTab = daysUntil !== null && daysUntil > 0 && daysUntil <= 60;
+        if (activeFilter === "missingPricing") {
+          passesTab = (vendorPricing.get(row.id)?.size ?? 0) === 0;
+        }
         if (!passesTab) return false;
 
         // Structural location filter (replaces the old values.location compare).
@@ -531,6 +553,7 @@ export function useInventoryFilters({
     groupableFilters,
     sortStateByTab,
     sortEpoch,
+    vendorPricing,
   ]);
 
   const filteredRowIds = useMemo(

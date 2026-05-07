@@ -466,7 +466,7 @@ function aggregatePeriodSlice(
 ) {
   const usageByDay = new Map<string, number>();
   const spendByDay = new Map<string, number>();
-  const usageByItem = new Map<string, { itemName: string; itemId: string; qtyUsed: number }>();
+  const usageByItem = new Map<string, { itemName: string; itemId: string; qtyUsed: number; cost: number }>();
   const vendorSpend = new Map<string, { spend: number; orderIds: Set<string>; restockCount: number }>();
   const itemSpend = new Map<string, { itemName: string; itemId: string; spend: number; qtyReceived: number }>();
   const lossByReason = new Map<string, { qty: number; value: number }>();
@@ -507,8 +507,9 @@ function aggregatePeriodSlice(
       totalQtyUsed += qty;
       usageByDay.set(day, (usageByDay.get(day) ?? 0) + qty);
       if (cost > 0) spendByDay.set(day, (spendByDay.get(day) ?? 0) + qty * cost);
-      const bucket = usageByItem.get(itemKey) ?? { itemName, itemId: itemId || itemKey, qtyUsed: 0 };
+      const bucket = usageByItem.get(itemKey) ?? { itemName, itemId: itemId || itemKey, qtyUsed: 0, cost: 0 };
       bucket.qtyUsed += qty;
+      if (cost > 0) bucket.cost += qty * cost;
       if (!bucket.itemName && itemName) bucket.itemName = itemName;
       if (!bucket.itemId && itemId) bucket.itemId = itemId;
       usageByItem.set(itemKey, bucket);
@@ -590,14 +591,24 @@ function aggregatePeriodSlice(
     .sort((a, b) => b.spend - a.spend)
     .slice(0, 10);
 
-  const byUsageItem = [...usageByItem.values()]
-    .map((v) => ({
-      itemId: v.itemId,
-      itemName: v.itemName || "Unnamed item",
-      qtyUsed: v.qtyUsed,
-    }))
-    .sort((a, b) => b.qtyUsed - a.qtyUsed)
-    .slice(0, 10);
+  // Union of top 10 by qty + top 10 by cost — so a client-side toggle between
+  // "Used (qty)" and "Used ($)" always has a fully-populated list to render.
+  const usageMapped = [...usageByItem.values()].map((v) => ({
+    itemId: v.itemId,
+    itemName: v.itemName || "Unnamed item",
+    qtyUsed: v.qtyUsed,
+    cost: v.cost,
+  }));
+  const topByQty = [...usageMapped].sort((a, b) => b.qtyUsed - a.qtyUsed).slice(0, 10);
+  const topByCost = [...usageMapped].sort((a, b) => b.cost - a.cost).slice(0, 10);
+  const seen = new Set<string>();
+  const byUsageItem: typeof usageMapped = [];
+  for (const row of [...topByQty, ...topByCost]) {
+    const key = row.itemId || row.itemName;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    byUsageItem.push(row);
+  }
 
   const lossByReasonArr = [...lossByReason.entries()]
     .map(([reason, v]) => ({ reason, qty: v.qty, value: v.value }))

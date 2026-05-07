@@ -104,7 +104,9 @@ const NEW_CORE_COLUMNS: Array<Omit<InventoryColumn, "id" | "organizationId">> = 
   { module: "inventory", kind: "column", key: "packSize", label: "Pack Size", type: "number", isCore: true, isRequired: false, isVisible: false, isEditable: true, isGroupable: false, sortOrder: 70, createdAt: "" },
   { module: "inventory", kind: "column", key: "packCost", label: "Pack Cost", type: "number", isCore: true, isRequired: false, isVisible: false, isEditable: true, isGroupable: false, sortOrder: 80, createdAt: "" },
   { module: "inventory", kind: "column", key: "notes", label: "Notes", type: "text", isCore: true, isRequired: false, isVisible: true, isEditable: true, isGroupable: false, sortOrder: 90, createdAt: "" },
-  { module: "inventory", kind: "column", key: "category", label: "Category", type: "text", isCore: true, isRequired: false, isVisible: true, isEditable: true, isGroupable: true, sortOrder: 100, createdAt: "" },
+  // 1h.5: `category` is no longer a core column. Newly-migrated orgs no
+  // longer get it; pre-migrated orgs that already have the row will have
+  // it demoted to isCore: false by the reconcile loop in columns.ts.
 ];
 
 // ── Planner ────────────────────────────────────────────────────────────────

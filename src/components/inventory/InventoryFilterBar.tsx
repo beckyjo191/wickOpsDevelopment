@@ -3,7 +3,7 @@ import type { ActiveTab, InventoryFilter } from "./inventoryTypes";
 export type InventoryFilterBarProps = {
   activeTab: ActiveTab;
   onTabChange: (tab: ActiveTab) => void;
-  tabCounts: { expired: number; exp30: number; exp60: number; lowStock: number; retired: number };
+  tabCounts: { expired: number; exp30: number; exp60: number; lowStock: number; retired: number; missingPricing: number };
   hasExpirationColumn: boolean;
   hasMinQuantityColumn: boolean;
   isMobile: boolean;
@@ -33,6 +33,11 @@ export function InventoryFilterBar({
     { key: "expired", label: "Expired", mobileLabel: "Expired", count: tabCounts.expired, visible: hasExpirationColumn },
     { key: "exp30", label: "Expiring Soon", mobileLabel: "Expiring", count: tabCounts.exp30, visible: hasExpirationColumn },
     { key: "lowStock", label: "Low Stock", mobileLabel: "Low", count: tabCounts.lowStock, visible: hasMinQuantityColumn },
+    // Missing pricing (1g) — items with no vendorPricing rows. Surfaces the
+    // gap between "you've configured this item" and "you've ever told us
+    // what it costs at any vendor." Visible whenever there's at least one
+    // such item; otherwise it'd just be visual noise.
+    { key: "missingPricing", label: "No Pricing", mobileLabel: "No $", count: tabCounts.missingPricing, visible: tabCounts.missingPricing > 0 },
   ];
 
   const visible = chips.filter((c) => c.visible);

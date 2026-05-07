@@ -16,11 +16,13 @@ export const INVENTORY_STORAGE_NAMESPACE = createHash("sha256")
   .slice(0, 8);
 export const INVENTORY_COLUMN_BY_MODULE_INDEX = "ByModuleSortOrder";
 export const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
+/** GSI on the vendorPricingTable for "all vendors selling this item" queries. */
+export const INVENTORY_VENDOR_PRICING_BY_ITEM_INDEX = "ByItemId";
 
 export const EDIT_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"]);
 export const COLUMN_ADMIN_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
 export const OWNER_ROLES = new Set(["OWNER", "ACCOUNT_OWNER"]);
-export const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate", "reorderLink", "unitCost", "packSize", "packCost"]);
+export const CORE_KEYS = new Set(["quantity", "minQuantity", "expirationDate", "unit"]);
 export const STORAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 export const PROVISIONING_RETRY_AFTER_MS = 2000;
 

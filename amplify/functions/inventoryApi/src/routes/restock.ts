@@ -21,6 +21,126 @@ import { buildAuditEvent, writeAuditEvents } from "../audit";
 import { listAllItems } from "../items";
 import { findLocationByName, createLocation } from "../locations";
 import { listLocations } from "../columns";
+import { upsertVendorPricingFromReceive } from "./vendor-pricing";
+import {
+  pricePerCanonical as deriveCanonicalPrice,
+  dimensionForUnit,
+  type Dimension,
+} from "../uom";
+
+/** 1h.7: route an order line's purchase amount + unit onto the dual-axis
+ *  pack schema for the (item, vendor) pricing row.
+ *
+ *  An order line carries:
+ *   - `purchaseAmount` + `purchaseUnit` — what the user typed at compose
+ *     time ("2.5 lb beef" or "1 ct bag"). Optional.
+ *   - `packSize` — set when composed in pack mode; means "this line is
+ *     ordering N count of items as one pack".
+ *
+ *  Mapping rules:
+ *   - count-dimension `purchaseUnit` ("ct", "dozen") → `packCount`. We
+ *     fold the dozen into 12 ct so the pricing row is always in singles.
+ *   - weight or volume `purchaseUnit` → `packAmount` + `packAmountUnit`.
+ *   - legacy pack-mode (`packSize` set, no purchaseUnit) → `packCount`.
+ *
+ *  Returns a partial object spreadable into the upsert input. Caller
+ *  layers `packCost`/`reorderUrl` separately. */
+const mapPurchaseToPackAxes = (
+  orderItem: { purchaseAmount?: number; purchaseUnit?: string; packSize?: number },
+): { packCount?: number; packAmount?: number; packAmountUnit?: string } => {
+  const out: { packCount?: number; packAmount?: number; packAmountUnit?: string } = {};
+  const unit = (orderItem.purchaseUnit ?? "").trim().toLowerCase();
+  const amount = orderItem.purchaseAmount;
+  if (unit && amount !== undefined && Number.isFinite(amount) && amount > 0) {
+    const dim = dimensionForUnit(unit);
+    if (dim === "count") {
+      // Normalize "dozen" → 12 ct so the count axis is always in singles.
+      // Anything else in the count dimension stays as is (just "ct" today).
+      out.packCount = unit === "dozen" ? amount * 12 : amount;
+    } else if (dim === "weight" || dim === "volume") {
+      out.packAmount = amount;
+      out.packAmountUnit = unit;
+    }
+    // Unknown dimension: leave both axes unset; the row records cost only.
+  }
+  // Pack-mode legacy path: packSize alone (no purchaseUnit) means
+  // "ordering one pack of N items". Treat that as packCount unless we
+  // already set packCount above (purchaseUnit took precedence).
+  if (out.packCount === undefined && orderItem.packSize !== undefined) {
+    out.packCount = orderItem.packSize;
+  }
+  return out;
+};
+
+/** Parse + validate the amount/UoM/price triplet off a raw order entry. The
+ *  dimension family (count|weight|volume) is *inferred* from the unit string
+ *  via uom.ts — the client doesn't send it (1f). Server derives
+ *  pricePerCanonical so client and server can never disagree on the math.
+ *  Returns either { error } for the caller to surface, or { fields } to
+ *  spread onto the order item. */
+const parsePurchaseFields = (
+  entry: Record<string, unknown> | undefined,
+  idx: number,
+): { error: string } | { fields: Partial<{
+  purchaseAmount: number;
+  purchaseUnit: string;
+  purchasePrice: number;
+  pricePerCanonical: number;
+  dimension: Dimension;
+}> } => {
+  const rawAmount = entry?.purchaseAmount;
+  const rawUnit = entry?.purchaseUnit;
+  const rawPrice = entry?.purchasePrice;
+
+  let purchaseAmount: number | undefined;
+  if (rawAmount !== undefined && rawAmount !== null && rawAmount !== "") {
+    purchaseAmount = Number(rawAmount);
+    if (!Number.isFinite(purchaseAmount) || purchaseAmount <= 0) {
+      return { error: `Entry ${idx + 1}: purchase amount must be greater than 0.` };
+    }
+  }
+
+  const purchaseUnit = typeof rawUnit === "string" ? rawUnit.trim() : "";
+
+  let purchasePrice: number | undefined;
+  if (rawPrice !== undefined && rawPrice !== null && rawPrice !== "") {
+    purchasePrice = Number(rawPrice);
+    if (!Number.isFinite(purchasePrice) || purchasePrice < 0) {
+      return { error: `Entry ${idx + 1}: purchase price must be a non-negative number.` };
+    }
+  }
+
+  // Infer dimension from the unit string — `unit` on the item is the single
+  // source of truth post-1f. Unknown units (typed in error) get rejected
+  // here so they can't poison the price-history view.
+  let dimension: Dimension | undefined;
+  if (purchaseUnit) {
+    const inferred = dimensionForUnit(purchaseUnit);
+    if (!inferred) {
+      return { error: `Entry ${idx + 1}: unrecognized unit "${purchaseUnit}".` };
+    }
+    dimension = inferred;
+  }
+
+  let pricePerCanonical: number | undefined;
+  if (purchaseAmount !== undefined && purchaseUnit && purchasePrice !== undefined) {
+    const result = deriveCanonicalPrice(purchasePrice, purchaseAmount, purchaseUnit);
+    if (!result) {
+      return { error: `Entry ${idx + 1}: unrecognized unit "${purchaseUnit}".` };
+    }
+    pricePerCanonical = result.pricePerCanonical;
+  }
+
+  return {
+    fields: {
+      ...(purchaseAmount !== undefined ? { purchaseAmount } : {}),
+      ...(purchaseUnit ? { purchaseUnit } : {}),
+      ...(purchasePrice !== undefined ? { purchasePrice } : {}),
+      ...(pricePerCanonical !== undefined ? { pricePerCanonical } : {}),
+      ...(dimension ? { dimension } : {}),
+    },
+  };
+};
 
 export const handleListRestockOrders = async (ctx: RouteContext) => {
   const { access, storage } = ctx;
@@ -83,6 +203,12 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
       return json(400, { error: `Entry ${i + 1}: unit cost must be a non-negative number.` });
     }
 
+    // 1b: parse optional amount/UoM/price triplet + dimension. Server derives
+    // pricePerCanonical so client previews can't drift from persisted values.
+    const purchaseParsed = parsePurchaseFields(entry as Record<string, unknown> | undefined, i);
+    if ("error" in purchaseParsed) return json(400, { error: purchaseParsed.error });
+    const purchaseFields = purchaseParsed.fields;
+
     if (!itemId) {
       // Freeform item — not yet in inventory
       const itemName = String(entry?.itemName ?? "").trim();
@@ -120,6 +246,7 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
         ...(minQuantity !== undefined ? { minQuantity } : {}),
         ...(packSize !== undefined ? { packSize } : {}),
         ...(packCost !== undefined ? { packCost } : {}),
+        ...purchaseFields,
       });
     } else {
       const item = byId.get(itemId);
@@ -156,6 +283,7 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
         ...(reorderLinkExisting ? { reorderLink: reorderLinkExisting } : {}),
         ...(packSizeExisting !== undefined ? { packSize: packSizeExisting } : {}),
         ...(packCostExisting !== undefined ? { packCost: packCostExisting } : {}),
+        ...purchaseFields,
       });
     }
   }
@@ -293,7 +421,13 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
       return json(400, { error: `Line ${i + 1}: unit cost must be a non-negative number.` });
     }
     const addToInventory = line?.addToInventory === true;
-    receiveLines.push({ itemId, qtyThisReceive, ...(expirationDate ? { expirationDate } : {}), ...(unitCost !== undefined ? { unitCost } : {}), ...(addToInventory ? { addToInventory } : {}) });
+    receiveLines.push({
+      itemId,
+      qtyThisReceive,
+      ...(expirationDate ? { expirationDate } : {}),
+      ...(unitCost !== undefined ? { unitCost } : {}),
+      ...(addToInventory ? { addToInventory } : {}),
+    });
   }
 
   // Update inventory quantities and expiration dates
@@ -410,6 +544,34 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
           ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
           ...(orderVendor ? { vendor: orderVendor } : {}),
         }));
+
+        // 1g.5 → 1h.7: cache the (item, vendor) pricing on the new
+        // vendorPricing row so the i modal + Shop read latest data
+        // without re-walking receipts. Last-write-wins (receipt is
+        // newer than any user edit). Best-effort — receipt completes
+        // regardless.
+        //
+        // Map the order line's `purchaseUnit` onto the dual-axis schema:
+        //   - count units (ct/dozen) → `packCount`
+        //   - weight or volume units → `packAmount` + `packAmountUnit`
+        // packSize is the legacy "items per pack" field; when set it
+        // means the user composed the order in pack mode and the
+        // packSize is the pack's count. We forward it as packCount to
+        // avoid losing that data on receive.
+        if (orderVendor) {
+          // 1h.8: freeform-new path seeds the vendor pricing row from
+          // the order item's snapshot — that's the only path that
+          // creates a new pricing row on receive. Pack-shape edits to
+          // existing items happen via the i modal, not receive.
+          const upsert = mapPurchaseToPackAxes(orderItem);
+          await upsertVendorPricingFromReceive(storage, access, {
+            itemId: newItemId,
+            vendor: orderVendor,
+            ...upsert,
+            ...(orderItem.packCost !== undefined ? { packCost: orderItem.packCost } : {}),
+            ...(orderItem.reorderLink ? { reorderUrl: orderItem.reorderLink } : {}),
+          });
+        }
       }
       continue;
     }
@@ -496,6 +658,23 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
       ...(orderVendor ? { vendor: orderVendor } : {}),
       snapshot,
     }));
+
+    // 1g.5 → 1h.8: refresh the (item, vendor) pricing row's
+    // *price-history-related* fields from this receipt. We
+    // intentionally DO NOT write packCount/packAmount back here —
+    // those describe how the vendor sells, which is owned by the i
+    // modal. Receive only updates packCost (the receipt's actual
+    // total) and reorderUrl from the order line, leaving the pack
+    // shape alone. If the user wants to record a different pack
+    // count, they edit it in the modal (mid-receive even).
+    if (orderVendor) {
+      await upsertVendorPricingFromReceive(storage, access, {
+        itemId: line.itemId,
+        vendor: orderVendor,
+        ...(orderItem.packCost !== undefined ? { packCost: orderItem.packCost } : {}),
+        ...(orderItem.reorderLink ? { reorderUrl: orderItem.reorderLink } : {}),
+      });
+    }
   }
 
   // Determine new order status

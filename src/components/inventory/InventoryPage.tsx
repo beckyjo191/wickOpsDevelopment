@@ -28,9 +28,11 @@ import { InventoryUsagePage } from "../InventoryUsagePage";
 import { InventoryMobileCards } from "./InventoryMobileCards";
 import { InventoryDesktopTable } from "./InventoryDesktopTable";
 import { ImportDialogs } from "./ImportDialogs";
+import { ItemDetailModal } from "./ItemDetailModal";
 import { PaginationControls } from "./PaginationControls";
 import { LoadingState } from "../shared/LoadingState";
 import { ROWS_PER_PAGE } from "./inventoryTypes";
+import type { ItemVendorPricingEntry } from "../../lib/inventoryApi";
 
 export function InventoryPage({
   canEditInventory,
@@ -114,6 +116,7 @@ export function InventoryPage({
     newRowPositionRef: data.newRowPositionRef,
     editingOriginalIndexRef: data.editingOriginalIndexRef,
     sortEpoch: data.sortEpoch,
+    vendorPricing: data.vendorPricing,
   });
 
   // ── Notify parent of active tab so subnav-level UI can react ──────────────
@@ -233,6 +236,49 @@ export function InventoryPage({
       const next = new Set(prev);
       if (next.has(colId)) next.delete(colId);
       else next.add(colId);
+      return next;
+    });
+  };
+
+  // ── Item detail modal (1g.4) ─────────────────────────────────────────────
+  // Per-item vendor pricing surface. Opened via the row's "Details" button;
+  // reads the in-memory vendorPricing map from useInventoryData. Saves go
+  // direct to the upsert endpoint and patch the map in place — no full
+  // bootstrap reload.
+  const [detailItemId, setDetailItemId] = useState<string | null>(null);
+  const detailItem = detailItemId
+    ? data.rows.find((r) => r.id === detailItemId) ?? null
+    : null;
+  const detailItemPricing: ItemVendorPricingEntry[] = detailItemId
+    ? Array.from(data.vendorPricing.get(detailItemId)?.values() ?? [])
+    : [];
+  const handlePricingUpserted = (entry: ItemVendorPricingEntry) => {
+    data.setVendorPricing((prev) => {
+      const next = new Map(prev);
+      const inner = new Map(next.get(entry.itemId) ?? new Map());
+      inner.set(entry.vendorLower, entry);
+      next.set(entry.itemId, inner);
+      return next;
+    });
+  };
+  const handlePricingDeleted = (id: string) => {
+    data.setVendorPricing((prev) => {
+      const next = new Map(prev);
+      // Find the inner map containing this id and remove the entry. The id
+      // shape is `${itemId}#${vendorLower}` but we don't trust that here —
+      // walk the maps so a future id-format change doesn't silently break
+      // delete state sync.
+      for (const [itemId, inner] of next.entries()) {
+        for (const [vendorLower, entry] of inner.entries()) {
+          if (entry.id === id) {
+            const updated = new Map(inner);
+            updated.delete(vendorLower);
+            if (updated.size === 0) next.delete(itemId);
+            else next.set(itemId, updated);
+            return next;
+          }
+        }
+      }
       return next;
     });
   };
@@ -703,6 +749,8 @@ export function InventoryPage({
                 activeTab={filters.activeTab}
                 availableVendors={data.registeredVendors}
                 onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
+                allowedUnits={data.allowedUnits}
+                vendorPricing={data.vendorPricing}
               />
             ) : (
               <InventoryDesktopTable
@@ -745,6 +793,9 @@ export function InventoryPage({
                 onRemoveRow={canEditInventory ? data.onRequestRemoveRow : undefined}
                 availableVendors={data.registeredVendors}
                 onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
+                allowedUnits={data.allowedUnits}
+                vendorPricing={data.vendorPricing}
+                onOpenItemDetails={canEditInventory ? setDetailItemId : undefined}
               />
             )}
 
@@ -832,6 +883,21 @@ export function InventoryPage({
           +
         </button>
       )}
+
+      {detailItemId && detailItem ? (
+        <ItemDetailModal
+          itemId={detailItemId}
+          itemName={String(detailItem.values.itemName ?? "").trim() || `Item ${detailItemId.slice(0, 8)}`}
+          pricing={detailItemPricing}
+          availableVendors={data.registeredVendors}
+          allowedUnits={data.allowedUnits}
+          tracksUnits={data.tracksUnits}
+          onClose={() => setDetailItemId(null)}
+          onPricingUpserted={handlePricingUpserted}
+          onPricingDeleted={handlePricingDeleted}
+          onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
+        />
+      ) : null}
     </section>
   );
 }

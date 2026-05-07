@@ -14,6 +14,7 @@ import {
   type InventoryColumn,
   type InventoryLocation,
   type InventoryRow,
+  type ItemVendorPricingEntry,
 } from "../../../lib/inventoryApi";
 import { pickLoadingLine } from "../../../lib/loadingLines";
 import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../../lib/currency";
@@ -107,10 +108,22 @@ export function useInventoryData({
   const [csvImportDialog, setCsvImportDialog] = useState<CsvImportDialogState | null>(null);
   const [pasteImportDialog, setPasteImportDialog] = useState<PasteImportDialogState | null>(null);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
+  // 1g: per-(item, vendor) pricing rows, indexed for fast modal + Shop reads.
+  // Source of truth is the bootstrap response + delta updates from upsert /
+  // delete calls. Map<itemId, Map<vendorLower, entry>> so the modal load
+  // is O(1) per item.
+  const [vendorPricing, setVendorPricing] = useState<Map<string, Map<string, ItemVendorPricingEntry>>>(new Map());
   const [addingLocation, setAddingLocation] = useState(false);
   const [newLocationName, setNewLocationName] = useState("");
   const [addLocationError, setAddLocationError] = useState<string | null>(null);
   const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
+  // 1h.2c: per-org curated unit list. Empty array fallback signals "use
+  // the master KNOWN_UNITS list" — every legacy org sees the same picker
+  // they did before until they curate via Settings.
+  const [allowedUnits, setAllowedUnits] = useState<string[]>([]);
+  // 1h.7: org-wide UoM gate. Default false (EMS-style) — i modal
+  // hides Amount/Unit fields. Pantry/restaurant orgs flip on in Settings.
+  const [tracksUnits, setTracksUnits] = useState<boolean>(false);
   const [migrationToastShown, setMigrationToastShown] = useState(false);
   /** Open-state for the unified Remove dialog. The rowIds are captured at
    *  the moment of opening so subsequent selection changes don't shift the
@@ -183,6 +196,18 @@ export function useInventoryData({
     setOrganizationId(String(bootstrap.access?.organizationId ?? ""));
     setLocations(bootstrap.locations ?? []);
     setRegisteredVendors(bootstrap.registeredVendors ?? []);
+    setAllowedUnits(bootstrap.allowedUnits ?? []);
+    setTracksUnits(bootstrap.tracksUnits ?? false);
+    // 1g: index vendor-pricing rows by itemId → vendorLower → entry. Bootstrap
+    // returns a flat array; transformed once on apply so reads in the modal
+    // and Shop are O(1).
+    const nextVendorPricing = new Map<string, Map<string, ItemVendorPricingEntry>>();
+    for (const entry of bootstrap.vendorPricing ?? []) {
+      const inner = nextVendorPricing.get(entry.itemId) ?? new Map<string, ItemVendorPricingEntry>();
+      inner.set(entry.vendorLower, entry);
+      nextVendorPricing.set(entry.itemId, inner);
+    }
+    setVendorPricing(nextVendorPricing);
     setColumns(resolvedColumns);
     setUserColumnOverrides(bootstrap.columnVisibilityOverrides ?? {});
     // Show the migration toast once per session per org. The server only sets
@@ -1566,6 +1591,18 @@ export function useInventoryData({
     // Vendors
     registeredVendors,
     setRegisteredVendors,
+    // Allowed units (1h.2c)
+    allowedUnits,
+    setAllowedUnits,
+    // Org-wide tracksUnits gate (1h.7) — drives whether the i modal
+    // surfaces Amount/Unit fields.
+    tracksUnits,
+    setTracksUnits,
+    // Vendor pricing (1g) — Map<itemId, Map<vendorLower, entry>>. Item-detail
+    // modal reads from this; on save it patches the map directly so the next
+    // render reflects the change without a bootstrap roundtrip.
+    vendorPricing,
+    setVendorPricing,
     // Remove (unified dialog: routes to retire or delete based on reason)
     removeTarget,
     onRequestRemoveRow,

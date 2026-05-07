@@ -6,11 +6,13 @@ import {
   CheckCircle,
   ChevronDown,
   ChevronUp,
+  Info,
   Loader2,
   PackageCheck,
   Plus,
   Search,
   ShoppingCart,
+  Trash2,
   X,
 } from "lucide-react";
 import { HelpModal } from "./shared/HelpModal";
@@ -32,9 +34,18 @@ import {
   type RestockOrder,
   type RestockOrderItem,
   type RestockReceiveLine,
+  type ItemVendorPricingEntry,
 } from "../lib/inventoryApi";
-import { ReorderTab, VendorSelect, type OrderItem } from "./ReorderTab";
+import { VendorSelect, type OrderItem } from "./ReorderTab";
+import { ShoppingListTab } from "./ShoppingListTab";
+import { ItemDetailModal } from "./inventory/ItemDetailModal";
+import { PaginationControls } from "./inventory/PaginationControls";
 import { formatCurrency, parseCurrency } from "../lib/currency";
+import {
+  dimensionForUnit,
+  KNOWN_UNITS,
+  pricePerCanonical,
+} from "../lib/uom";
 
 
 interface OrdersPageProps {
@@ -103,13 +114,26 @@ type ReceiveLine = {
    *  Lets you stamp an expiration date during receive even if the item was
    *  previously treated as permanent. Always optional — never validated. */
   showExpirationInput: boolean;
-  /** Pack size from the item's inventory row. >0 enables "Received by box?"
-   *  mode where the user enters boxes + box cost instead of units + unit cost. */
+  /** Pack size snapshotted from the order line's vendor pricing row at
+   *  compose time. >0 enables "Received by pack" mode where the user
+   *  enters packs + pack cost instead of units + unit cost. The receive
+   *  form live-reads the current `vendorPricing` map on render to
+   *  pick up i-modal edits made mid-receive — this snapshot is the
+   *  fallback for freeform items that don't have a vendor pricing row
+   *  yet. */
   packSize: number;
   /** Box mode toggle (only meaningful when packSize > 0). When true,
-   *  qtyThisReceive is in BOXES and unitCost is the PER-BOX price. We convert
+   *  qtyThisReceive is in PACKS and unitCost is the PER-PACK price. We convert
    *  back to units on submit. */
   receivingAsBoxes: boolean;
+  /** The item's tracking unit (1f). Drives the receive form's label so
+   *  weight/volume items don't read "Qty Receiving (ct)" by default.
+   *  Falls back to "ct" for legacy items without a unit set. */
+  unit: string;
+  /** Pack label from the vendor's pricing row (1g). Used to render pack
+   *  info as "1 box of 100 ct" instead of generic "1 pack of 100 ct".
+   *  Defaults to "pack" when absent. */
+  packLabel: string;
   error: string;
 };
 
@@ -117,6 +141,8 @@ function ReceiveOrderForm({
   order,
   hasExpirationColumn,
   inventoryRows,
+  vendorPricing,
+  onOpenItemDetails,
   onReceived,
   onCancel,
 }: {
@@ -125,6 +151,15 @@ function ReceiveOrderForm({
   /** Current inventory rows — used to pre-fill unit cost from the row's
    *  cached latest price when the order item itself doesn't carry one. */
   inventoryRows: InventoryRow[];
+  /** 1g.6: per-(item, vendor) pricing rows. Pre-fill prefers the entry for
+   *  the order's vendor (most accurate — matches what the user paid last
+   *  time at this vendor) over the row.values cached latest. */
+  vendorPricing: Map<string, Map<string, ItemVendorPricingEntry>>;
+  /** 1h.8: per-line "edit pricing" opener. Each line renders an i
+   *  button that calls this with the item id; the parent owns the
+   *  ItemDetailModal mount. Mid-receive edits to the modal flow back
+   *  to this form via `vendorPricing` (live-read on render). */
+  onOpenItemDetails?: (itemId: string) => void;
   onReceived: () => void;
   onCancel: () => void;
 }) {
@@ -140,21 +175,53 @@ function ReceiveOrderForm({
       let tracksExpiration = false;
       let packSize = 0;
       let rowPackCost: number | undefined;
+      let rowUnit = "ct"; // 1f: tracking unit per row, default ct for legacy items
+      let packLabel = ""; // 1g: vendor's name for the pack ("box", "bag"); default → "pack"
       if (!freeform) {
         const row = inventoryRows.find((r) => r.id === i.itemId);
+        // 1g.6: vendorPricing for the order's vendor is the freshest known
+        // price. Falls through to the legacy row.values reads when no entry
+        // exists yet (transitional — the migration seeded entries from
+        // existing data, so most items will have one).
+        const vp = order.vendor && row
+          ? vendorPricing.get(row.id)?.get(order.vendor.trim().toLowerCase())
+          : undefined;
         if (row) {
-          const rowCost = Number(row.values.unitCost);
-          if (prefillUnitCost === undefined && Number.isFinite(rowCost) && rowCost >= 0) {
-            prefillUnitCost = rowCost;
+          if (prefillUnitCost === undefined) {
+            if (vp?.unitCost !== undefined) {
+              prefillUnitCost = vp.unitCost;
+            } else {
+              const rowCost = Number(row.values.unitCost);
+              if (Number.isFinite(rowCost) && rowCost >= 0) prefillUnitCost = rowCost;
+            }
           }
           // A non-freeform item "tracks expiration" when its inventory row
           // already has a non-empty expiration date. Permanent items (e.g.
           // stethoscopes) have no expiration and shouldn't prompt for one.
           tracksExpiration = String(row.values.expirationDate ?? "").trim() !== "";
-          const rowPack = Number(row.values.packSize);
-          if (Number.isFinite(rowPack) && rowPack > 0) packSize = rowPack;
-          const pc = Number(row.values.packCost);
-          if (Number.isFinite(pc) && pc >= 0) rowPackCost = pc;
+          // 1h.7: prefer the new dual-axis `packCount` field (count of
+          // items per pack) over legacy `packSize`. Falls back to the
+          // legacy row.values.packSize for very old rows that haven't
+          // been touched in the i modal yet.
+          if (vp?.packCount !== undefined && vp.packCount > 0) {
+            packSize = vp.packCount;
+          } else if (vp?.packSize !== undefined && vp.packSize > 0) {
+            packSize = vp.packSize;
+          } else {
+            const rowPack = Number(row.values.packSize);
+            if (Number.isFinite(rowPack) && rowPack > 0) packSize = rowPack;
+          }
+          if (vp?.packCost !== undefined && vp.packCost >= 0) {
+            rowPackCost = vp.packCost;
+          } else {
+            const pc = Number(row.values.packCost);
+            if (Number.isFinite(pc) && pc >= 0) rowPackCost = pc;
+          }
+          const u = String(row.values.unit ?? "").trim();
+          if (u) rowUnit = u;
+          // packLabel only lives on the per-vendor pricing row; no inventory-
+          // row fallback. Empty string → render falls back to "pack".
+          if (vp?.packLabel) packLabel = vp.packLabel;
         }
       }
       // When the item is pack-based, box mode is the default and qty + cost
@@ -191,6 +258,8 @@ function ReceiveOrderForm({
         showExpirationInput: false,
         packSize,
         receivingAsBoxes,
+        unit: rowUnit,
+        packLabel,
         error: "",
       };
     }),
@@ -224,14 +293,23 @@ function ReceiveOrderForm({
       // without calling the API (handled earlier in handleConfirmClick).
       // When receivingAsBoxes, qtyThisReceive is # of boxes and unitCost is
       // the per-box price; convert both back to per-unit terms before sending.
+      // 1h.8: live-read pack size from current vendorPricing on
+      // submit. Modal edits during receive flow are reflected in the
+      // payload because we don't trust the per-line snapshot for
+      // anything other than fallback (freeform items pre-pricing).
+      const orderVendorLowerSubmit = (order.vendor ?? "").trim().toLowerCase();
       const receiveLines: RestockReceiveLine[] = validated
         .filter((l) => Number(l.qtyThisReceive) > 0)
         .map((l) => {
           const rawQty = Number(l.qtyThisReceive);
-          const unitQty = l.receivingAsBoxes && l.packSize > 0 ? rawQty * l.packSize : rawQty;
+          const liveVp = orderVendorLowerSubmit
+            ? vendorPricing.get(l.itemId)?.get(orderVendorLowerSubmit)
+            : undefined;
+          const effectivePackSize = Number(liveVp?.packCount ?? liveVp?.packSize ?? l.packSize ?? 0);
+          const unitQty = l.receivingAsBoxes && effectivePackSize > 0 ? rawQty * effectivePackSize : rawQty;
           const perUnitCost = l.unitCost.trim()
-            ? (l.receivingAsBoxes && l.packSize > 0
-                ? parseCurrency(l.unitCost) / l.packSize
+            ? (l.receivingAsBoxes && effectivePackSize > 0
+                ? parseCurrency(l.unitCost) / effectivePackSize
                 : parseCurrency(l.unitCost))
             : undefined;
           return {
@@ -361,47 +439,106 @@ function ReceiveOrderForm({
           {hasExpirationColumn && <span>Expiration</span>}
           <span>Unit Cost</span>
         </div>
-        {lines.map((line) => (
+        {lines.map((line) => {
+          // 1h.8: live-read pack size from current vendorPricing on
+          // each render. The order line carries a snapshot from
+          // compose time, but if the user opens the i modal mid-
+          // receive and changes pack count, we want the receive form
+          // to reflect that immediately. Falls through to the
+          // snapshot for items with no vendor pricing row yet
+          // (freeform purchases that haven't materialized).
+          const orderVendorLower = (order.vendor ?? "").trim().toLowerCase();
+          const liveVp = orderVendorLower
+            ? vendorPricing.get(line.itemId)?.get(orderVendorLower)
+            : undefined;
+          const effectivePackSize = Number(liveVp?.packCount ?? liveVp?.packSize ?? line.packSize ?? 0);
+          return (
           <div key={line.itemId} className="order-receive-row">
             <div className="order-receive-item-name">
-              <span>{line.itemName}</span>
-              {line.isFreeform && (
-                <span className="order-receive-new-badge">New item</span>
-              )}
-              {line.packSize > 0 && (
-                <div className="order-receive-packinfo">
-                  {line.packSize} per box
-                  {Number(line.qtyThisReceive) > 0 && (
-                    <span className="order-receive-packinfo-math">
-                      {" "}· adds {Number(line.qtyThisReceive) * line.packSize} to stock
-                    </span>
-                  )}
-                </div>
-              )}
+              <div className="order-receive-name-row">
+                {/* 1h.8: per-line edit-pricing button. Mirrors the
+                 *  Reorder + Inventory pattern — single canonical
+                 *  entry into the i modal. Hidden for freeform items
+                 *  (no vendor pricing row exists yet). */}
+                {onOpenItemDetails && !line.isFreeform ? (
+                  <button
+                    type="button"
+                    className="shop-row-edit-btn order-receive-edit-btn"
+                    onClick={() => onOpenItemDetails(line.itemId)}
+                    aria-label={`Edit pricing for ${line.itemName}`}
+                    title="Edit pack count, price, or URL"
+                  >
+                    <Info size={14} aria-hidden="true" />
+                  </button>
+                ) : null}
+                <span>{line.itemName}</span>
+                {line.isFreeform && (
+                  <span className="order-receive-new-badge">New item</span>
+                )}
+              </div>
+              {effectivePackSize > 0 && (() => {
+                // Render as "1 box of 100 ct" — count + label + size + unit.
+                //
+                // 1h.8: pack-size edits go through the i modal (the
+                // edit-pricing button to the left of the line opens
+                // it). The receive form live-reads the current
+                // vendorPricing on each render, so a user who edits
+                // the modal mid-receive sees the new pack size
+                // reflected here immediately — no inline override.
+                //
+                // Defensive: only append the unit suffix when `unit`
+                // is a recognized UoM string. Legacy rows can carry
+                // weird values (e.g. a stale packLabel that ended up
+                // in the unit field) — falling back to a unit-less
+                // "1 pack of 100" reads cleanly without garbling.
+                const labelSingular = line.packLabel || "pack";
+                const labelPlural = line.packLabel
+                  ? (line.packLabel + "s")
+                  : "packs";
+                const receiving = Number(line.qtyThisReceive) || 0;
+                const label = receiving === 1 ? labelSingular : labelPlural;
+                const unitClean = (line.unit ?? "").trim();
+                const unitSuffix = unitClean && dimensionForUnit(unitClean)
+                  ? ` ${unitClean}`
+                  : "";
+                return (
+                  <div className="order-receive-packinfo">
+                    {receiving > 0
+                      ? `${receiving} ${label} of ${effectivePackSize}${unitSuffix}`
+                      : `${labelSingular} of ${effectivePackSize}${unitSuffix}`}
+                    {receiving > 0 && (
+                      <span className="order-receive-packinfo-math">
+                        {" "}· adds {receiving * effectivePackSize}{unitSuffix} to stock
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
               {line.error && <span className="order-form-line-error">{line.error}</span>}
             </div>
             <div className="order-receive-cell" data-label="Ordered">
               <div className="order-receive-progress">
                 <span>
-                  {line.receivingAsBoxes && line.packSize > 0
-                    ? `${Math.ceil(line.qtyOrdered / line.packSize)} box${Math.ceil(line.qtyOrdered / line.packSize) === 1 ? "" : "es"}`
-                    : line.qtyOrdered}
+                  {line.receivingAsBoxes && effectivePackSize > 0
+                    ? `${Math.ceil(line.qtyOrdered / effectivePackSize)} pack${Math.ceil(line.qtyOrdered / effectivePackSize) === 1 ? "" : "s"}`
+                    : `${line.qtyOrdered} ${line.unit}`}
                 </span>
                 {line.qtyReceived > 0 && (
-                  <span className="order-receive-remaining"> ({line.qtyRemaining} remaining)</span>
+                  <span className="order-receive-remaining"> ({line.qtyRemaining} {line.unit} remaining)</span>
                 )}
               </div>
             </div>
             <div
               className="order-receive-cell"
-              data-label={line.receivingAsBoxes ? "Boxes Receiving" : "Qty Receiving"}
+              data-label={line.receivingAsBoxes ? "Packs Receiving" : `Receiving (${line.unit})`}
             >
               <input
                 className="field"
                 type="number"
                 min="0"
-                max={line.receivingAsBoxes && line.packSize > 0
-                  ? Math.ceil(line.qtyRemaining / line.packSize)
+                step="any"
+                max={line.receivingAsBoxes && effectivePackSize > 0
+                  ? Math.ceil(line.qtyRemaining / effectivePackSize)
                   : line.qtyRemaining}
                 value={line.qtyThisReceive}
                 onChange={(e) => updateLine(line.itemId, { qtyThisReceive: e.target.value, error: "" })}
@@ -431,7 +568,7 @@ function ReceiveOrderForm({
             )}
             <div
               className="order-receive-cell"
-              data-label={line.receivingAsBoxes ? "Cost per Box" : "Unit Cost"}
+              data-label={line.receivingAsBoxes ? "Cost per Pack" : `Cost per ${line.unit}`}
             >
               <input
                 className="field"
@@ -444,7 +581,8 @@ function ReceiveOrderForm({
               />
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {error && <p className="order-form-error">{error}</p>}
@@ -532,14 +670,23 @@ function OrderCard({
   order,
   hasExpirationColumn,
   inventoryRows,
+  vendorPricing,
   onRefresh,
+  onOpenItemDetails,
 }: {
   order: RestockOrder;
   hasExpirationColumn: boolean;
   inventoryRows: InventoryRow[];
+  /** 1g.6: per-(item, vendor) pricing for the receive form pre-fill. */
+  vendorPricing: Map<string, Map<string, ItemVendorPricingEntry>>;
   // closedOrder is passed when the order was just received or closed,
   // so the parent can clear orderedAt for its items and refresh inventory.
   onRefresh: (closedOrder?: RestockOrder) => void;
+  /** 1h.8: per-line "edit pricing" callback. Forwarded to the receive
+   *  form so each line gets an i button that opens the i modal scoped
+   *  to that item. Modal edits live-update the form's pack-size
+   *  readout via the parent's vendorPricing map. */
+  onOpenItemDetails?: (itemId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showReceive, setShowReceive] = useState(false);
@@ -581,6 +728,8 @@ function OrderCard({
         order={order}
         hasExpirationColumn={hasExpirationColumn}
         inventoryRows={inventoryRows}
+        vendorPricing={vendorPricing}
+        onOpenItemDetails={onOpenItemDetails}
         onReceived={() => {
           setShowReceive(false);
           // Pass NO `closedOrder` — receive already cleared orderedAt
@@ -1170,6 +1319,13 @@ type ComposeOrderSubmitLine = {
    *  record (analytics needs the per-pack figure for "spend by pack"). */
   packSize?: number;
   packCost?: number;
+  // ── 1f: amount/UoM/price triplet ──────────────────────────────────────────
+  // Server infers dimension from purchaseUnit via uom.ts; client doesn't
+  // need to send it. Legacy unitCost/packSize/packCost above are still
+  // populated for back-compat with the receive form display.
+  purchaseAmount?: number;
+  purchaseUnit?: string;
+  purchasePrice?: number;
 };
 
 type ComposeLine = {
@@ -1178,35 +1334,40 @@ type ComposeLine = {
    *  inventory row. */
   itemId?: string;
   itemName: string;
-  /** String-typed so the user can clear the input. Parsed on submit. */
-  qty: string;
-  /** Reorder threshold for freeform items. Persisted to the new inventory
-   *  row on receive so the item shows up in Reorder when low. Existing
-   *  items already have a minQuantity on their inventory row, so this is
-   *  only collected for freeform lines (no itemId). */
+  /** UoM for this line. For existing items it's read from the inventory
+   *  row's `unit` column (default "ct" if absent). For freeform items the
+   *  user picks from the line's unit dropdown. The dimension family
+   *  (count|weight|volume) is inferred from this string at runtime via
+   *  uom.ts — no separate dimension field. */
+  unit: string;
+  /** Purchase amount in `unit` (string-typed so the user can clear).
+   *  Count items get a QtyStepper; weight/volume get a decimal input. */
+  amount: string;
+  /** Total $ paid for this purchase line (currency string). e.g. "$14.99". */
+  price: string;
+  /** Reorder threshold for freeform items. Existing items already carry
+   *  minQuantity on their inventory row, so only collected for freeform. */
   minQuantity: string;
-  /** Product URL (where to reorder). Persisted on the order item and on
-   *  the inventory row when received with addToInventory. */
+  /** Product URL (where to reorder). Persisted on the order item and on the
+   *  inventory row when received with addToInventory. */
   productUrl: string;
-  /** Per-unit cost (currency input string — e.g. "$0.89"). Pre-filled from
-   *  the inventory row when an existing item is picked; user can edit. On
-   *  submit any non-empty value writes back to the inventory row's unitCost
-   *  so future analytics see the up-to-date price. */
-  unitCost: string;
-  /** Pack size (units per box). Pre-filled from inventory row. */
-  packSize: string;
-  /** Pack cost (price per box). Pre-filled from inventory row. */
-  packCost: string;
-  /** Which pricing mode is shown for this line — mirrors the Reorder tab's
-   *  Unit/Box switcher. Drives which inputs are visible (per-unit cost vs.
-   *  pack size + pack cost). Both groups still write to their respective
-   *  ComposeLine fields, so toggling doesn't lose typed values. */
-  priceMode: "unit" | "box";
   /** Whether the reorder URL input is visible. Hidden behind a button
-   *  ("+ Reorder URL") when empty so the line stays compact for items the
-   *  user doesn't need to set a URL on; auto-true when a URL is pre-filled
-   *  from the picked inventory row. */
+   *  ("+ Reorder URL") when empty so the line stays compact; auto-true when
+   *  a URL is pre-filled from the picked inventory row. */
   urlOpen: boolean;
+  /** 1h.1: pack-mode for ordering. Single = amount is in primary units;
+   *  Pack = amount is in packs (multiplied by packSize at submit).
+   *  Default is "pack" when the vendor has packSize on file (most natural
+   *  way to order — "2 boxes" not "200 pads"); otherwise "single". The
+   *  toggle is always available even without a vendor packSize so a
+   *  one-off pack purchase ("normally buy by unit but grabbed a box of 10
+   *  this time") gets recorded properly. */
+  mode: "single" | "pack";
+  /** 1h.1d: pack size for this purchase when no vendor packSize is on
+   *  file. Empty string when the vendor's stored packSize is being used
+   *  (the more common case post-1g.7 migration). Submitted alongside the
+   *  receipt so the next bootstrap caches it on the vendor's pricing row. */
+  packSizeDraft: string;
 };
 
 function ComposeOrderPanel({
@@ -1214,6 +1375,8 @@ function ComposeOrderPanel({
   availableVendors,
   onAddVendor,
   onSubmit,
+  vendorPricing,
+  allowedUnits,
 }: {
   inventoryRows: InventoryRow[];
   availableVendors: string[];
@@ -1224,51 +1387,96 @@ function ComposeOrderPanel({
     lines: ComposeOrderSubmitLine[];
     markReceived: boolean;
   }) => Promise<void>;
+  /** 1g.6: per-(item, vendor) pricing rows. When the user has selected a
+   *  vendor at the top of the form AND picks an existing item that has a
+   *  pricing row for that vendor, defaults are pulled from there. */
+  vendorPricing: Map<string, Map<string, ItemVendorPricingEntry>>;
+  /** 1h.2c: per-org curated unit list, used by the freeform unit picker.
+   *  Empty falls back to the master KNOWN_UNITS list. */
+  allowedUnits: string[];
 }) {
   const blankLineExtras = {
     minQuantity: "",
     productUrl: "",
-    unitCost: "",
-    packSize: "",
-    packCost: "",
+    amount: "1",
+    price: "",
   };
   const makeEmptyLine = (): ComposeLine => ({
     itemName: "",
-    qty: "1",
-    priceMode: "unit",
+    unit: "ct",
     urlOpen: false,
+    mode: "single",
+    packSizeDraft: "",
     ...blankLineExtras,
   });
 
-  /** Build a partial ComposeLine patch with the existing inventory item's
-   *  pricing + link as defaults — so picking an item pre-fills what the user
-   *  most likely wants to keep. The user can still overwrite any of these
-   *  fields; on submit, only NON-EMPTY values write back to the inventory
-   *  row, so leaving a default alone is a no-op. */
-  const defaultsFromInventoryRow = (row: InventoryRow): Partial<ComposeLine> => {
+  /** Build a partial ComposeLine patch when picking an existing inventory
+   *  item. Pricing/pack/URL come ONLY from `vendorPricing[itemId][vendor]`
+   *  — never from legacy row.values fields. Those legacy fields belonged
+   *  to the pre-1g single-vendor world and bleed in stale data now: an
+   *  item that was last bought from BoundTree shouldn't show BoundTree's
+   *  URL when the user has Bitterroot selected (or no vendor at all).
+   *
+   *  Without an active vendor, the line shows just unit + blank pricing.
+   *  Without an entry for the active vendor, same. The user fills it in;
+   *  on submit the receive flow persists onto the (item, vendor) row.
+   *  Unit is always read from row.values.unit since it's item-level. */
+  const defaultsFromInventoryRow = (
+    row: InventoryRow,
+    activeVendor: string,
+  ): Partial<ComposeLine> => {
     const v = row.values;
-    const unitCost = v.unitCost !== undefined && v.unitCost !== null && String(v.unitCost).trim() !== ""
-      ? formatCurrency(Number(v.unitCost))
-      : "";
-    const packSize = v.packSize !== undefined && v.packSize !== null && String(v.packSize).trim() !== ""
-      ? String(v.packSize)
-      : "";
-    const packCost = v.packCost !== undefined && v.packCost !== null && String(v.packCost).trim() !== ""
-      ? formatCurrency(Number(v.packCost))
-      : "";
-    const reorderLink = typeof v.reorderLink === "string" && v.reorderLink.trim()
-      ? String(v.reorderLink)
-      : "";
-    // Default to Box mode when the row carries any pack data — that's how the
-    // user is already buying it. Otherwise stay in Unit mode.
-    const priceMode: "unit" | "box" = packSize || packCost ? "box" : "unit";
+    const storedUnit = String(v.unit ?? "").trim();
+
+    const vp = activeVendor
+      ? vendorPricing.get(row.id)?.get(activeVendor.trim().toLowerCase())
+      : undefined;
+
+    // 1h.7: derive the line's unit from the dual-axis pricing row.
+    //   - packAmountUnit set      → that's the bulk weight/volume unit.
+    //   - packCount set, no amount → count tracking ("ct").
+    //   - neither                  → fall back to legacy item.unit, then "ct".
+    const candidateUnit = (vp?.packAmountUnit ?? "").trim()
+      || (vp?.packCount !== undefined ? "ct" : "")
+      || storedUnit;
+    const unit = candidateUnit && dimensionForUnit(candidateUnit) ? candidateUnit : "ct";
+    const isCountUnit = dimensionForUnit(unit) === "count";
+
+    // Vendor-only sources — empty when no vp entry exists. No row.values
+    // fallback (legacy fields would leak data the user didn't intend).
+    // 1h.7: prefer packCount over the legacy packSize when both are
+    // present; old rows that haven't been touched in the i modal still
+    // surface via packSize so the compose preview isn't blank.
+    const unitCost = vp?.unitCost ?? null;
+    const packSize = vp?.packCount ?? vp?.packSize ?? null;
+    const packCost = vp?.packCost ?? null;
+    const reorderLink = vp?.reorderUrl ?? "";
+
+    const hasVendorPack = (packSize ?? 0) > 0;
+    const mode: "single" | "pack" = hasVendorPack ? "pack" : "single";
+
+    let amount = "1";
+    let price = "";
+    if (mode === "pack" && packSize && packSize > 0) {
+      amount = "1"; // 1 pack
+      if (packCost !== null) price = formatCurrency(packCost);
+    } else if (isCountUnit && unitCost !== null) {
+      amount = "1";
+      price = formatCurrency(unitCost);
+    }
+    // Weight/volume single mode (or any mode without a vendor entry):
+    // leave price blank — user types per-purchase.
+
     return {
-      unitCost,
-      packSize,
-      packCost,
+      unit,
+      amount,
+      price,
       productUrl: reorderLink,
-      priceMode,
       urlOpen: reorderLink.length > 0,
+      mode,
+      // Reset any user-typed pack-size override; vendor data (or its
+      // absence) drives this line's display now.
+      packSizeDraft: "",
     };
   };
 
@@ -1278,6 +1486,37 @@ function ComposeOrderPanel({
   // Always start with one empty line so the picker is visible — matches
   // Log Usage's pattern (one empty entry waiting for input).
   const [lines, setLines] = useState<ComposeLine[]>(() => [makeEmptyLine()]);
+
+  /** 1h.0: when the user changes the top-level vendor mid-edit, locked-in
+   *  lines re-pull pricing + URL from the new vendor's pricing row. Lines
+   *  the user added that have NO inventory itemId (freeform) are untouched
+   *  — their data is whatever the user typed. The receive-side info bug
+   *  ("BoundTree URL leaking into a Bitterroot session") is fixed here by
+   *  letting the defaults function refetch with the new activeVendor. */
+  const handleVendorChange = (next: string) => {
+    setVendor(next);
+    setLines((prev) => prev.map((l) => {
+      if (!l.itemId) return l; // freeform — leave the user's typed values
+      const row = inventoryRows.find((r) => r.id === l.itemId);
+      if (!row) return l;
+      const refreshed = defaultsFromInventoryRow(row, next);
+      // 1h.1: vendor change refreshes vendor-scoped fields. price/url/mode
+      // come straight from defaultsFromInventoryRow which now always
+      // returns defined values (empty when no vendor entry exists), so
+      // switching to a vendor with no data clears the previous vendor's
+      // pre-fill instead of leaving it stranded.
+      return {
+        ...l,
+        unit: refreshed.unit ?? l.unit,
+        amount: refreshed.amount ?? l.amount,
+        price: refreshed.price ?? "",
+        productUrl: refreshed.productUrl ?? "",
+        urlOpen: refreshed.urlOpen ?? false,
+        mode: refreshed.mode ?? "single",
+        packSizeDraft: "",
+      };
+    }));
+  };
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Lowercased item names already locked in across other lines — passed to
@@ -1300,7 +1539,7 @@ function ComposeOrderPanel({
   const pickExistingForLine = (idx: number, itemId: string, name: string) => {
     if (lines.some((l, i) => i !== idx && l.itemId === itemId)) return;
     const row = inventoryRows.find((r) => r.id === itemId);
-    const defaults = row ? defaultsFromInventoryRow(row) : {};
+    const defaults = row ? defaultsFromInventoryRow(row, vendor) : {};
     updateLine(idx, { itemId, itemName: name, ...defaults });
   };
 
@@ -1318,9 +1557,11 @@ function ComposeOrderPanel({
     updateLine(idx, {
       itemId: undefined,
       itemName: "",
+      unit: "ct",
       ...blankLineExtras,
-      priceMode: "unit",
       urlOpen: false,
+      mode: "single",
+      packSizeDraft: "",
     });
   };
 
@@ -1348,11 +1589,28 @@ function ComposeOrderPanel({
     for (let i = 0; i < filledLines.length; i++) {
       const l = filledLines[i];
       const name = l.itemName.trim();
-      const qty = Number(l.qty);
-      if (!Number.isFinite(qty) || qty <= 0) {
-        setError(`${name}: quantity must be greater than 0.`);
+      const amountNum = Number(l.amount);
+      if (!Number.isFinite(amountNum) || amountNum <= 0) {
+        setError(`${name}: amount must be greater than 0.`);
         return;
       }
+      // Reject unrecognized units up-front so the server doesn't have to
+      // bounce the request back. Picker constrains this in normal use.
+      const unitDimension = dimensionForUnit(l.unit);
+      if (!unitDimension) {
+        setError(`${name}: unrecognized unit "${l.unit}".`);
+        return;
+      }
+      let priceNum: number | undefined;
+      if (l.price.trim()) {
+        const parsed = parseCurrency(l.price);
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          setError(`${name}: price must be a non-negative number.`);
+          return;
+        }
+        priceNum = parsed;
+      }
+
       let minQuantity: number | undefined;
       if (l.minQuantity.trim()) {
         const parsed = Number(l.minQuantity);
@@ -1360,60 +1618,83 @@ function ComposeOrderPanel({
           setError(`${name}: min quantity must be non-negative.`);
           return;
         }
-        minQuantity = Math.floor(parsed);
+        minQuantity = unitDimension === "count" ? Math.floor(parsed) : parsed;
       }
       const productUrl = l.productUrl.trim();
       const reorderLink = productUrl
         ? (/^https?:\/\//i.test(productUrl) ? productUrl : `https://${productUrl}`)
         : undefined;
 
-      // Cost/pack fields. Forward only the values for the active priceMode so
-      // the user's stale typing in the inactive mode (e.g. unit cost left over
-      // from before they switched to Box) doesn't write back to inventory.
-      let unitCost: number | undefined;
-      let packSize: number | undefined;
-      let packCost: number | undefined;
-      if (l.priceMode === "unit" && l.unitCost.trim()) {
-        const parsed = parseCurrency(l.unitCost);
-        if (!Number.isFinite(parsed) || parsed < 0) {
-          setError(`${name}: unit cost must be a non-negative number.`);
-          return;
-        }
-        unitCost = parsed;
+      // 1h.1: pack-mode multiplier. Pack mode means amount = packs; the
+      // server stores in primary units so we multiply through. Pack size
+      // comes from (in order): vendor's stored packSize → user-typed
+      // packSizeDraft on this line → fallback 1 (no-op). The typed value
+      // gets persisted onto the vendor pricing row at receive time so the
+      // next purchase at this vendor auto-populates.
+      const vp = (l.itemId && vendor.trim())
+        ? vendorPricing.get(l.itemId)?.get(vendor.trim().toLowerCase())
+        : undefined;
+      const vendorPackSize = Number(vp?.packSize ?? 0);
+      const draftPackSize = Number(l.packSizeDraft);
+      const submitPackSize = vendorPackSize > 0
+        ? vendorPackSize
+        : (Number.isFinite(draftPackSize) && draftPackSize > 0
+            ? Math.floor(draftPackSize)
+            : 0);
+      const isPackSubmit = l.mode === "pack" && submitPackSize > 0;
+      // When user toggled Pack but didn't type a size, error out so we
+      // don't silently treat it as single mode (their intent was packs).
+      if (l.mode === "pack" && submitPackSize === 0) {
+        setError(`${name}: pack size required for pack-mode order.`);
+        return;
       }
-      if (l.priceMode === "box") {
-        if (l.packSize.trim()) {
-          const parsed = Number(l.packSize);
-          if (!Number.isFinite(parsed) || parsed <= 0) {
-            setError(`${name}: pack size must be greater than 0.`);
-            return;
+      const effectivePackSize = isPackSubmit ? submitPackSize : 1;
+      const qtyInPrimaryUnits = amountNum * effectivePackSize;
+
+      // ── Back-compat shim: derive legacy unitCost / packSize / packCost so
+      // the receive form + analytics that still read these fields keep
+      // working. In pack mode the user typed "1 box for $24.99" so:
+      //   packSize = vendor's packSize, packCost = price, unitCost = price/packSize
+      // In single mode, fall back to the prior count/weight/volume rules.
+      let legacyUnitCost: number | undefined;
+      let legacyPackSize: number | undefined;
+      let legacyPackCost: number | undefined;
+      if (priceNum !== undefined) {
+        if (isPackSubmit && effectivePackSize > 0) {
+          legacyPackSize = effectivePackSize;
+          // packCost = $ per pack. amount=2 packs at $X total → packCost = X/2.
+          legacyPackCost = priceNum / amountNum;
+          legacyUnitCost = legacyPackCost / effectivePackSize;
+        } else if (unitDimension === "count") {
+          if (amountNum > 1) {
+            legacyPackSize = Math.floor(amountNum);
+            legacyPackCost = priceNum;
+            legacyUnitCost = priceNum / amountNum;
+          } else {
+            legacyUnitCost = priceNum;
           }
-          packSize = Math.floor(parsed);
-        }
-        if (l.packCost.trim()) {
-          const parsed = parseCurrency(l.packCost);
-          if (!Number.isFinite(parsed) || parsed < 0) {
-            setError(`${name}: pack cost must be a non-negative number.`);
-            return;
-          }
-          packCost = parsed;
-        }
-        // Derive per-unit cost from pack cost + size so analytics still has
-        // the per-unit figure when the user only typed in box terms.
-        if (packCost !== undefined && packSize && packSize > 0) {
-          unitCost = packCost / packSize;
+        } else {
+          const canon = pricePerCanonical(priceNum, amountNum, l.unit);
+          if (canon) legacyUnitCost = canon.pricePerCanonical;
         }
       }
 
       payloadLines.push({
         ...(l.itemId ? { itemId: l.itemId } : {}),
         itemName: name,
-        qtyOrdered: qty,
+        // qtyOrdered is always in primary units. Pack-mode amounts are
+        // multiplied through here before sending.
+        qtyOrdered: qtyInPrimaryUnits,
         ...(minQuantity !== undefined ? { minQuantity } : {}),
         ...(reorderLink ? { reorderLink } : {}),
-        ...(unitCost !== undefined ? { unitCost } : {}),
-        ...(packSize !== undefined ? { packSize } : {}),
-        ...(packCost !== undefined ? { packCost } : {}),
+        // Legacy back-compat shape.
+        ...(legacyUnitCost !== undefined ? { unitCost: legacyUnitCost } : {}),
+        ...(legacyPackSize !== undefined ? { packSize: legacyPackSize } : {}),
+        ...(legacyPackCost !== undefined ? { packCost: legacyPackCost } : {}),
+        // 1f shape — server infers dimension from purchaseUnit.
+        purchaseAmount: qtyInPrimaryUnits,
+        purchaseUnit: l.unit,
+        ...(priceNum !== undefined ? { purchasePrice: priceNum } : {}),
       });
     }
     setSubmitting(true);
@@ -1447,7 +1728,7 @@ function ComposeOrderPanel({
               inputId="manual-order-vendor"
               value={vendor}
               availableVendors={availableVendors}
-              onChange={setVendor}
+              onChange={handleVendorChange}
               onAddVendor={onAddVendor}
               disabled={submitting}
               ariaLabel="Vendor"
@@ -1471,32 +1752,66 @@ function ComposeOrderPanel({
         <div className="usage-entries compose-order-lines">
           {lines.map((l, idx) => {
             const filled = l.itemName.trim().length > 0;
+            const isFreeform = filled && !l.itemId;
+            // Live $/canonical preview. Renders below the price input so the
+            // user sees what the receipt will store as the comparable price
+            // (e.g. "$0.039/fl oz" for a gallon of milk at $4.99).
+            const amountForPreview = Number(l.amount);
+            const priceForPreview = l.price.trim() ? parseCurrency(l.price) : NaN;
+            const canonical =
+              Number.isFinite(amountForPreview) && amountForPreview > 0 &&
+              Number.isFinite(priceForPreview) && priceForPreview >= 0
+                ? pricePerCanonical(priceForPreview, amountForPreview, l.unit)
+                : null;
+            const lineDimension = dimensionForUnit(l.unit) ?? "count";
+            // 1h.1d: pack-mode toggle is always available on filled lines so
+            // a one-off pack purchase ("normally buy by unit but grabbed a
+            // box of 10 this time") can be recorded. When the active vendor
+            // has packSize on file we use it; otherwise the user types a
+            // size for THIS purchase and it gets persisted onto the vendor
+            // pricing row at receive time.
+            const lineVendorPricing = l.itemId && vendor.trim()
+              ? vendorPricing.get(l.itemId)?.get(vendor.trim().toLowerCase())
+              : undefined;
+            const vendorPackSize = Number(lineVendorPricing?.packSize ?? 0);
+            const draftPackSize = Number(l.packSizeDraft);
+            const effectivePackSize = vendorPackSize > 0
+              ? vendorPackSize
+              : (Number.isFinite(draftPackSize) && draftPackSize > 0 ? draftPackSize : 0);
+            const lineIsPackMode = l.mode === "pack";
+            const linePackLabelSingular = lineVendorPricing?.packLabel || "pack";
+            const linePackLabelPlural = lineVendorPricing?.packLabel
+              ? lineVendorPricing.packLabel + "s"
+              : "packs";
+            const lineAmountLabel = lineIsPackMode
+              ? (Number(l.amount) === 1 ? linePackLabelSingular : linePackLabelPlural)
+              : l.unit;
             return (
               <div className="usage-entry compose-order-line" key={idx}>
                 <div className="usage-entry-main compose-order-line-main">
                   <div className="usage-entry-item">
                     <label className="field-label" htmlFor={`manual-order-item-${idx}`}>Item</label>
+                    {/* 1h.3: gating items behind a vendor pick avoids the
+                     *  pre-fill ambiguity from the legacy single-vendor
+                     *  world — without an active vendor, we have no row to
+                     *  pull pricing/URL/pack from, so the picker would
+                     *  silently produce a blank line. Forcing the vendor
+                     *  first means every line opens with the right context. */}
                     <OrderItemAutocomplete
                       inputId={`manual-order-item-${idx}`}
                       inventoryRows={inventoryRows}
                       excludeNames={alreadyInCartNames}
                       value={filled ? l.itemName : undefined}
-                      isFreeform={filled && !l.itemId}
+                      isFreeform={isFreeform}
                       onPickExisting={(id, name) => pickExistingForLine(idx, id, name)}
                       onPickFreeform={(name) => pickFreeformForLine(idx, name)}
                       onClear={() => clearLineItem(idx)}
-                      disabled={submitting}
-                      placeholder="Search items or type a new name"
-                    />
-                  </div>
-                  <div className="usage-entry-qty compose-order-line-qty">
-                    <label className="field-label" htmlFor={`manual-order-qty-${idx}`}>Qty</label>
-                    <QtyStepper
-                      inputId={`manual-order-qty-${idx}`}
-                      value={l.qty}
-                      min={1}
-                      onChange={(v) => updateLine(idx, { qty: v })}
-                      disabled={submitting || !filled}
+                      disabled={submitting || !vendor.trim()}
+                      placeholder={
+                        vendor.trim()
+                          ? "Search items or type a new name"
+                          : "Pick a vendor first"
+                      }
                     />
                   </div>
                   {(filled || lines.length > 1) && (
@@ -1506,27 +1821,176 @@ function ComposeOrderPanel({
                       onClick={() => removeLine(idx)}
                       disabled={submitting}
                       aria-label="Remove line"
+                      title="Remove this line"
                     >
-                      <X size={14} />
+                      {/* Trash icon (not X) so this reads as "delete row"
+                       *  next to the autocomplete's own X (which means
+                       *  "clear the item, keep the row"). Two distinct
+                       *  glyphs, two distinct outcomes. */}
+                      <Trash2 size={14} />
                     </button>
                   )}
                 </div>
 
-                {/* Pricing + URL surface inline (no More-details toggle) once
-                 *  the line has an item picked. Receipts from places like
-                 *  Costco need unit/box pricing captured at order time, so
-                 *  hiding it behind a collapsed section made it invisible. */}
+                {/* Pricing + URL surface inline once a line has an item picked.
+                 *  Existing items render the unit as a read-only label (it's
+                 *  set on the inventory row's `unit` column). Freeform items
+                 *  show a unit dropdown so the user picks the tracking unit
+                 *  inline — that becomes the row's `unit` value on receive. */}
                 {filled ? (
                   <div className="manual-order-line-details">
-                    {!l.itemId ? (
+                    {/* 1h.8: Order As is just the Single|Pack toggle now.
+                     *  The "ct per pack N" affordance moved to the right
+                     *  of the Amount stepper as secondary info — it
+                     *  describes what's IN one pack, which reads more
+                     *  naturally next to "1 pack" than tucked into the
+                     *  mode toggle column. */}
+                    <div className="manual-order-detail-field">
+                      <label className="field-label">Order as</label>
+                      <div className="reorder-price-mode" role="tablist" aria-label="Order mode">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={!lineIsPackMode}
+                          className={`reorder-price-mode-btn${!lineIsPackMode ? " active" : ""}`}
+                          onClick={() => updateLine(idx, { mode: "single", amount: "1" })}
+                          disabled={submitting}
+                        >
+                          Single
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={lineIsPackMode}
+                          className={`reorder-price-mode-btn${lineIsPackMode ? " active" : ""}`}
+                          onClick={() => updateLine(idx, { mode: "pack", amount: "1" })}
+                          disabled={submitting}
+                          title={effectivePackSize > 0
+                            ? `1 ${linePackLabelSingular} = ${effectivePackSize} ${l.unit}`
+                            : `Pack purchase — type the pack size below`}
+                        >
+                          {effectivePackSize > 0
+                            ? `${linePackLabelSingular} (${effectivePackSize})`
+                            : "Pack"}
+                        </button>
+                      </div>
+                    </div>
+                    {/* Amount + unit. Count items get a QtyStepper; everything
+                     *  else gets a decimal input (you don't step grams). */}
+                    <div className="manual-order-detail-field">
+                      <label className="field-label" htmlFor={`manual-order-amount-${idx}`}>Amount</label>
+                      <div className="manual-order-amount-row">
+                        {lineDimension === "count" || lineIsPackMode ? (
+                          <QtyStepper
+                            inputId={`manual-order-amount-${idx}`}
+                            value={l.amount}
+                            min={1}
+                            onChange={(v) => updateLine(idx, { amount: v })}
+                            disabled={submitting}
+                          />
+                        ) : (
+                          <input
+                            id={`manual-order-amount-${idx}`}
+                            className="field manual-order-amount-input"
+                            type="number"
+                            min="0"
+                            step="any"
+                            inputMode="decimal"
+                            placeholder="0"
+                            value={l.amount}
+                            onChange={(e) => updateLine(idx, { amount: e.target.value })}
+                            onFocus={(e) => e.currentTarget.select()}
+                            disabled={submitting}
+                          />
+                        )}
+                        {isFreeform ? (
+                          <select
+                            className="field manual-order-unit-select"
+                            aria-label="Unit"
+                            value={l.unit}
+                            onChange={(e) => updateLine(idx, { unit: e.target.value })}
+                            disabled={submitting}
+                          >
+                            {/* 1h.2c: prefer org-curated allowedUnits;
+                             *  fall back to master KNOWN_UNITS for orgs
+                             *  that haven't curated yet. */}
+                            {(allowedUnits.length > 0 ? allowedUnits : KNOWN_UNITS).map((u) => (
+                              <option key={u} value={u}>{u}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span className="manual-order-unit-label" aria-label="Unit">
+                            {lineAmountLabel}
+                          </span>
+                        )}
+                        {/* 1h.8: secondary pack-size info, sits to the
+                         *  right of the qty stepper. Reads as
+                         *  "× 100 ct each" when the vendor has a known
+                         *  pack size; becomes an editable "[N] ct each"
+                         *  input when the vendor row has no packSize on
+                         *  file. Only renders in Pack mode. */}
+                        {lineIsPackMode && effectivePackSize > 0 && vendorPackSize > 0 ? (
+                          <span className="manual-order-pack-secondary">
+                            × {effectivePackSize} {l.unit} each
+                          </span>
+                        ) : null}
+                        {lineIsPackMode && vendorPackSize === 0 ? (
+                          <label className="manual-order-pack-secondary manual-order-pack-secondary--editable">
+                            <span className="manual-order-pack-secondary-x">×</span>
+                            <input
+                              className="field manual-order-pack-size-input"
+                              type="number"
+                              min="1"
+                              placeholder="N"
+                              aria-label={`${l.unit} per ${linePackLabelSingular}`}
+                              value={l.packSizeDraft}
+                              onChange={(e) => updateLine(idx, { packSizeDraft: e.target.value })}
+                              onFocus={(e) => e.currentTarget.select()}
+                              disabled={submitting}
+                            />
+                            <span>{l.unit} each</span>
+                          </label>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="manual-order-detail-field">
+                      <label className="field-label" htmlFor={`manual-order-price-${idx}`}>Price</label>
+                      <input
+                        id={`manual-order-price-${idx}`}
+                        className="field"
+                        type="text"
+                        inputMode="decimal"
+                        placeholder="$0.00"
+                        value={l.price}
+                        onChange={(e) => updateLine(idx, { price: e.target.value })}
+                        onBlur={(e) => {
+                          const raw = e.currentTarget.value.trim();
+                          if (!raw) return;
+                          const parsed = parseCurrency(raw);
+                          if (Number.isFinite(parsed) && parsed >= 0) {
+                            updateLine(idx, { price: formatCurrency(parsed) });
+                          }
+                        }}
+                        disabled={submitting}
+                      />
+                      {canonical ? (
+                        <span className="manual-order-price-preview">
+                          {`${formatCurrency(canonical.pricePerCanonical)}/${canonical.canonicalUnit}`}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {isFreeform ? (
                       <div className="manual-order-detail-field">
-                        <label className="field-label" htmlFor={`manual-order-min-${idx}`}>Min quantity</label>
+                        <label className="field-label" htmlFor={`manual-order-min-${idx}`}>Min on hand</label>
                         <input
                           id={`manual-order-min-${idx}`}
                           className="field"
                           type="number"
                           min="0"
-                          placeholder="Reorder threshold"
+                          step="any"
+                          placeholder={`Reorder when below (${l.unit})`}
                           value={l.minQuantity}
                           onChange={(e) => updateLine(idx, { minQuantity: e.target.value })}
                           onFocus={(e) => e.currentTarget.select()}
@@ -1534,96 +1998,9 @@ function ComposeOrderPanel({
                         />
                       </div>
                     ) : null}
-                    {/* Pricing — Unit/Box switcher mirrors the Reorder tab so
-                     *  the same mental model carries across (and so users can
-                     *  enter a Costco box price like "$24.99 / box of 30"
-                     *  without having to do per-unit math). */}
-                    <div className="manual-order-detail-field manual-order-detail-field--wide">
-                      <label className="field-label">Pricing</label>
-                      <div className="manual-order-price">
-                        <div className="reorder-price-mode" role="tablist" aria-label="Pricing mode">
-                          <button
-                            type="button"
-                            role="tab"
-                            aria-selected={l.priceMode === "unit"}
-                            className={`reorder-price-mode-btn${l.priceMode === "unit" ? " active" : ""}`}
-                            onClick={() => updateLine(idx, { priceMode: "unit" })}
-                            disabled={submitting}
-                          >
-                            Unit
-                          </button>
-                          <button
-                            type="button"
-                            role="tab"
-                            aria-selected={l.priceMode === "box"}
-                            className={`reorder-price-mode-btn${l.priceMode === "box" ? " active" : ""}`}
-                            onClick={() => updateLine(idx, { priceMode: "box" })}
-                            disabled={submitting}
-                          >
-                            Box
-                          </button>
-                        </div>
-                        {l.priceMode === "unit" ? (
-                          <input
-                            id={`manual-order-unitcost-${idx}`}
-                            className="field manual-order-price-input"
-                            type="text"
-                            inputMode="decimal"
-                            placeholder="$ / unit"
-                            aria-label="Unit cost"
-                            value={l.unitCost}
-                            onChange={(e) => updateLine(idx, { unitCost: e.target.value })}
-                            onBlur={(e) => {
-                              const raw = e.currentTarget.value.trim();
-                              if (!raw) return;
-                              const parsed = parseCurrency(raw);
-                              if (Number.isFinite(parsed) && parsed >= 0) {
-                                updateLine(idx, { unitCost: formatCurrency(parsed) });
-                              }
-                            }}
-                            disabled={submitting}
-                          />
-                        ) : (
-                          <div className="manual-order-price-box-inputs">
-                            <input
-                              id={`manual-order-packsize-${idx}`}
-                              className="field manual-order-price-input"
-                              type="number"
-                              min="1"
-                              placeholder="Pack size"
-                              aria-label="Pack size (units per box)"
-                              value={l.packSize}
-                              onChange={(e) => updateLine(idx, { packSize: e.target.value })}
-                              onFocus={(e) => e.currentTarget.select()}
-                              disabled={submitting}
-                            />
-                            <input
-                              id={`manual-order-packcost-${idx}`}
-                              className="field manual-order-price-input"
-                              type="text"
-                              inputMode="decimal"
-                              placeholder="$ / box"
-                              aria-label="Pack cost"
-                              value={l.packCost}
-                              onChange={(e) => updateLine(idx, { packCost: e.target.value })}
-                              onBlur={(e) => {
-                                const raw = e.currentTarget.value.trim();
-                                if (!raw) return;
-                                const parsed = parseCurrency(raw);
-                                if (Number.isFinite(parsed) && parsed >= 0) {
-                                  updateLine(idx, { packCost: formatCurrency(parsed) });
-                                }
-                              }}
-                              disabled={submitting}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {/* Reorder URL is hidden behind a button when empty so the
-                     *  line stays compact for items where the user doesn't
-                     *  bother. Pre-filled URLs (from the inventory row) start
-                     *  expanded so the user sees the value already on file. */}
+
+                    {/* Reorder URL stays gated behind a button when empty so
+                     *  the line stays compact. Pre-filled URLs auto-expand. */}
                     <div className="manual-order-detail-field manual-order-detail-field--wide">
                       {l.urlOpen ? (
                         <>
@@ -1704,7 +2081,7 @@ function ComposeOrderPanel({
 
 // ── Main Orders Page ───────────────────────────────────────────────────────
 
-export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: OrdersPageProps) {
+export function OrdersPage({ selectedLocationId }: OrdersPageProps) {
   const [orders, setOrders] = useState<RestockOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1713,6 +2090,59 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
   const [hasExpirationColumn, setHasExpirationColumn] = useState(false);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
+  // 1g.6: per-(item, vendor) pricing rows. New Order pre-fills from
+  // vendorPricing[itemId][selectedVendor] when both are known. Receive
+  // form pre-fills from vendorPricing[itemId][order.vendor]. Falls back to
+  // legacy row.values.* fields when no entry exists yet (transitional).
+  const [vendorPricing, setVendorPricing] = useState<Map<string, Map<string, ItemVendorPricingEntry>>>(new Map());
+  // 1h.2c: per-org curated unit list, used by the freeform unit picker on
+  // New Order. Empty fallback uses the master KNOWN_UNITS list.
+  const [allowedUnits, setAllowedUnits] = useState<string[]>([]);
+  // 1h.7: org-wide UoM gate. Forwarded to the i modal so EMS-style orgs
+  // see the simple form and pantry orgs see the dual-axis Pack form.
+  const [tracksUnits, setTracksUnits] = useState<boolean>(false);
+  // Item-detail modal state (mirrors InventoryPage). Opened from Shop's
+  // All-Vendors mode when the user clicks an item name → manage vendor
+  // pricing without bouncing to Inventory.
+  const [detailItemId, setDetailItemId] = useState<string | null>(null);
+  const detailItem = detailItemId
+    ? inventoryRows.find((r) => r.id === detailItemId) ?? null
+    : null;
+  const detailItemPricing: ItemVendorPricingEntry[] = detailItemId
+    ? Array.from(vendorPricing.get(detailItemId)?.values() ?? [])
+    : [];
+  // Patch a single (item, vendor) pricing row into the in-memory map so the
+  // Shop list and any open Receive form pick up the change without a full
+  // bootstrap reload. Mirrors the InventoryPage handlers.
+  const handlePricingUpserted = (entry: ItemVendorPricingEntry) => {
+    setVendorPricing((prev) => {
+      const next = new Map(prev);
+      const inner = new Map(next.get(entry.itemId) ?? new Map());
+      inner.set(entry.vendorLower, entry);
+      next.set(entry.itemId, inner);
+      return next;
+    });
+  };
+  const handlePricingDeleted = (id: string) => {
+    setVendorPricing((prev) => {
+      const next = new Map(prev);
+      // Walk the maps to find the (itemId, vendorLower) for this row id —
+      // the id format isn't trusted here so a future schema change doesn't
+      // silently break delete state sync.
+      for (const [itemId, inner] of next.entries()) {
+        for (const [vendorLower, entry] of inner.entries()) {
+          if (entry.id === id) {
+            const updated = new Map(inner);
+            updated.delete(vendorLower);
+            if (updated.size === 0) next.delete(itemId);
+            else next.set(itemId, updated);
+            return next;
+          }
+        }
+      }
+      return next;
+    });
+  };
   const inventoryRowsRef = useRef<InventoryRow[]>([]);
 
   // Sorted location list. Replaces the previous merged-from-row-values
@@ -1723,12 +2153,6 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
     ),
     [locations],
   );
-  // Some downstream UI (the picker for free-form items) still wants names only.
-  const locationValues = useMemo(
-    () => sortedLocations.map((l) => l.name),
-    [sortedLocations],
-  );
-
   // Known vendors = registered ones (even if unused) + any vendor that shows up
   // on existing rows. Used by the "Add Item Not Listed" form and ReorderTab
   // grouping so users can pick from a dropdown.
@@ -1755,12 +2179,25 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
   }, []);
 
   const loadBootstrap = useCallback(() => {
-    loadInventoryBootstrap().then(({ columns, items, locations: locs, registeredVendors: vendors }) => {
+    loadInventoryBootstrap().then(({ columns, items, locations: locs, registeredVendors: vendors, vendorPricing: vp, allowedUnits: au, tracksUnits: tu }) => {
       setInventoryRows(items);
       inventoryRowsRef.current = items;
       setHasExpirationColumn(columns.some((c) => c.key === "expirationDate" && c.isVisible));
       setLocations(Array.isArray(locs) ? locs : []);
       setRegisteredVendors(Array.isArray(vendors) ? vendors : []);
+      setAllowedUnits(Array.isArray(au) ? au : []);
+      setTracksUnits(typeof tu === "boolean" ? tu : false);
+      // 1g.6: index per-(item, vendor) pricing for fast read in New Order
+      // line pre-fill + Receive form pre-fill. Map<itemId, Map<vendorLower,
+      // entry>> matches the shape useInventoryData uses on the inventory
+      // page so logic that walks the map can be shared.
+      const map = new Map<string, Map<string, ItemVendorPricingEntry>>();
+      for (const entry of vp ?? []) {
+        const inner = map.get(entry.itemId) ?? new Map<string, ItemVendorPricingEntry>();
+        inner.set(entry.vendorLower, entry);
+        map.set(entry.itemId, inner);
+      }
+      setVendorPricing(map);
     }).catch(() => {}).finally(() => {
       setInventoryLoaded(true);
     });
@@ -1824,6 +2261,12 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
             ...(item.packCost !== undefined ? { packCost: item.packCost } : {}),
             ...(item.reorderLink ? { reorderLink: item.reorderLink } : {}),
             ...(item.location ? { location: item.location } : {}),
+            // 1d: forward amount/UoM/price/dimension when the Shop tab supplied
+            // them. Server re-derives pricePerCanonical via uom.ts.
+            ...(item.purchaseAmount !== undefined ? { purchaseAmount: item.purchaseAmount } : {}),
+            ...(item.purchaseUnit ? { purchaseUnit: item.purchaseUnit } : {}),
+            ...(item.purchasePrice !== undefined ? { purchasePrice: item.purchasePrice } : {}),
+            ...(item.dimension ? { dimension: item.dimension } : {}),
           })),
         });
       } catch (err) {
@@ -1838,29 +2281,6 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
       loadOrders();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Patch one or more inventory rows' values from the Reorder tab. Used by:
-  //  - the link-prompt dialog (sets `reorderLink`)
-  //  - the Missing Information section (sets `reorderLink` and/or
-  //    `unitCost` / `packCost` when filling in incomplete items)
-  // Same row gets all matching ids in `rowIds` (e.g. multiple lots of one
-  // item share a link), so the patch is applied to every match.
-  const handleSaveItemFields = useCallback(async (
-    rowIds: string[],
-    patch: Record<string, string | number | boolean | null>,
-  ) => {
-    const idSet = new Set(rowIds);
-    const current = inventoryRowsRef.current;
-    const toSave = current
-      .filter((r) => idSet.has(r.id))
-      .map((r) => ({ ...r, position: current.indexOf(r), values: { ...r.values, ...patch } }));
-    const updated = current.map((r) =>
-      idSet.has(r.id) ? { ...r, values: { ...r.values, ...patch } } : r,
-    );
-    setInventoryRows(updated);
-    inventoryRowsRef.current = updated;
-    if (toSave.length > 0) await saveInventoryItems(toSave, []).catch(() => {});
   }, []);
 
   // Called after an OrderCard receives or closes an order. Clears orderedAt for the
@@ -1952,13 +2372,24 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
   }, [loadOrders, loadBootstrap]);
 
   const openOrders = orders.filter((o) => o.status !== "closed");
-  const closedOrders = orders.filter((o) => o.status === "closed");
+  // Hide synthetic price-history backfill orders from Closed Orders display.
+  // They're real records (price-history endpoint reads them as time-series)
+  // but the user didn't actually place them — showing them clutters the
+  // Closed Orders feed with one row per item. createdByUserId === "system"
+  // is the signal: 1e seed sets it explicitly to mark these as auto-generated.
+  const closedOrders = orders.filter(
+    (o) => o.status === "closed" && o.createdByUserId !== "system",
+  );
 
   // Top-level tab. Mirrors Inventory's chip pattern: only one section is shown
   // at a time so each gets the full vertical space. Default lands on Reorder
   // since that's the most-used workflow entry point.
-  type OrdersTab = "reorder" | "new" | "pending" | "closed";
-  const [activeTab, setActiveTab] = useState<OrdersTab>("reorder");
+  type OrdersTab = "shop" | "new" | "pending" | "closed";
+  // 1e: Reorder retired in favor of Shop (vendor-aware shopping list with
+  // best-price comparison from receipt history). The ReorderTab module
+  // stays in tree as `./ReorderTab` since OrderItem + VendorSelect still
+  // export from there; reverting is "re-add the tab button + render".
+  const [activeTab, setActiveTab] = useState<OrdersTab>("shop");
   // The compose panel lives on its own "New Order" tab. It's a clean slate
   // every time — low-stock items aren't pre-filled. The Reorder tab's
   // per-vendor checklist (Mark as Ordered) is the path for routine reorders;
@@ -2036,15 +2467,17 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
     }
     loadBootstrap();
   }, [loadOrders, loadBootstrap]);
-  // Count of items in the reorder list, surfaced from inside ReorderTab via
-  // its onCountChange callback. Powers the tab-bar badge on Reorder so it's
-  // visually consistent with Pending Receipt / Closed Orders counts.
-  const [reorderCount, setReorderCount] = useState(0);
 
   // Closed-orders filter state: free-text search (vendor / notes / item names)
   // plus optional date range on createdAt.
   const [closedSearch, setClosedSearch] = useState("");
   const [closedFromDate, setClosedFromDate] = useState("");
+  // Pagination for Closed Orders. Synthesized backfill orders are already
+  // filtered out, but a real org with months of receipts can still build up
+  // hundreds of rows — paginate so the day-grouped list doesn't render
+  // them all at once.
+  const CLOSED_ORDERS_PAGE_SIZE = 25;
+  const [closedOrdersPage, setClosedOrdersPage] = useState(1);
   const [closedToDate, setClosedToDate] = useState("");
   // Whether the "Date range" popover is currently open.
   const [dateFilterOpen, setDateFilterOpen] = useState(false);
@@ -2094,10 +2527,26 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
   // when present (status="closed" implies it's set on the backend) and fall
   // back to createdAt as a defensive default. Already sorted by the API
   // (newest first), so groups stay newest-first too.
+  // Reset to page 1 when the filtered set shrinks below the current page's
+  // start — otherwise applying a search would leave the view "blank past
+  // page 1" until the user clicked back.
+  const closedOrdersTotalPages = Math.max(
+    1,
+    Math.ceil(filteredClosedOrders.length / CLOSED_ORDERS_PAGE_SIZE),
+  );
+  const closedOrdersSafePage = Math.min(closedOrdersPage, closedOrdersTotalPages);
+  useEffect(() => {
+    if (closedOrdersPage > closedOrdersTotalPages) {
+      setClosedOrdersPage(1);
+    }
+  }, [closedOrdersTotalPages, closedOrdersPage]);
+
   const closedOrdersByDay = useMemo(() => {
+    const start = (closedOrdersSafePage - 1) * CLOSED_ORDERS_PAGE_SIZE;
+    const slice = filteredClosedOrders.slice(start, start + CLOSED_ORDERS_PAGE_SIZE);
     type Bucket = { label: string; orders: RestockOrder[] };
     const days: Bucket[] = [];
-    for (const order of filteredClosedOrders) {
+    for (const order of slice) {
       const ts = order.closedAt ?? order.createdAt;
       const label = dayGroupLabel(ts);
       let day = days[days.length - 1];
@@ -2108,7 +2557,7 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
       day.orders.push(order);
     }
     return days;
-  }, [filteredClosedOrders]);
+  }, [filteredClosedOrders, closedOrdersSafePage]);
 
   // Compact label for the "Date range" pill button. Only shows when at least
   // one bound is set; format mirrors the audit feed's terse date style.
@@ -2142,14 +2591,11 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeTab === "reorder"}
-                className={`audit-tab${activeTab === "reorder" ? " active" : ""}`}
-                onClick={() => setActiveTab("reorder")}
+                aria-selected={activeTab === "shop"}
+                className={`audit-tab${activeTab === "shop" ? " active" : ""}`}
+                onClick={() => setActiveTab("shop")}
               >
                 <ShoppingCart size={16} /> Reorder
-                {reorderCount > 0 ? (
-                  <span className="audit-tab-badge">{reorderCount}</span>
-                ) : null}
               </button>
               <button
                 type="button"
@@ -2183,26 +2629,16 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
               </button>
             </div>
 
-            {/* ReorderTab stays mounted across tab switches (hidden via CSS
-             *  when not active) so onCountChange keeps firing as inventory
-             *  changes. Otherwise, receiving an order on the Pending tab
-             *  would silently leave the Reorder badge stale until the user
-             *  navigates back. */}
-            {inventoryLoaded && (
-              <div style={{ display: activeTab === "reorder" ? undefined : "none" }}>
-                <ReorderTab
-                  rows={inventoryRows}
-                  availableLocations={locationValues}
-                  availableLocationsFull={sortedLocations}
-                  availableVendors={vendorValues}
-                  onAddVendor={handleAddVendor}
-                  selectedLocationId={selectedLocationId ?? null}
-                  onSelectedLocationIdChange={onSelectedLocationIdChange}
-                  onSaveItemFields={handleSaveItemFields}
-                  onCountChange={setReorderCount}
-                  onMarkOrdered={handleMarkOrdered}
-                />
-              </div>
+            {/* Shop is the 1d vendor-aware list. Mounted only when active
+             *  (no count badge to keep alive across tab switches). */}
+            {inventoryLoaded && activeTab === "shop" && (
+              <ShoppingListTab
+                rows={inventoryRows}
+                availableVendors={vendorValues}
+                vendorPricing={vendorPricing}
+                onMarkOrdered={handleMarkOrdered}
+                onOpenItemDetails={setDetailItemId}
+              />
             )}
 
             {activeTab === "new" && (
@@ -2211,6 +2647,8 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
                 availableVendors={vendorValues}
                 onAddVendor={handleAddVendor}
                 onSubmit={handleSubmitComposeOrder}
+                vendorPricing={vendorPricing}
+                allowedUnits={allowedUnits}
               />
             )}
 
@@ -2229,7 +2667,9 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
                       order={order}
                       hasExpirationColumn={hasExpirationColumn}
                       inventoryRows={inventoryRows}
+                      vendorPricing={vendorPricing}
                       onRefresh={handleOrderChanged}
+                      onOpenItemDetails={setDetailItemId}
                     />
                   ))
                 )}
@@ -2351,28 +2791,41 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
                     {filteredClosedOrders.length === 0 ? (
                       <p className="closed-orders-empty">No closed orders match your filter.</p>
                     ) : (
-                      <div className="audit-flat-feed closed-orders-feed">
-                        {closedOrdersByDay.map((day) => (
-                          <DaySection
-                            key={day.label}
-                            label={day.label}
-                            summary={`${day.orders.length} order${day.orders.length !== 1 ? "s" : ""}`}
-                            defaultOpen={day.label === "Today" || day.label === "Yesterday"}
-                          >
-                            <div className="closed-orders-day-cards">
-                              {day.orders.map((order) => (
-                                <OrderCard
-                                  key={order.id}
-                                  order={order}
-                                  hasExpirationColumn={hasExpirationColumn}
-                                  inventoryRows={inventoryRows}
-                                  onRefresh={handleOrderChanged}
-                                />
-                              ))}
-                            </div>
-                          </DaySection>
-                        ))}
-                      </div>
+                      <>
+                        <div className="audit-flat-feed closed-orders-feed">
+                          {closedOrdersByDay.map((day) => (
+                            <DaySection
+                              key={day.label}
+                              label={day.label}
+                              summary={`${day.orders.length} order${day.orders.length !== 1 ? "s" : ""}`}
+                              defaultOpen={day.label === "Today" || day.label === "Yesterday"}
+                            >
+                              <div className="closed-orders-day-cards">
+                                {day.orders.map((order) => (
+                                  <OrderCard
+                                    key={order.id}
+                                    order={order}
+                                    hasExpirationColumn={hasExpirationColumn}
+                                    inventoryRows={inventoryRows}
+                                    vendorPricing={vendorPricing}
+                                    onRefresh={handleOrderChanged}
+                                    onOpenItemDetails={setDetailItemId}
+                                  />
+                                ))}
+                              </div>
+                            </DaySection>
+                          ))}
+                        </div>
+                        {closedOrdersTotalPages > 1 && (
+                          <PaginationControls
+                            currentPage={closedOrdersSafePage}
+                            totalPages={closedOrdersTotalPages}
+                            totalItems={filteredClosedOrders.length}
+                            pageSize={CLOSED_ORDERS_PAGE_SIZE}
+                            onPageChange={setClosedOrdersPage}
+                          />
+                        )}
+                      </>
                     )}
                   </>
                 )}
@@ -2381,6 +2834,24 @@ export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange }: O
           </>
         )}
       </div>
+
+      {/* 1h.3: per-item vendor-pricing manager. Opened from Shop's
+       *  All-Vendors mode (item name click) so users can curate pricing
+       *  without bouncing to Inventory. */}
+      {detailItemId && detailItem ? (
+        <ItemDetailModal
+          itemId={detailItemId}
+          itemName={String(detailItem.values.itemName ?? "").trim() || `Item ${detailItemId.slice(0, 8)}`}
+          pricing={detailItemPricing}
+          availableVendors={vendorValues}
+          allowedUnits={allowedUnits}
+          tracksUnits={tracksUnits}
+          onClose={() => setDetailItemId(null)}
+          onPricingUpserted={handlePricingUpserted}
+          onPricingDeleted={handlePricingDeleted}
+          onAddVendor={handleAddVendor}
+        />
+      ) : null}
     </section>
   );
 }

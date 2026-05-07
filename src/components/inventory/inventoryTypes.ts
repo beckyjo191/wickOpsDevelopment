@@ -6,7 +6,7 @@ export type {
   InventoryRow,
 } from "../../lib/inventoryApi";
 
-export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock";
+export type InventoryFilter = "all" | "expired" | "exp30" | "exp60" | "lowStock" | "missingPricing";
 export type ActiveTab = InventoryFilter | "logUsage";
 export type SortDirection = "asc" | "desc";
 

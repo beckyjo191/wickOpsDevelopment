@@ -179,7 +179,6 @@ export function OnboardingPage({ orgName, onComplete }: OnboardingPageProps) {
                 <li className="onboarding-preview-column onboarding-preview-column-core">Quantity</li>
                 <li className="onboarding-preview-column onboarding-preview-column-core">Min Quantity</li>
                 <li className="onboarding-preview-column onboarding-preview-column-core">Notes</li>
-                <li className="onboarding-preview-column onboarding-preview-column-core">Category</li>
                 {selected.columns.map((col) => (
                   <li key={col.label} className="onboarding-preview-column">
                     {col.label}

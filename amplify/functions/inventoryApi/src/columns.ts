@@ -15,34 +15,63 @@ import type { InventoryColumn, InventoryLocation, InventoryStorage } from "./typ
  * to existing rows, so schema drift accumulates without this step).
  *
  * Keep in sync with the `defaults` array below. Post-restructure: location
- * and expirationDate are gone; notes and category are new core columns.
+ * and expirationDate are gone; notes is a core column.
  */
 const CORE_COLUMN_IS_EDITABLE: Record<string, boolean> = {
   itemName: true,
   quantity: true,
   minQuantity: true,
-  vendor: true,
-  reorderLink: true,
-  unitCost: false,   // derived from packCost / packSize (or restock events)
-  packSize: true,
-  packCost: true,
   notes: true,
-  category: true,
+  // Note: vendor / reorderLink / unitCost / packSize / packCost intentionally
+  // omitted. They're deprecated (1g) — vendor-specific data lives on the
+  // separate inventoryItemVendorPricing table now. Existing column rows are
+  // demoted to isCore: false via DEPRECATED_CORE_KEYS so users can clean up.
+  // `category` (1h.5) and `unit` (1h.6) likewise — see DEPRECATED_CORE_KEYS.
 };
 
-/** Authoritative `isGroupable` per core column key. Only `category` ships
- *  with the dropdown filter on by default; all others off. */
+/** Keys that USED to be core but no longer drive any system behavior. The
+ *  reconcile loop demotes their stored rows to `isCore: false` so users can
+ *  delete them via Manage Columns. Data in those cells is preserved (the
+ *  per-item valuesJson isn't touched) — only the column metadata changes.
+ *
+ *  - dimension / displayUnit: 1a additions, replaced by `unit` (single column,
+ *    family inferred at runtime).
+ *  - vendor / packSize / packCost / unitCost / reorderLink: 1g moves these off
+ *    the inventory item entirely. They were always per-vendor (a Costco box
+ *    of 100 vs a BoundTree box of 50 of the same item), and the table grew
+ *    unwieldy carrying them. Pricing + pack + URL now live on a separate
+ *    per-(item, vendor) `inventoryItemVendorPricing` table. Existing values
+ *    on item rows stay readable as a temporary fallback during migration.
+ *  - category: 1h.5 — pulled as a core column. Almost never filled in
+ *    practice, location-based grouping covers the "where do I find this"
+ *    use case, and templates that wanted it can ship it as a regular
+ *    custom column. Existing rows demote so users can hide / delete.
+ *  - unit: 1h.6 — moved to per-(item, vendor) pricing rows. The inventory
+ *    grid no longer renders a Unit column; the Quantity / Min Quantity
+ *    cells source their suffix from the item's `displayUnit` (which
+ *    derives from the first vendor pricing row's unit). Existing values
+ *    in row.values.unit stay readable as a fallback during transition. */
+const DEPRECATED_CORE_KEYS = new Set<string>([
+  "dimension",
+  "displayUnit",
+  "vendor",
+  "packSize",
+  "packCost",
+  "unitCost",
+  "reorderLink",
+  "category",
+  "unit",
+]);
+
+/** Authoritative `isGroupable` per core column key. Post-1h.5 there are no
+ *  default groupable core columns — `category` was the only one and it's
+ *  been deprecated. The map stays so individual core keys can opt back in
+ *  cleanly if we ever want a dropdown-filter header on one of them. */
 const CORE_COLUMN_IS_GROUPABLE: Record<string, boolean> = {
   itemName: false,
   quantity: false,
   minQuantity: false,
-  vendor: false,
-  reorderLink: false,
-  unitCost: false,
-  packSize: false,
-  packCost: false,
   notes: false,
-  category: true,
 };
 
 /**
@@ -169,83 +198,20 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       sortOrder: 30,
       createdAt: new Date().toISOString(),
     },
-    {
-      organizationId,
-      module: "inventory",
-      kind: "column",
-      key: "vendor",
-      label: "Vendor",
-      type: "text",
-      isCore: true,
-      isRequired: false,
-      isVisible: false,
-      isEditable: true,
-      isGroupable: false,
-      sortOrder: 40,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      organizationId,
-      module: "inventory",
-      kind: "column",
-      key: "reorderLink",
-      label: "Product URL",
-      type: "link",
-      isCore: true,
-      isRequired: false,
-      isVisible: true,
-      isEditable: true,
-      isGroupable: false,
-      sortOrder: 50,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      organizationId,
-      module: "inventory",
-      kind: "column",
-      key: "unitCost",
-      label: "Unit Cost",
-      type: "number",
-      isCore: true,
-      isRequired: false,
-      isVisible: false,
-      // Non-editable — value is refreshed only by restock events / pack
-      // derivation so the cached latest-price matches audit history.
-      isEditable: false,
-      isGroupable: false,
-      sortOrder: 60,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      organizationId,
-      module: "inventory",
-      kind: "column",
-      key: "packSize",
-      label: "Pack Size",
-      type: "number",
-      isCore: true,
-      isRequired: false,
-      isVisible: false,
-      isEditable: true,
-      isGroupable: false,
-      sortOrder: 70,
-      createdAt: new Date().toISOString(),
-    },
-    {
-      organizationId,
-      module: "inventory",
-      kind: "column",
-      key: "packCost",
-      label: "Pack Cost",
-      type: "number",
-      isCore: true,
-      isRequired: false,
-      isVisible: false,
-      isEditable: true,
-      isGroupable: false,
-      sortOrder: 80,
-      createdAt: new Date().toISOString(),
-    },
+    // 1h.6: `unit` is no longer a core column on the inventory row. UoM
+    // moved to per-(item, vendor) pricing rows so each vendor can sell in
+    // its own unit (Costco apples in lb vs. corner-store ct). Quantity /
+    // Min Quantity render their suffix from the item's `displayUnit`,
+    // which derives from the first vendor pricing row's unit. Existing
+    // orgs' Unit core column gets demoted to isCore: false by the
+    // reconcile loop and can be hidden / deleted by users.
+    // 1g: vendor, reorderLink, unitCost, packSize, packCost are no longer
+    // seeded as inventory-row columns — they live on the per-(item, vendor)
+    // `inventoryItemVendorPricing` table, accessed via the item detail
+    // modal. Existing orgs that still have these column rows from an earlier
+    // seed get demoted to isCore: false by the reconcile pass below so they
+    // can be deleted via Manage Columns. Item values for these keys remain
+    // readable as a fallback until 1g.7 migration finishes.
     {
       organizationId,
       module: "inventory",
@@ -261,23 +227,10 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
       sortOrder: 90,
       createdAt: new Date().toISOString(),
     },
-    {
-      organizationId,
-      module: "inventory",
-      kind: "column",
-      key: "category",
-      label: "Category",
-      type: "text",
-      isCore: true,
-      isRequired: false,
-      isVisible: true,
-      isEditable: true,
-      // Category ships with the header dropdown filter on. Replaces the
-      // previous hardcoded `column.key === "category"` branch in the table.
-      isGroupable: true,
-      sortOrder: 100,
-      createdAt: new Date().toISOString(),
-    },
+    // 1h.5: `category` is no longer seeded for new orgs. Templates that
+    // want a category-style facet can ship it as a regular custom column.
+    // Existing orgs keep their category data; the reconcile loop demotes
+    // those rows to isCore: false so users can hide or delete them.
   ];
 
   const existingByKey = new Map(existing.map((c) => [c.key, c]));
@@ -303,20 +256,28 @@ export const ensureColumns = async (organizationId: string): Promise<InventoryCo
     }
   }
 
-  // Reconcile drift on existing core rows (isEditable / isGroupable / kind).
-  // Only touches core columns whose stored value disagrees with the authoritative
-  // map. Non-core columns are user-managed and never reconciled here.
+  // Reconcile drift on existing core rows (isEditable / isGroupable / kind /
+  // deprecation). Only touches core columns whose stored value disagrees with
+  // the authoritative map. Non-core columns are user-managed and never
+  // reconciled here.
   let reconciled = false;
   for (const col of existing) {
     if (!col.isCore) continue;
     const updates: Record<string, unknown> = {};
-    const editableTarget = CORE_COLUMN_IS_EDITABLE[col.key];
-    const groupableTarget = CORE_COLUMN_IS_GROUPABLE[col.key];
-    if (editableTarget !== undefined && col.isEditable !== editableTarget) {
-      updates.isEditable = editableTarget;
-    }
-    if (groupableTarget !== undefined && (col.isGroupable ?? false) !== groupableTarget) {
-      updates.isGroupable = groupableTarget;
+
+    // Demote deprecated keys: flip isCore→false so the column-mgmt UI shows
+    // a delete button. Data on item rows is preserved (valuesJson untouched).
+    if (DEPRECATED_CORE_KEYS.has(col.key)) {
+      updates.isCore = false;
+    } else {
+      const editableTarget = CORE_COLUMN_IS_EDITABLE[col.key];
+      const groupableTarget = CORE_COLUMN_IS_GROUPABLE[col.key];
+      if (editableTarget !== undefined && col.isEditable !== editableTarget) {
+        updates.isEditable = editableTarget;
+      }
+      if (groupableTarget !== undefined && (col.isGroupable ?? false) !== groupableTarget) {
+        updates.isGroupable = groupableTarget;
+      }
     }
     // Backfill kind on pre-migration rows.
     if (col.kind === undefined) {

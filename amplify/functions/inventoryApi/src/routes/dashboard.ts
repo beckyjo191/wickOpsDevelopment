@@ -9,6 +9,10 @@ import { getDaysUntilExpiration } from "../csv";
 import { getRegisteredVendors } from "../vendors";
 import { createLocation } from "../locations";
 import { ensureSchemaUpToDate, DEFAULT_LOCATION_NAME } from "../migration";
+import { seedSyntheticPriceHistory } from "../seed-synthetic-history";
+import { migrateVendorPricingFromItems } from "../migrate-vendor-pricing";
+import { listAllVendorPricing } from "./vendor-pricing";
+import { getAllowedUnits } from "./allowed-units";
 import { ddb } from "../clients";
 
 export const handleAlertSummary = async (ctx: RouteContext) => {
@@ -91,6 +95,27 @@ export const handleBootstrap = async (ctx: RouteContext) => {
   const migrationResult = await ensureSchemaUpToDate(storage, access);
   const columns = await ensureColumns(access.organizationId);
 
+  // 1e seed: synthesize one closed order per existing item with vendor +
+  // price data so Shop has comparable history on day one. Idempotent (meta
+  // marker + per-order ConditionExpression). Failure is logged, not fatal —
+  // the user can still use the app, just with empty price history.
+  try {
+    await seedSyntheticPriceHistory(storage, access);
+  } catch (err) {
+    console.warn("Synthetic price-history seed failed", err);
+  }
+
+  // 1g.7 migration: seed inventoryItemVendorPricing rows from legacy
+  // vendor / unitCost / packSize / packCost / reorderLink fields on items.
+  // Lets the user delete those columns from Manage Columns once migrated.
+  // Idempotent (meta marker + per-row attribute_not_exists). Failure is
+  // logged, not fatal.
+  try {
+    await migrateVendorPricingFromItems(storage, access);
+  } catch (err) {
+    console.warn("Vendor-pricing migration failed", err);
+  }
+
   // Locations must exist before we seed a blank row (the seed needs a
   // locationId). On a fresh org with no items and no migration, no locations
   // exist yet — create a Default one.
@@ -108,10 +133,16 @@ export const handleBootstrap = async (ctx: RouteContext) => {
   // Use paginated fetch to stay well under Lambda's 6 MB response limit.
   // Each item is ~200 bytes JSON, so 10k items ≈ 2 MB — safe margin under 6 MB.
   const BOOTSTRAP_PAGE_SIZE = 10_000;
-  let [page, registeredVendors] = await Promise.all([
+  let [page, registeredVendors, vendorPricing, allowedUnitsResult] = await Promise.all([
     listItemsPage(storage, access.organizationId, BOOTSTRAP_PAGE_SIZE),
     getRegisteredVendors(storage),
+    listAllVendorPricing(storage, access.organizationId),
+    getAllowedUnits(storage),
   ]);
+  // 1h.7: getAllowedUnits returns both the curated list AND the
+  // tracksUnits org gate (whether the org buys items in units of
+  // measurement). Default-off so basic EMS orgs get the simpler form.
+  const { units: allowedUnits, tracksUnits } = allowedUnitsResult;
   let items = page.items;
   let nextToken = page.nextToken;
 
@@ -160,6 +191,17 @@ export const handleBootstrap = async (ctx: RouteContext) => {
     items,
     locations,
     registeredVendors,
+    // 1g: per-(item, vendor) pricing rows. Frontend builds an in-memory
+    // Map<itemId, Map<vendor, entry>> for fast modal + Shop reads.
+    vendorPricing,
+    // 1h.2: per-org curated unit list. Drives the unit dropdowns in
+    // CellEditor + New Order so EMS / pantry / fire orgs see only the
+    // units that fit their world.
+    allowedUnits,
+    // 1h.7: org-wide gate. When false (default for new orgs), the i
+    // modal hides Amount + Unit fields — count-only EMS flow. When
+    // true, the dual-axis Pack form + $/lb price-trend math come on.
+    tracksUnits,
     columnVisibilityOverrides: access.columnVisibilityOverrides,
     nextToken,
     ...(migrationResult.toastMessage

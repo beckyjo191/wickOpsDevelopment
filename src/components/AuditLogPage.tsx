@@ -4,7 +4,6 @@ import {
   fetchItemHistory,
   fetchAuditAnalytics,
   fetchVendorBreakdown,
-  updateItemPricing,
   type VendorBreakdown,
   undoColumnDeleteEvent,
   undoRetireEvent,
@@ -25,7 +24,7 @@ import {
   User,
   X,
 } from "lucide-react";
-import { formatCurrency, parseCurrency, isCurrencyColumnKey } from "../lib/currency";
+import { formatCurrency, isCurrencyColumnKey } from "../lib/currency";
 import { DaySection } from "../lib/dayGroups";
 import { EmptyState } from "./shared/EmptyState";
 import { LoadingState } from "./shared/LoadingState";
@@ -1270,7 +1269,7 @@ function VendorDrillInPanel({
             </div>
 
             {data.items.length === 0 ? (
-              <p className="audit-empty">No priced restocks from this vendor in the period.</p>
+              <p className="audit-empty">No data for this period.</p>
             ) : (
               <table className="audit-vendor-drawer-table">
                 <thead>
@@ -1318,161 +1317,27 @@ function VendorDrillInPanel({
   );
 }
 
-/**
- * Compact banner that surfaces the count of inventory items missing
- * prices. Collapsed by default — tapping the header expands an editable
- * panel underneath. The banner lives at the top of the analytics dashboard
- * so it's the first thing the user sees if their analytics are missing data.
- */
-function MissingPricesBanner({
-  items,
-  onSaved,
-}: {
-  items: NonNullable<AuditAnalytics["missingPriceItems"]>;
-  onSaved: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const count = items.length;
-  return (
-    <div className="audit-missing-prices-banner">
-      <button
-        type="button"
-        className="audit-missing-prices-banner-header"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-      >
-        <span className="audit-missing-prices-banner-icon" aria-hidden="true">!</span>
-        <span className="audit-missing-prices-banner-text">
-          {count} item{count === 1 ? "" : "s"} missing a price.
-          {" "}Set prices to backfill historical analytics.
-        </span>
-        <span className="audit-missing-prices-banner-chevron" aria-hidden="true">
-          {expanded ? "▾" : "▸"}
-        </span>
-      </button>
-      {expanded ? (
-        <MissingPricesPanel items={items} onSaved={() => onSaved()} />
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Inline editable list of inventory items currently missing prices. Lets
- * users backfill unit cost in one place without bouncing into the Inventory
- * tab to find and edit each row. Saves on blur per row, then re-runs the
- * analytics fetch so KPIs reflect the new pricing immediately (the analytics
- * fallback values past USAGE_APPROVE events at the current item unit cost).
- */
-function MissingPricesPanel({
-  items,
-  onSaved,
-}: {
-  items: NonNullable<AuditAnalytics["missingPriceItems"]>;
-  /** Called after a successful save so the parent can re-fetch analytics. */
-  onSaved: (savedItemIds: string[]) => void;
-}) {
-  // Local draft state — keyed by itemId. Stays in sync as the user types.
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [savingIds, setSavingIds] = useState<Set<string>>(new Set());
-  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  const visibleItems = items.filter((i) => !savedIds.has(i.itemId));
-
-  if (visibleItems.length === 0) {
-    return (
-      <div className="audit-missing-prices-empty">
-        <p>All flagged items have prices set. Reload analytics to refresh totals.</p>
-      </div>
-    );
-  }
-
-  const onCommit = async (itemId: string, raw: string) => {
-    const trimmed = raw.trim();
-    if (!trimmed) return;
-    const parsed = parseCurrency(trimmed);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      setError("Unit cost must be a positive number.");
-      return;
-    }
-    setError(null);
-    setSavingIds((prev) => new Set(prev).add(itemId));
-    try {
-      await updateItemPricing([{ itemId, unitCost: parsed }]);
-      setSavedIds((prev) => new Set(prev).add(itemId));
-      onSaved([itemId]);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to save.");
-    } finally {
-      setSavingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(itemId);
-        return next;
-      });
-    }
-  };
-
-  return (
-    <div className="audit-missing-prices-panel">
-      <p className="audit-missing-prices-hint">
-        Setting a unit cost values past usage events at the new price — so
-        historical analytics reflect what the call actually cost.
-      </p>
-      {error ? <p className="audit-error">{error}</p> : null}
-      <ul className="audit-missing-prices-list">
-        {visibleItems.map((item) => {
-          const draft = drafts[item.itemId] ?? "";
-          const saving = savingIds.has(item.itemId);
-          return (
-            <li key={item.itemId} className="audit-missing-prices-row">
-              <span className="audit-missing-prices-name" title={item.itemName}>
-                {item.itemName}
-              </span>
-              <span className="audit-missing-prices-qty">
-                {item.quantity > 0 ? `Qty ${formatQty(item.quantity)}` : "—"}
-              </span>
-              <input
-                type="text"
-                inputMode="decimal"
-                placeholder="$0.00"
-                className="field audit-missing-prices-input"
-                value={draft}
-                onChange={(e) => setDrafts((prev) => ({ ...prev, [item.itemId]: e.target.value }))}
-                onBlur={(e) => onCommit(item.itemId, e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    (e.currentTarget as HTMLInputElement).blur();
-                  }
-                }}
-                disabled={saving}
-                aria-label={`Unit cost for ${item.itemName}`}
-              />
-              {saving ? <span className="audit-missing-prices-status">Saving…</span> : null}
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
 
 function AnalyticsDashboard({
   analytics,
   onViewItemHistory,
   onViewVendor,
-  onPricesSaved,
 }: {
   analytics: AuditAnalytics;
   onViewItemHistory?: (itemId: string, name: string) => void;
   /** Slice C: click a vendor row → open the vendor drill-in panel. */
   onViewVendor?: (vendor: string) => void;
-  /** Called after the missing-prices panel saves at least one item — the
-   *  parent re-fetches analytics so the new pricing takes effect. */
-  onPricesSaved?: () => void;
 }) {
   const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
   const previous = analytics.previous;
+
+  // Top items chart toggle. Three lenses on the same item set:
+  //   purchased — RESTOCK $ (procurement)
+  //   usedCost  — qty used × unit cost (consumption $)
+  //   usedQty   — qty used (consumption units)
+  // One card, one mental model: "rank items by …".
+  type TopItemsView = "purchased" | "usedCost" | "usedQty";
+  const [topItemsView, setTopItemsView] = useState<TopItemsView>("purchased");
 
   const hasData =
     totals.qtyUsed > 0
@@ -1490,6 +1355,9 @@ function AnalyticsDashboard({
     : null;
   const prevByUsageItem = previous
     ? new Map(previous.byUsageItem.map((r) => [r.itemName, r.qtyUsed]))
+    : null;
+  const prevByUsageCost = previous
+    ? new Map(previous.byUsageItem.map((r) => [r.itemName, r.cost]))
     : null;
   const prevLossByReason = previous
     ? new Map(previous.lossByReason.map((r) => [r.reason, r.qty]))
@@ -1516,20 +1384,8 @@ function AnalyticsDashboard({
     reasonLabel: REASON_LABELS[r.reason] ?? r.reason,
   }));
 
-  const missingPriceItems = analytics.missingPriceItems ?? [];
-
   return (
     <>
-      {/* Missing-prices nudge. Setting prices here automatically values past
-          USAGE_APPROVE events (the analytics fallback prefers the current
-          item unitCost when the event itself wasn't stamped). Banner stays
-          collapsible so it doesn't steal real estate after dismiss. */}
-      {missingPriceItems.length > 0 ? (
-        <MissingPricesBanner
-          items={missingPriceItems}
-          onSaved={() => onPricesSaved?.()}
-        />
-      ) : null}
 
       {/* KPI strip — three equal-width cards. Replaces the lopsided 1-wide +
           2-stacked layout. Each card carries an optional YoY delta chip when
@@ -1553,30 +1409,110 @@ function AnalyticsDashboard({
         />
       </div>
 
-      {/* Spend deep-dive — top items + top vendors, equal columns. */}
-      {(bySpendItem.length > 0 || byVendor.length > 0) ? (
+      {/* Top items — single tabbed card answers three different questions:
+          "what did we buy?" / "what did we burn money on?" / "what did we
+          burn through?". Sits next to Top vendors so the spend lens is
+          one glance away from "who'd we buy from". */}
+      {(bySpendItem.length > 0 || byUsageItem.length > 0 || byVendor.length > 0) ? (
         <section className="audit-analytics-section">
-          <h3 className="audit-analytics-section-title">Spend</h3>
+          <h3 className="audit-analytics-section-title">Top items</h3>
           <div className="audit-analytics-grid">
-            <SimpleBarChart
-              data={bySpendItem as unknown as Array<Record<string, unknown>>}
-              labelKey="itemName"
-              valueKey="spend"
-              title="Top items by spend"
-              formatValue={formatUsd}
-              onRowClick={onViewItemHistory ? (row) => {
-                const itemId = String(row.itemId ?? "");
-                const itemName = String(row.itemName ?? "");
-                if (itemId) onViewItemHistory(itemId, itemName);
-              } : undefined}
-              rowKey={(row) => String(row.itemId ?? row.itemName)}
-              rowDelta={prevBySpendItem ? (row) => computeDelta(
-                Number(row.spend ?? 0),
-                prevBySpendItem.get(String(row.itemName ?? "")),
-                true,
-              ) : undefined}
-              emptyHint="No priced restocks in this period."
-            />
+            <div className="audit-top-items-card">
+              <div className="audit-top-items-tabs" role="tablist" aria-label="Top items view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={topItemsView === "purchased"}
+                  className={`audit-top-items-tab ${topItemsView === "purchased" ? "is-active" : ""}`}
+                  onClick={() => setTopItemsView("purchased")}
+                >
+                  Purchased ($)
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={topItemsView === "usedCost"}
+                  className={`audit-top-items-tab ${topItemsView === "usedCost" ? "is-active" : ""}`}
+                  onClick={() => setTopItemsView("usedCost")}
+                >
+                  Used ($)
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={topItemsView === "usedQty"}
+                  className={`audit-top-items-tab ${topItemsView === "usedQty" ? "is-active" : ""}`}
+                  onClick={() => setTopItemsView("usedQty")}
+                >
+                  Used (qty)
+                </button>
+              </div>
+              {topItemsView === "purchased" ? (
+                <SimpleBarChart
+                  data={bySpendItem as unknown as Array<Record<string, unknown>>}
+                  labelKey="itemName"
+                  valueKey="spend"
+                  title="What we bought"
+                  formatValue={formatUsd}
+                  onRowClick={onViewItemHistory ? (row) => {
+                    const itemId = String(row.itemId ?? "");
+                    const itemName = String(row.itemName ?? "");
+                    if (itemId) onViewItemHistory(itemId, itemName);
+                  } : undefined}
+                  rowKey={(row) => String(row.itemId ?? row.itemName)}
+                  rowDelta={prevBySpendItem ? (row) => computeDelta(
+                    Number(row.spend ?? 0),
+                    prevBySpendItem.get(String(row.itemName ?? "")),
+                    true,
+                  ) : undefined}
+                  emptyHint="No data for this period."
+                />
+              ) : topItemsView === "usedCost" ? (
+                <SimpleBarChart
+                  data={[...byUsageItem]
+                    .sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0))
+                    .slice(0, 10) as unknown as Array<Record<string, unknown>>}
+                  labelKey="itemName"
+                  valueKey="cost"
+                  title="What we burned through ($)"
+                  formatValue={formatUsd}
+                  onRowClick={onViewItemHistory ? (row) => {
+                    const itemId = String(row.itemId ?? "");
+                    const itemName = String(row.itemName ?? "");
+                    if (itemId) onViewItemHistory(itemId, itemName);
+                  } : undefined}
+                  rowKey={(row) => String(row.itemId ?? row.itemName)}
+                  rowDelta={prevByUsageCost ? (row) => computeDelta(
+                    Number(row.cost ?? 0),
+                    prevByUsageCost.get(String(row.itemName ?? "")),
+                    true,
+                  ) : undefined}
+                  emptyHint="No data for this period."
+                />
+              ) : (
+                <SimpleBarChart
+                  data={[...byUsageItem]
+                    .sort((a, b) => (b.qtyUsed ?? 0) - (a.qtyUsed ?? 0))
+                    .slice(0, 10) as unknown as Array<Record<string, unknown>>}
+                  labelKey="itemName"
+                  valueKey="qtyUsed"
+                  title="What we burned through (qty)"
+                  formatValue={formatQty}
+                  onRowClick={onViewItemHistory ? (row) => {
+                    const itemId = String(row.itemId ?? "");
+                    const itemName = String(row.itemName ?? "");
+                    if (itemId) onViewItemHistory(itemId, itemName);
+                  } : undefined}
+                  rowKey={(row) => String(row.itemId ?? row.itemName)}
+                  rowDelta={prevByUsageItem ? (row) => computeDelta(
+                    Number(row.qtyUsed ?? 0),
+                    prevByUsageItem.get(String(row.itemName ?? "")),
+                    false,
+                  ) : undefined}
+                  emptyHint="No usage logged in this period."
+                />
+              )}
+            </div>
             <SimpleBarChart
               data={byVendor as unknown as Array<Record<string, unknown>>}
               labelKey="vendor"
@@ -1599,32 +1535,11 @@ function AnalyticsDashboard({
         </section>
       ) : null}
 
-      {/* Usage deep-dive — top consumed items + spend over time. */}
-      {(byUsageItem.length > 0 || usageOverTime.length > 0) ? (
+      {/* Trends — usage + spend over time, side by side. */}
+      {usageOverTime.length > 0 ? (
         <section className="audit-analytics-section">
-          <h3 className="audit-analytics-section-title">Usage</h3>
-          <div className="audit-analytics-grid">
-            <SimpleBarChart
-              data={byUsageItem as unknown as Array<Record<string, unknown>>}
-              labelKey="itemName"
-              valueKey="qtyUsed"
-              title="Top items consumed"
-              formatValue={formatQty}
-              onRowClick={onViewItemHistory ? (row) => {
-                const itemId = String(row.itemId ?? "");
-                const itemName = String(row.itemName ?? "");
-                if (itemId) onViewItemHistory(itemId, itemName);
-              } : undefined}
-              rowKey={(row) => String(row.itemId ?? row.itemName)}
-              rowDelta={prevByUsageItem ? (row) => computeDelta(
-                Number(row.qtyUsed ?? 0),
-                prevByUsageItem.get(String(row.itemName ?? "")),
-                false,
-              ) : undefined}
-              emptyHint="No usage logged in this period."
-            />
-            <UsageLineChart data={usageOverTime} />
-          </div>
+          <h3 className="audit-analytics-section-title">Trends</h3>
+          <UsageLineChart data={usageOverTime} />
         </section>
       ) : null}
 
@@ -1752,9 +1667,10 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
-  // Bumped after a successful pricing save in the Missing Prices panel so
-  // the analytics dashboard re-runs and the new prices flow through KPIs.
-  const [analyticsRefreshKey, setAnalyticsRefreshKey] = useState(0);
+  // Bumped after analytics-affecting actions to force a re-fetch. Currently
+  // unused — held so a future analytics action (e.g. retroactive price edits
+  // somewhere else) can drop in without re-plumbing the dependency.
+  const [analyticsRefreshKey] = useState(0);
 
   useEffect(() => {
     if (tab === "analytics" && canManageColumns) {
@@ -2140,7 +2056,6 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
               analytics={analytics}
               onViewItemHistory={viewItemHistory}
               onViewVendor={(vendor) => setVendorDrillIn(vendor)}
-              onPricesSaved={() => setAnalyticsRefreshKey((n) => n + 1)}
             />
           )}
 

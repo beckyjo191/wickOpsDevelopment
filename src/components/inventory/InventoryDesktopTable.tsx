@@ -1,5 +1,5 @@
-import type { MouseEvent as ReactMouseEvent } from "react";
-import { ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { useLayoutEffect, useRef, type MouseEvent as ReactMouseEvent } from "react";
+import { ChevronDown, ChevronUp, Info } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
@@ -52,6 +52,18 @@ export type InventoryDesktopTableProps = {
    *  stay canonical across the app. */
   availableVendors?: string[];
   onAddVendor?: (name: string) => Promise<void>;
+  /** 1h.2c: per-org curated unit list. Forwarded to CellEditor for the
+   *  Unit column dropdown. */
+  allowedUnits?: string[];
+  /** 1h.7: per-(item, vendor) pricing rows, keyed by item id. The table
+   *  uses this to derive each row's `displayUnit` for the Quantity / Min
+   *  Quantity suffix (first vendor pricing row's primary axis when the
+   *  item itself doesn't carry one). */
+  vendorPricing?: Map<string, Map<string, { packAmountUnit?: string; packCount?: number }>>;
+  /** Open the per-item detail modal (1g.4 — vendor pricing). When set, a
+   *  small "info" button renders in each row's actions area; clicking it
+   *  hands the rowId up to InventoryPage which manages modal state. */
+  onOpenItemDetails?: (rowId: string) => void;
 };
 
 /**
@@ -92,14 +104,44 @@ export function InventoryDesktopTable({
   onRemoveRow,
   availableVendors,
   onAddVendor,
+  allowedUnits,
+  vendorPricing,
+  onOpenItemDetails,
 }: InventoryDesktopTableProps) {
-  // Single Remove column replaces the prior separate Retire (Expired tab only)
-  // and Delete (qty-zero only) columns. Available on every tab so the user
-  // can record a loss event against any row regardless of state — the dialog
-  // handles routing.
-  const showRemove = canEditTable && !!onRemoveRow;
+  // The per-row delete button was removed in 1g — bulk removal goes through
+  // the row checkbox + Remove action on selected rows. The onRemoveRow prop
+  // is still accepted (RemoveItemDialog hooks into it) but no per-row icon
+  // is rendered. `_unusedRemove` keeps the prop in the interface as a lint
+  // canary for future per-row affordances if we add one back.
+  const _unusedRemove = onRemoveRow;
+  void _unusedRemove;
+
+  // Preserve horizontal scroll across re-renders. Clicking a cell triggers
+  // `setSelectedRowId` (from both the row's onClick and the cell's
+  // onMouseDown), which re-renders the table. In some browsers the focus
+  // auto-scroll behavior + this re-render combine to yank scrollLeft back
+  // to 0 — making it feel like every click jumps the table to its left
+  // edge and forcing the user to re-scroll to finish editing. We track
+  // scrollLeft in a ref via the wrapper's onScroll handler, then restore
+  // it post-paint via useLayoutEffect.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const scrollLeftRef = useRef(0);
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    if (el.scrollLeft !== scrollLeftRef.current) {
+      el.scrollLeft = scrollLeftRef.current;
+    }
+  });
+
   return (
-    <div className="inventory-table-wrap">
+    <div
+      ref={wrapRef}
+      className="inventory-table-wrap"
+      onScroll={(event) => {
+        scrollLeftRef.current = event.currentTarget.scrollLeft;
+      }}
+    >
       <table className="inventory-table">
         <thead>
           <tr>
@@ -116,6 +158,10 @@ export function InventoryDesktopTable({
                 />
               </th>
             ) : null}
+            {/* Item-detail (ⓘ) column sits right after the row-select checkbox
+             *  so it lands before Item Name — the user clicks it to open the
+             *  vendor pricing modal for that item. */}
+            {onOpenItemDetails ? <th className="inventory-col-details" aria-label="Details" /> : null}
             {visibleColumns.map((column) =>
               // Generic groupable filter: any column with isGroupable === true
               // gets the dropdown header. Replaces the previous hardcoded
@@ -199,11 +245,32 @@ export function InventoryDesktopTable({
                 </th>
               ),
             )}
-            {showRemove ? <th className="inventory-col-delete" aria-label="Remove" /> : null}
           </tr>
         </thead>
         <tbody>
-          {paginatedRows.map(({ row, index: rowIndex }) => (
+          {paginatedRows.map(({ row, index: rowIndex }) => {
+            // 1h.7: derive the row's display unit once per render, fed
+            // into the CellEditor for Quantity / Min Quantity suffixes.
+            // Order of preference:
+            //   1. item-level `displayUnit` (canonical source going fwd)
+            //   2. legacy item-level `unit` (pre-1h.7 fallback)
+            //   3. first vendor pricing row's primary axis: weight/volume
+            //      unit if `packAmountUnit` is set, else "ct" if any
+            //      pricing row has `packCount`. Lets a freshly-created
+            //      item inherit display from its first vendor's pack.
+            //   4. "ct" — last resort so the suffix never shows blank.
+            const itemDisplayUnit = String(row.values.displayUnit ?? "").trim();
+            const itemLegacyUnit = String(row.values.unit ?? "").trim();
+            const vendorRows = vendorPricing
+              ? Array.from(vendorPricing.get(row.id)?.values() ?? [])
+              : [];
+            const firstVendorAmountUnit = vendorRows
+              .map((p) => (p.packAmountUnit ?? "").trim())
+              .find((u) => u.length > 0) ?? "";
+            const anyVendorHasCount = vendorRows.some((p) => p.packCount !== undefined);
+            const firstVendorUnit = firstVendorAmountUnit || (anyVendorHasCount ? "ct" : "");
+            const rowDisplayUnit = itemDisplayUnit || itemLegacyUnit || firstVendorUnit || "ct";
+            return (
             <tr
               key={row.id}
               data-row-id={row.id}
@@ -221,6 +288,19 @@ export function InventoryDesktopTable({
                     disabled={!canEditTable}
                     aria-label={`Select row ${rowIndex + 1}`}
                   />
+                </td>
+              ) : null}
+              {onOpenItemDetails ? (
+                <td className="inventory-col-details" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="inventory-row-details-btn"
+                    onClick={() => onOpenItemDetails(row.id)}
+                    title="Vendor pricing & details"
+                    aria-label="Open item details"
+                  >
+                    <Info size={14} aria-hidden="true" />
+                  </button>
                 </td>
               ) : null}
               {visibleColumns.map((column) => {
@@ -266,25 +346,15 @@ export function InventoryDesktopTable({
                     onSetSelectedRowId={onSetSelectedRowId}
                     availableVendors={availableVendors}
                     onAddVendor={onAddVendor}
+                    allowedUnits={allowedUnits}
+                    displayUnit={rowDisplayUnit}
                   />
                 </td>
                 );
               })}
-              {showRemove ? (
-                <td className="inventory-col-delete" onClick={(e) => e.stopPropagation()}>
-                  <button
-                    type="button"
-                    className="inventory-row-delete-btn"
-                    onClick={() => onRemoveRow!(row.id)}
-                    title="Remove this item"
-                    aria-label="Remove row"
-                  >
-                    <Trash2 size={14} aria-hidden="true" />
-                  </button>
-                </td>
-              ) : null}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

@@ -18,6 +18,7 @@ import {
   AUDIT_BY_USER_INDEX,
   INVENTORY_COLUMN_BY_MODULE_INDEX,
   INVENTORY_ITEM_BY_MODULE_INDEX,
+  INVENTORY_VENDOR_PRICING_BY_ITEM_INDEX,
   STORAGE_CACHE_TTL_MS,
 } from "./config";
 import { buildOrgScopedTableName, sleep } from "./normalize";
@@ -104,6 +105,61 @@ export const createOrgTableIfMissing = async (
             KeySchema: [
               { AttributeName: "module", KeyType: KeyType.HASH },
               { AttributeName: gsiSortKey, KeyType: KeyType.RANGE },
+            ],
+            Projection: { ProjectionType: ProjectionType.ALL },
+          },
+        ],
+      }),
+    );
+  } catch (err: any) {
+    if (!isResourceInUse(err)) {
+      throw err;
+    }
+  }
+
+  try {
+    await waitForTableActive(tableName);
+    await enablePitr(tableName);
+    return { created: true };
+  } catch {
+    throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
+  }
+};
+
+/** Create the per-org `inventoryItemVendorPricing` table (1g). Hash-keyed on
+ *  `id` (the composite `${itemId}#${vendorLower}` string), with a GSI on
+ *  `itemId` so the item-detail modal can list every vendor for one item in a
+ *  single Query. Mirrors the existing pattern used by columns/items tables. */
+export const createOrgVendorPricingTableIfMissing = async (tableName: string): Promise<{ created: boolean }> => {
+  const existing = await describeTable(tableName);
+  if (existing?.Table) {
+    if (existing.Table.TableStatus !== "ACTIVE") {
+      try {
+        await waitForTableActive(tableName);
+      } catch {
+        throw new InventoryStorageProvisioningError("Inventory storage is still provisioning");
+      }
+    }
+    await enablePitr(tableName);
+    return { created: false };
+  }
+
+  try {
+    await rawDdb.send(
+      new CreateTableCommand({
+        TableName: tableName,
+        BillingMode: BillingMode.PAY_PER_REQUEST,
+        DeletionProtectionEnabled: true,
+        AttributeDefinitions: [
+          { AttributeName: "id", AttributeType: ScalarAttributeType.S },
+          { AttributeName: "itemId", AttributeType: ScalarAttributeType.S },
+        ],
+        KeySchema: [{ AttributeName: "id", KeyType: KeyType.HASH }],
+        GlobalSecondaryIndexes: [
+          {
+            IndexName: INVENTORY_VENDOR_PRICING_BY_ITEM_INDEX,
+            KeySchema: [
+              { AttributeName: "itemId", KeyType: KeyType.HASH },
             ],
             Projection: { ProjectionType: ProjectionType.ALL },
           },
@@ -256,6 +312,7 @@ export const ensureStorageForOrganization = async (organizationId: string): Prom
     pendingTable: buildOrgScopedTableName(organizationId, "pending"),
     auditTable: buildOrgScopedTableName(organizationId, "auditlog"),
     restockOrdersTable: buildOrgScopedTableName(organizationId, "restock-orders"),
+    vendorPricingTable: buildOrgScopedTableName(organizationId, "vendor-pricing"),
   };
 
   await Promise.all([
@@ -264,6 +321,7 @@ export const ensureStorageForOrganization = async (organizationId: string): Prom
     createOrgPendingTableIfMissing(storage.pendingTable),
     createOrgAuditTableIfMissing(storage.auditTable),
     createOrgPendingTableIfMissing(storage.restockOrdersTable),
+    createOrgVendorPricingTableIfMissing(storage.vendorPricingTable),
   ]);
 
   storageCache.set(organizationId, { storage, checkedAt: now });
@@ -273,7 +331,7 @@ export const ensureStorageForOrganization = async (organizationId: string): Prom
 export const deleteStorageForOrganization = async (organizationId: string): Promise<void> => {
   const storage = await ensureStorageForOrganization(organizationId);
   await Promise.all(
-    [storage.columnTable, storage.itemTable, storage.pendingTable, storage.auditTable, storage.restockOrdersTable].map(async (tableName) => {
+    [storage.columnTable, storage.itemTable, storage.pendingTable, storage.auditTable, storage.restockOrdersTable, storage.vendorPricingTable].map(async (tableName) => {
       try {
         await rawDdb.send(new DeleteTableCommand({ TableName: tableName }));
       } catch (err: any) {

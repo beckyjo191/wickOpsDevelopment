@@ -40,7 +40,7 @@ export const sanitizeOrgIdForTableName = (organizationId: string): string =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 36) || "org";
 
-export const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items" | "pending" | "auditlog" | "restock-orders"): string => {
+export const buildOrgScopedTableName = (organizationId: string, suffix: "columns" | "items" | "pending" | "auditlog" | "restock-orders" | "vendor-pricing"): string => {
   const safeOrg = sanitizeOrgIdForTableName(organizationId);
   const hash = createHash("sha256").update(organizationId).digest("hex").slice(0, 10);
   return `${INVENTORY_ORG_TABLE_PREFIX}-${INVENTORY_STORAGE_NAMESPACE}-${safeOrg}-${hash}-${suffix}`;

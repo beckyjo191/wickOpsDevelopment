@@ -5157,6 +5157,577 @@ textarea.inventory-card-input {
   margin-bottom: 0.75rem;
 }
 
+/* ── Shop tab (1d) ────────────────────────────────────────────────────────── */
+
+.shop-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.shop-tab-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.shop-tab-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 160px;
+}
+
+.shop-vendor-select {
+  height: 38px;
+  width: 100%;
+}
+
+.shop-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* 1h.7: search + select-all toolbar above the row list. Sits flush with
+ * the rows so the search input feels like an extension of the list, not
+ * a separate element. */
+.shop-rows-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.2rem 0.2rem;
+}
+
+.shop-rows-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  cursor: pointer;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.shop-rows-select-all > input[type="checkbox"] {
+  accent-color: var(--primary);
+}
+
+.shop-rows-select-all-label {
+  font-weight: 600;
+}
+
+.shop-rows-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.shop-rows-search-input {
+  width: 100%;
+  height: 34px;
+}
+
+.shop-rows-search-count {
+  font-size: 0.8rem;
+  color: var(--text-soft);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+/* 1h.7: item-count chip in the Reorder toolbar. Same pill silhouette as
+ * the estimate chip so the two read as a paired summary ("N items, Est.
+ * $X"). Tooltip explains "distinct low items"; the chip itself stays
+ * tight on horizontal space. */
+.shop-rows-count-chip {
+  font-size: 0.85rem;
+  color: var(--text);
+  padding: 0.25rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.shop-rows-count-chip strong {
+  color: var(--text-heading);
+}
+
+/* 1h.7: per-row edit-pricing button on the Reorder tab. Mirrors the
+ * inventory-table info-icon pattern — single canonical entry into the
+ * vendor-pricing modal, replacing the old inline pack-size / price /
+ * URL edits. Sits to the right of the item-info column, vertically
+ * aligned with the row's center. */
+.shop-row-edit-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 0.15rem;
+}
+
+.shop-row-edit-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.shop-row-edit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 1h.8: read-only mode label next to the qty input. Replaces the
+ * Single|Pack tab toggle — shows "Pack (100)" or "Single" and tells
+ * the user what mode the vendor row is configured in. To change, edit
+ * the pricing row in the i modal (no inline override on Reorder). */
+.shop-row-mode-label {
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  align-self: flex-start;
+}
+
+.shop-rows-empty {
+  margin: 0.6rem 0.2rem;
+  font-size: 0.9rem;
+  color: var(--text-soft);
+}
+
+/* 1h.7: estimated-spend pill in the Shop toolbar. Always-on summary
+ * across the visible rows (vendor's prices on a vendor tab; best
+ * cross-vendor prices on the All Vendors tab). */
+.shop-rows-estimate {
+  font-size: 0.85rem;
+  color: var(--text);
+  padding: 0.25rem 0.55rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.shop-rows-estimate strong {
+  color: var(--text-heading);
+}
+
+.shop-rows-estimate-hint {
+  color: var(--text-soft);
+  font-size: 0.78rem;
+}
+
+.shop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.shop-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.shop-row-check {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.shop-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.shop-row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 600;
+  color: var(--text-heading);
+  text-decoration: none;
+}
+
+.shop-row-name:hover {
+  color: var(--primary);
+}
+
+.shop-row-stock {
+  font-size: 0.8rem;
+  color: var(--text-soft);
+}
+
+.shop-row-pricing {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.shop-row-best {
+  font-variant-numeric: tabular-nums;
+}
+
+.shop-row-best--empty {
+  color: var(--text-soft);
+  font-style: italic;
+}
+
+.shop-row-samples {
+  color: var(--text-soft);
+}
+
+.shop-row-vs-best {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+}
+
+.shop-row-inputs {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+/* Vertical stack: SINGLE|PACK toggle on top, qty input below. Replaces the
+ * old horizontal `.shop-row-qty` arrangement (input + "ct" suffix) so the
+ * unit hint now lives inside the input as a placeholder instead of being a
+ * permanent label tacked on the right. */
+.shop-row-qty-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.shop-row-qty-input {
+  width: 100%;
+  height: 36px;
+  -moz-appearance: textfield;
+}
+
+/* Strip number-spinner arrows from the Shop qty input. The arrows ate
+ * horizontal space that pushed adjacent elements (Set price button) into
+ * a clipped state. Keyboard arrow keys still increment/decrement. */
+.shop-row-qty-input::-webkit-inner-spin-button,
+.shop-row-qty-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.shop-row-set-price {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+}
+
+/* Pack-mode toggle on a Shop row (1h.1). Single|Pack(N) — sits between
+ * the row's vendor info and the qty input on a new flex row when
+ * present. Shrinks to its content. */
+.shop-row-mode {
+  align-self: flex-start;
+  flex: 0 0 auto;
+}
+
+/* Inline pack-size input on a Shop row (1h.1d) when pack mode is on but
+ * the vendor has no packSize on file. User types size for this purchase;
+ * the receive flow persists it to the vendor pricing row. */
+.shop-row-pack-size {
+  flex: 0 0 auto;
+  width: 4.5rem;
+  height: 36px;
+  -moz-appearance: textfield;
+}
+
+.shop-row-pack-size::-webkit-inner-spin-button,
+.shop-row-pack-size::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Inline URL edit on a Shop row (1h.3). Pencil button next to a linked
+ * name OR "+ URL" placeholder when no URL is on file for the active vendor.
+ * Saves go through the same vendor-pricing upsert the modal uses. */
+.shop-row-name-with-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.shop-row-name-link {
+  color: var(--text-heading);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.shop-row-name-link:hover {
+  color: var(--primary);
+}
+
+/* All-Vendors mode: name as a button that opens item-detail modal.
+ * Looks like a plain heading at rest; underline on hover signals it's
+ * actionable without competing visually with the linked-name treatment
+ * vendor mode uses. */
+.shop-row-name-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text-heading);
+  text-align: left;
+  cursor: pointer;
+}
+
+.shop-row-name-button:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.shop-row-url-edit-btn,
+.shop-row-url-add-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-sm);
+}
+
+.shop-row-url-edit-btn:hover:not(:disabled),
+.shop-row-url-add-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--border);
+  background: var(--surface-alt);
+}
+
+.shop-row-url-add-btn {
+  margin-left: 0.4rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.shop-row-url-edit {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.shop-row-url-edit-input {
+  flex: 1;
+  min-width: 14rem;
+  height: 32px;
+}
+
+/* Collapsed "+ Set price" affordance for items with no vendor history.
+ * Click expands an inline price input. Same pattern the URL edit uses —
+ * keeps the row tight by default. */
+.shop-row-set-price-btn {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 0.32rem 0.6rem;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  /* Prevent flex/grid parent from squeezing the button below its text
+   * width — that's what was clipping "+ Set price" to "et price." */
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+.shop-row-set-price-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--surface-alt);
+}
+
+/* Settings → Allowed units chip grid (1h.2b). Toggleable chips for the
+ * curated unit list — same checkbox-as-pill pattern as other multi-select
+ * settings surfaces. */
+/* 1h.4: per-row "+ Add unit" affordance in the inventory grid. Mirrors the
+ * "+ Add expiration" pattern in OrdersPage's receive form — keeps the cell
+ * empty-and-quiet for items that don't track a UoM, with a one-click reveal
+ * of the dropdown for items that do. */
+.cell-add-unit-btn {
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cell-add-unit-btn:hover:not(:disabled) {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+
+.cell-add-unit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 1h.7: yes/no toggle that gates UoM tracking org-wide. Sits at the top
+ * of the Settings → Units of measurement section; the chip grid only
+ * appears when the toggle is on. */
+.settings-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-toggle-row > input[type="checkbox"] {
+  margin-top: 0.2rem;
+  accent-color: var(--primary);
+}
+
+.settings-toggle-row > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.settings-toggle-hint {
+  font-size: 0.85rem;
+  color: var(--text-soft);
+}
+
+.settings-allowed-units-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.4rem 0;
+}
+
+.settings-allowed-unit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.32rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.settings-allowed-unit-chip.active {
+  border-color: var(--primary);
+  background: var(--surface-alt);
+  color: var(--text-heading);
+}
+
+.settings-allowed-unit-chip input {
+  accent-color: var(--primary);
+}
+
+/* Order-mode row in New Order (1h.1d). Toggle on the left, optional
+ * pack-size input on the right when no vendor packSize is on file. */
+.manual-order-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.manual-order-pack-size-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+}
+
+.manual-order-pack-size-prefix {
+  white-space: nowrap;
+}
+
+.manual-order-pack-size-input {
+  width: 4rem;
+  -moz-appearance: textfield;
+}
+
+.manual-order-pack-size-input::-webkit-inner-spin-button,
+.manual-order-pack-size-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.shop-tab-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.75rem;
+  margin-top: 0.5rem;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+}
+
+.shop-tab-summary {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.shop-tab-summary-hint {
+  color: var(--text-soft);
+  font-size: 0.82rem;
+}
+
+@media (max-width: 720px) {
+  .shop-row {
+    grid-template-columns: 1fr;
+  }
+  .shop-tab-controls {
+    width: 100%;
+  }
+}
+
 /* Sub-tab chip row inside the Reorder section. Renders only when there are
  *  2+ vendors so the user can jump between them without scrolling. Reuses
  *  .inventory-chip styling (smaller pill chips) to differentiate from the
@@ -5625,6 +6196,268 @@ textarea.inventory-card-input {
   background: var(--danger-surface);
   color: var(--danger);
   border-color: var(--danger-border);
+}
+
+/* Item detail (vendor pricing) row trigger — mirrors the delete-btn footprint
+ * so the two end-of-row icons sit on the same baseline. */
+.inventory-col-details {
+  width: 36px;
+  min-width: 36px;
+  text-align: center;
+}
+
+.inventory-row-details-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.inventory-row-details-btn:hover {
+  background: var(--surface-alt);
+  color: var(--primary);
+  border-color: var(--border);
+}
+
+/* ── Item detail modal (1g.4) ──────────────────────────────────────────────
+ * Centered overlay-modal pattern, modal-on-mobile + same-on-desktop. The
+ * vendor-pricing list reads as a card; each row collapses to summary or
+ * expands to an inline edit form. */
+.item-detail-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.item-detail-modal {
+  width: 100%;
+  max-width: 640px;
+  max-height: calc(100vh - 2rem);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.item-detail-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.1rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-alt);
+}
+
+.item-detail-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text-heading);
+}
+
+.item-detail-modal-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.item-detail-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-soft);
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: var(--radius-sm);
+}
+
+.item-detail-modal-close:hover {
+  background: var(--surface);
+  color: var(--text-heading);
+}
+
+.item-detail-modal-body {
+  padding: 0.85rem 1.1rem 1.1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.item-detail-modal-empty {
+  color: var(--text-soft);
+  font-size: 0.88rem;
+  margin: 0.5rem 0;
+}
+
+/* 1h.7: soft mixed-unit notice in the i modal. Tints the surface so the
+ * note reads as informational, not error — we don't block the user, we
+ * just explain why best-price comparison can't pick a winner. */
+.item-detail-modal-warning {
+  margin: 0 0 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-alt);
+  border-left: 3px solid var(--warning, #c47d00);
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.item-detail-modal-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.item-detail-modal-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.item-detail-row-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.item-detail-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.item-detail-row-vendor {
+  color: var(--text-heading);
+  font-size: 0.95rem;
+}
+
+.item-detail-row-pricing {
+  font-size: 0.85rem;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.item-detail-row-link {
+  font-size: 0.78rem;
+  color: var(--primary);
+  text-decoration: none;
+  margin-top: 0.1rem;
+}
+
+.item-detail-row-link:hover {
+  text-decoration: underline;
+}
+
+.item-detail-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+
+.item-detail-row-delete {
+  color: var(--text-soft);
+}
+
+.item-detail-row-delete:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.item-detail-modal-add-form {
+  margin-top: 0.25rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.6rem;
+  background: var(--surface-soft);
+}
+
+.item-detail-modal-add-btn {
+  align-self: flex-start;
+}
+
+.item-detail-pricing-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem;
+}
+
+.item-detail-pricing-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem 0.6rem;
+}
+
+.item-detail-pricing-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.item-detail-pricing-field--wide {
+  grid-column: 1 / -1;
+}
+
+/* 1h.7: progressive-disclosure row for "+ Add unit" and "+ Add reorder
+ * URL" buttons. Sits below the priced fields, stretches across the grid,
+ * and lays the buttons out left-aligned. Renders empty until at least
+ * one disclosure field is hidden — the JSX collapses cleanly when both
+ * sections are revealed. */
+.item-detail-pricing-add-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.item-detail-pricing-add-btn {
+  font-size: 0.85rem;
+  padding: 0.32rem 0.55rem;
+}
+
+.item-detail-pricing-vendor-locked {
+  font-size: 0.95rem;
+  color: var(--text-heading);
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.item-detail-pricing-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+@media (max-width: 480px) {
+  .item-detail-pricing-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .inventory-card-actions {
@@ -7252,6 +8085,127 @@ textarea.inventory-card-input {
   gap: 0.4rem;
 }
 
+/* Amount + UoM row on a New Order line: the qty stepper (count) or decimal
+ * input (weight/volume) sits left, the UoM <select> right. The select is
+ * compact — its value is short ("lb", "fl oz") so it doesn't need to consume
+ * the full half-width that pack-mode inputs use. */
+.manual-order-amount-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.manual-order-amount-row > .usage-qty-stepper {
+  flex: 1;
+  min-width: 0;
+}
+
+.manual-order-amount-input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  -moz-appearance: textfield;
+}
+
+/* 1h.8: secondary "× 100 ct each" hint that sits to the right of the
+ * Amount stepper in Pack mode. Reads as a continuation of "1 pack ×
+ * 100 ct each" — the pack count leads, the contents-per-pack are
+ * secondary. Both read-only ("× 100 ct each") and editable variants
+ * (when no vendor packSize is on file) share this base. */
+.manual-order-pack-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.manual-order-pack-secondary--editable {
+  cursor: text;
+}
+
+.manual-order-pack-secondary-x {
+  color: var(--text-soft);
+  user-select: none;
+}
+
+.manual-order-pack-secondary--editable .manual-order-pack-size-input {
+  width: 4rem;
+  height: 32px;
+}
+
+.manual-order-amount-input::-webkit-inner-spin-button,
+.manual-order-amount-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.manual-order-unit-select {
+  flex: 0 0 auto;
+  width: 5.5rem;
+  min-width: 0;
+  height: 44px;
+}
+
+/* Read-only unit display on existing-item lines (the unit is set on the
+ * inventory row, not editable from inside New Order). Soft-styled so it
+ * reads as a label, not an input. */
+.manual-order-unit-label {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Inventory cell: number input + unit-suffix label (1f.6). The input keeps
+ * its existing styling; the suffix sits inline as a soft-styled label so the
+ * cell reads as "10 ct" / "1 lb" without the user having to look at the
+ * separate Unit column. */
+.inventory-number-with-unit {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.inventory-number-with-unit > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.inventory-unit-suffix {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  text-transform: lowercase;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Log Usage Single|Pack toggle (1f.8). Sits above the qty stepper for items
+ * that have packSize > 0; mirrors the Reorder/Shop tab pattern. Shrinks to
+ * its content so the qty stepper stays at its natural width. */
+.usage-entry-mode {
+  margin-bottom: 0.3rem;
+  align-self: flex-start;
+}
+
+/* Live $/canonical preview below the price input (e.g. "$0.039/fl oz"). Soft
+ * color + small font so it reads as a hint, not a value the user typed. */
+.manual-order-price-preview {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Reorder-URL inline editor: text input + a small × to clear the field and
  * re-collapse the row back to the "+ Reorder URL" button. */
 .manual-order-url-row {
@@ -7844,10 +8798,28 @@ textarea.inventory-card-input {
   line-height: 1.2;
 }
 
+/* 1h.8: name-row puts the per-line "edit pricing" button next to the
+ * item name. Mirrors the Reorder + Inventory grid pattern — single
+ * canonical entry into the i modal so users edit pack count / cost /
+ * URL there instead of inline. */
+.order-receive-name-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.order-receive-edit-btn {
+  width: 24px;
+  height: 24px;
+  margin-top: 0;
+}
+
 .order-receive-packinfo-math {
   color: var(--text-muted);
   opacity: 0.85;
 }
+
 
 .order-form-freeform {
   display: flex;
@@ -9223,6 +10195,46 @@ textarea.inventory-card-input {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   margin-top: 1rem;
+}
+
+/* ── Top items tabbed card ──────────────────────────────────────────────── */
+.audit-top-items-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.audit-top-items-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 0.125rem;
+  padding: 0.1875rem;
+  margin-bottom: 0.5rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.audit-top-items-tab {
+  padding: 0.3125rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-soft);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.audit-top-items-tab:hover {
+  color: var(--text);
+}
+
+.audit-top-items-tab.is-active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 /* ── Missing-prices nudge ───────────────────────────────────────────────── */

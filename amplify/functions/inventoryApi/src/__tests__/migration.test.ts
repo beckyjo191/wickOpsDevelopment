@@ -55,9 +55,10 @@ describe("planMigration", () => {
     const locationsCreated = plan.rowWrites.filter((r) => r.kind === "location");
     assert.equal(locationsCreated.length, 0);
     // New core columns added: itemName, quantity, minQuantity, vendor,
-    // reorderLink, unitCost, packSize, packCost, notes, category (10).
+    // reorderLink, unitCost, packSize, packCost, notes (9).
+    // 1h.5: category removed from the core seed.
     const columnsCreated = plan.rowWrites.filter((r) => r.kind === "column");
-    assert.equal(columnsCreated.length, 10);
+    assert.equal(columnsCreated.length, 9);
     // Migration meta row stamped.
     const metaRow = plan.rowWrites.find((r) => r.id === MIGRATION_META_ID);
     assert.ok(metaRow, "should write migration meta row");
@@ -244,7 +245,7 @@ describe("planMigration", () => {
     assert.equal(vehiclePatch.attachedLocationIds?.length, 2);
   });
 
-  it("category as custom column → promoted to core with isGroupable: true", () => {
+  it("category as custom column → stays custom (1h.5: category is no longer core)", () => {
     resetUuids();
     const plan = planMigration(
       baseWorld({
@@ -256,7 +257,7 @@ describe("planMigration", () => {
             key: "category",
             label: "Category",
             type: "text",
-            isCore: false,        // was a user-created custom column
+            isCore: false,        // user-created custom column
             isRequired: false,
             isVisible: true,
             isEditable: true,
@@ -267,11 +268,14 @@ describe("planMigration", () => {
       }),
       opts,
     );
+    // The planner should NOT promote category to core (it's been removed
+    // from NEW_CORE_COLUMNS). The only patch this row should ever pick
+    // up here is a `kind` backfill if it's missing — otherwise nothing.
     const catPatch = plan.columnPatches.find((p) => p.id === "col-category");
-    assert.ok(catPatch);
-    assert.equal(catPatch.isCore, true);
-    assert.equal(catPatch.isGroupable, true);
-    // No new core category column inserted — the existing row was promoted.
+    if (catPatch) {
+      assert.notEqual(catPatch.isCore, true);
+    }
+    // No new core category column inserted by the planner either.
     const newCoreCategories = plan.rowWrites.filter(
       (r) => r.kind === "column" && (r as any).key === "category",
     );

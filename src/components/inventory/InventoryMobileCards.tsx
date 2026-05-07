@@ -51,6 +51,13 @@ export type InventoryMobileCardsProps = {
    *  stay canonical across the app. */
   availableVendors?: string[];
   onAddVendor?: (name: string) => Promise<void>;
+  /** 1h.2c: per-org curated unit list, forwarded to CellEditor's unit
+   *  column dropdown so mobile + desktop pickers stay aligned. */
+  allowedUnits?: string[];
+  /** 1h.7: per-(item, vendor) pricing rows. Mobile cards derive each
+   *  row's `displayUnit` from this for the Quantity / Min Quantity
+   *  suffix, mirroring the desktop table. */
+  vendorPricing?: Map<string, Map<string, { packAmountUnit?: string; packCount?: number }>>;
 };
 
 /**
@@ -88,6 +95,8 @@ export function InventoryMobileCards({
   activeTab: _activeTab,
   availableVendors,
   onAddVendor,
+  allowedUnits,
+  vendorPricing,
 }: InventoryMobileCardsProps) {
   return (
     <div className="inventory-cards-wrap">
@@ -141,6 +150,21 @@ export function InventoryMobileCards({
         paginatedRows.map(({ row }) => {
           const isExpanded = expandedCardId === row.id;
           const isSelected = selectedRowIds.has(row.id);
+
+          // 1h.7: derive this card's display unit (Quantity / Min Quantity
+          // suffix). Mirrors the desktop table's resolution chain — see
+          // InventoryDesktopTable for the comment block.
+          const itemDisplayUnit = String(row.values.displayUnit ?? "").trim();
+          const itemLegacyUnit = String(row.values.unit ?? "").trim();
+          const vendorRows = vendorPricing
+            ? Array.from(vendorPricing.get(row.id)?.values() ?? [])
+            : [];
+          const firstVendorAmountUnit = vendorRows
+            .map((p) => (p.packAmountUnit ?? "").trim())
+            .find((u) => u.length > 0) ?? "";
+          const anyVendorHasCount = vendorRows.some((p) => p.packCount !== undefined);
+          const firstVendorUnit = firstVendorAmountUnit || (anyVendorHasCount ? "ct" : "");
+          const rowDisplayUnit = itemDisplayUnit || itemLegacyUnit || firstVendorUnit || "ct";
 
           /* Dynamic card summary: use first visible column as title,
              show up to 4 additional columns as meta badges */
@@ -284,6 +308,8 @@ export function InventoryMobileCards({
                         onSetSelectedRowId={onSetSelectedRowId}
                         availableVendors={availableVendors}
                         onAddVendor={onAddVendor}
+                        allowedUnits={allowedUnits}
+                        displayUnit={rowDisplayUnit}
                       />
                     </div>
                     );

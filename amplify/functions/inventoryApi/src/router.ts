@@ -10,6 +10,9 @@ import { handleUpdateCurrentUserDisplayName, handleSyncCurrentUserEmail, handleS
 import { handleListOnboardingTemplates, handleApplyOnboardingTemplate } from "./routes/onboarding";
 import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics, handleVendorBreakdown } from "./routes/audit";
 import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestockOrder, handleCloseRestockOrder } from "./routes/restock";
+import { handleGetPriceHistory } from "./routes/price-history";
+import { handleListVendorPricing, handleUpsertVendorPricing, handleDeleteVendorPricing } from "./routes/vendor-pricing";
+import { handleGetAllowedUnits, handleSetAllowedUnits } from "./routes/allowed-units";
 import { handleAddLocation, handleListLocations, handleRemoveLocation, handleRenameLocation } from "./routes/locations";
 import { handleAddVendor, handleRemoveVendor, handleRenameVendor } from "./routes/vendors";
 import { handleAlertSummary, handleBootstrap } from "./routes/dashboard";
@@ -56,6 +59,23 @@ const routes: Route[] = [
   { method: "POST",   pattern: "/inventory/restock/orders",             needsStorage: true, module: "inventory", handler: handleCreateRestockOrder },
   { method: "POST",   pattern: /\/inventory\/restock\/orders\/[^/]+\/receive$/, needsStorage: true, module: "inventory", handler: handleReceiveRestockOrder },
   { method: "POST",   pattern: /\/inventory\/restock\/orders\/[^/]+\/close$/,   needsStorage: true, module: "inventory", handler: handleCloseRestockOrder },
+
+  // Price history (1d) — aggregates per-(itemName, vendor) latest $/canonical
+  // within the recency window. Powers the shopping-list comparison badge.
+  { method: "GET",    pattern: "/inventory/price-history",              needsStorage: true, module: "inventory", handler: handleGetPriceHistory },
+
+  // Vendor pricing (1g) — per-(item, vendor) pricing rows. Replaces the
+  // previous pattern of stuffing unitCost/packSize/packCost/reorderLink onto
+  // each inventory item.
+  { method: "GET",    pattern: "/inventory/item-vendor-pricing",        needsStorage: true, module: "inventory", handler: handleListVendorPricing },
+  { method: "POST",   pattern: "/inventory/item-vendor-pricing",        needsStorage: true, module: "inventory", handler: handleUpsertVendorPricing },
+  { method: "DELETE", pattern: /\/inventory\/item-vendor-pricing\/[^/]+$/, needsStorage: true, module: "inventory", handler: handleDeleteVendorPricing },
+
+  // Allowed units (1h.2) — per-org curated list of units that appear in
+  // inventory + receipt-entry dropdowns. Cuts visual noise for orgs that
+  // only deal in count units (EMS) vs. those that need volume + weight.
+  { method: "GET",    pattern: "/inventory/allowed-units",              needsStorage: true, module: "inventory", handler: handleGetAllowedUnits },
+  { method: "POST",   pattern: "/inventory/allowed-units",              needsStorage: true, module: "inventory", handler: handleSetAllowedUnits },
 
   // Locations
   { method: "GET",    pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleListLocations },

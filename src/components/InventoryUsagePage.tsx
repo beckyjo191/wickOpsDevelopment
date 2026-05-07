@@ -34,6 +34,11 @@ type UsageEntry = {
   quantityUsed: string;
   notes: string;
   notesOpen: boolean;
+  /** "single" decrements quantity by quantityUsed; "pack" decrements by
+   *  quantityUsed × packSize. Only meaningful when the picked item has
+   *  packSize > 0; the toggle UI hides itself for non-pack items so single
+   *  is implicit. Default "single" — the most common case ("used 1 pad"). */
+  usageMode: "single" | "pack";
   error: string;
 };
 
@@ -67,6 +72,7 @@ const createUsageEntry = (): UsageEntry => ({
   quantityUsed: "1",
   notes: "",
   notesOpen: false,
+  usageMode: "single",
   error: "",
 });
 
@@ -511,7 +517,7 @@ export function InventoryUsagePage({
         const validIds = new Set(getItemOptionsForLocation(group.location).map((item) => item.id));
         const nextEntries = group.entries.map((entry) => {
           if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-          return { ...entry, itemId: "", itemSearch: "", notes: "", notesOpen: false, error: "" };
+          return { ...entry, itemId: "", itemSearch: "", notes: "", notesOpen: false, usageMode: "single" as const, error: "" };
         });
         return { ...group, entries: nextEntries };
       }),
@@ -541,7 +547,7 @@ export function InventoryUsagePage({
           );
           next.entries = next.entries.map((entry) => {
             if (!entry.itemId || validIds.has(entry.itemId)) return entry;
-            return { ...entry, itemId: "", itemSearch: "", quantityUsed: "1", notes: "", notesOpen: false, error: "" };
+            return { ...entry, itemId: "", itemSearch: "", quantityUsed: "1", notes: "", notesOpen: false, usageMode: "single" as const, error: "" };
           });
         }
         return next;
@@ -636,7 +642,7 @@ export function InventoryUsagePage({
 
       const nextEntries = group.entries.map((entry) => {
         const itemId = entry.itemId.trim();
-        const quantityUsed = Number(entry.quantityUsed);
+        const quantityUsedRaw = Number(entry.quantityUsed);
         const notes = entry.notes.trim();
         const isEmpty =
           !itemId &&
@@ -648,10 +654,10 @@ export function InventoryUsagePage({
         if (!itemId) {
           error = "Select an item";
           hasError = true;
-        } else if (!Number.isFinite(quantityUsed) || quantityUsed < 0) {
+        } else if (!Number.isFinite(quantityUsedRaw) || quantityUsedRaw < 0) {
           error = "Enter a valid quantity";
           hasError = true;
-        } else if (quantityUsed === 0 && !notes) {
+        } else if (quantityUsedRaw === 0 && !notes) {
           error = "Enter quantity used";
           hasError = true;
         } else {
@@ -660,6 +666,13 @@ export function InventoryUsagePage({
             error = "Item not found";
             hasError = true;
           } else {
+            // Pack mode (1f.8): user typed pack count, but inventory tracks
+            // primary units — multiply through. packSize must be > 0 for
+            // pack mode; if it's not, the toggle wouldn't have been shown
+            // and we treat the value as single.
+            const packSize = Number(row.values.packSize);
+            const isPackMode = entry.usageMode === "pack" && Number.isFinite(packSize) && packSize > 0;
+            const quantityUsed = isPackMode ? quantityUsedRaw * packSize : quantityUsedRaw;
             const available = Number(row.values.quantity ?? 0);
             if (!Number.isFinite(available) || quantityUsed > available) {
               error = `Exceeds available (${available})`;
@@ -829,7 +842,21 @@ export function InventoryUsagePage({
                 >
                   {group.entries.map((entry) => {
                     const selectedItem = itemOptions.find((o) => o.id === entry.itemId);
-                    const maxQty = selectedItem?.quantity ?? 9999;
+                    const selectedRow = entry.itemId ? rowById.get(entry.itemId) : undefined;
+                    // Pack-as-secondary-unit (1f.8): when the item has a
+                    // packSize > 0, offer a Single|Pack toggle so the user
+                    // can log "1 box (=100 pads)" or "1 bag (=4 lb)" without
+                    // doing the math themselves.
+                    const packSize = selectedRow ? Number(selectedRow.values.packSize) : 0;
+                    const hasPackMode = Number.isFinite(packSize) && packSize > 0;
+                    const itemUnit = selectedRow
+                      ? String(selectedRow.values.unit ?? "").trim() || "ct"
+                      : "ct";
+                    const isPackMode = hasPackMode && entry.usageMode === "pack";
+                    const baseMaxQty = selectedItem?.quantity ?? 9999;
+                    const effectiveMaxQty = isPackMode
+                      ? Math.floor(baseMaxQty / Math.max(1, packSize))
+                      : baseMaxQty;
                     return (
                       <div className={`usage-entry${entry.error ? " usage-entry--error" : ""}`} key={entry.id}>
                         <div className="usage-entry-main">
@@ -846,6 +873,7 @@ export function InventoryUsagePage({
                                 updateEntry(group.id, entry.id, {
                                   itemId: "",
                                   itemSearch: "",
+                                  usageMode: "single",
                                   error: "",
                                 })
                               }
@@ -856,11 +884,44 @@ export function InventoryUsagePage({
                             />
                           </div>
                           <div className="usage-entry-qty">
-                            <label className="field-label" htmlFor={`usage-qty-${group.id}-${entry.id}`}>Qty Used</label>
+                            <label className="field-label" htmlFor={`usage-qty-${group.id}-${entry.id}`}>
+                              {/* Pack-mode label reads "Packs Used (pack of 100 ct)"
+                               *  — clean regardless of what `itemUnit` happens to
+                               *  hold. Log Usage doesn't have a vendor context, so
+                               *  we use a generic "pack" label (vendor-specific
+                               *  pack labels live on order/receive flows). */}
+                              {isPackMode
+                                ? `Packs Used (pack of ${packSize} ${itemUnit})`
+                                : `Used (${itemUnit})`}
+                            </label>
+                            {hasPackMode ? (
+                              <div className="reorder-price-mode usage-entry-mode" role="tablist" aria-label="Usage mode">
+                                <button
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={!isPackMode}
+                                  className={`reorder-price-mode-btn${!isPackMode ? " active" : ""}`}
+                                  onClick={() => updateEntry(group.id, entry.id, { usageMode: "single", error: "" })}
+                                  disabled={submitting}
+                                >
+                                  Single
+                                </button>
+                                <button
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={isPackMode}
+                                  className={`reorder-price-mode-btn${isPackMode ? " active" : ""}`}
+                                  onClick={() => updateEntry(group.id, entry.id, { usageMode: "pack", error: "" })}
+                                  disabled={submitting}
+                                >
+                                  Pack
+                                </button>
+                              </div>
+                            ) : null}
                             <QtyStepper
                               inputId={`usage-qty-${group.id}-${entry.id}`}
                               value={entry.quantityUsed}
-                              max={maxQty}
+                              max={effectiveMaxQty}
                               onChange={(v) => updateEntry(group.id, entry.id, { quantityUsed: v, error: "" })}
                               disabled={submitting}
                               ariaInvalid={!!entry.error}

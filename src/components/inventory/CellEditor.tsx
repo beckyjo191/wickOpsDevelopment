@@ -1,8 +1,9 @@
-import { useState, type ChangeEvent, type FocusEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FocusEvent } from "react";
 import { ExternalLink, X } from "lucide-react";
 import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../lib/currency";
 import type { InventoryColumn, InventoryRow } from "./inventoryTypes";
 import { VendorSelect } from "../ReorderTab";
+import { KNOWN_UNITS } from "../../lib/uom";
 
 export type CellEditorProps = {
   column: InventoryColumn;
@@ -28,6 +29,16 @@ export type CellEditorProps = {
    *  Reorder/New Order screens use — keeping vendor names canonical. */
   availableVendors?: string[];
   onAddVendor?: (name: string) => Promise<void>;
+  /** 1h.2c: per-org curated unit list. When non-empty, the unit column
+   *  dropdown renders only these. Empty array → fall back to the full
+   *  KNOWN_UNITS master list (legacy orgs that haven't curated yet). */
+  allowedUnits?: string[];
+  /** 1h.6: pre-resolved display unit for this row, used as the suffix on
+   *  Quantity / Min Quantity ("5 lb on hand"). The parent table computes
+   *  this from the item's `displayUnit` (if set) → falls back to legacy
+   *  `row.values.unit` → first vendor pricing row's unit → "ct". When
+   *  omitted, CellEditor still falls back to `row.values.unit`/"ct". */
+  displayUnit?: string;
 };
 
 /**
@@ -55,9 +66,12 @@ export function CellEditor({
   onSetSelectedRowId,
   availableVendors,
   onAddVendor,
+  allowedUnits,
+  displayUnit,
 }: CellEditorProps) {
   const inputClass = variant === "mobile" ? "inventory-card-input" : undefined;
   const isVendorCell = column.key === "vendor";
+  const isUnitCell = column.key === "unit";
 
   // ---- Read-only rendering ----
   if (!canEdit) {
@@ -259,6 +273,26 @@ export function CellEditor({
     );
   }
 
+  // -- Unit column (text-typed core column, 1f) --
+  // Single source of truth for an item's tracking UoM. Dropdown of known
+  // units (uom.ts); the dimension family is inferred at use-time, never
+  // user-visible. Stored as a plain string ("ct", "lb", "gal", ...).
+  if (isUnitCell) {
+    return (
+      <UnitCellEditor
+        currentUnit={String(value ?? "")}
+        allowedUnits={allowedUnits}
+        canEdit={canEdit}
+        inputClass={inputClass}
+        onChange={(next) => {
+          beginCellEditSession?.(row.id, column.key);
+          onCellChange(row.id, column, next);
+          endCellEditSession?.();
+        }}
+      />
+    );
+  }
+
   // -- Vendor column (text-typed core column) --
   // Renders the same autocomplete picker used in New Order / Reorder so vendor
   // names stay canonical across the app. Falls back to the generic textarea
@@ -328,6 +362,7 @@ export function CellEditor({
         onCellChange={onCellChange}
         beginCellEditSession={beginCellEditSession}
         endCellEditSession={endCellEditSession}
+        displayUnit={displayUnit}
       />
     );
   }
@@ -480,6 +515,7 @@ function NumberCell({
   onCellChange,
   beginCellEditSession,
   endCellEditSession,
+  displayUnit,
 }: {
   column: InventoryColumn;
   row: InventoryRow;
@@ -489,6 +525,9 @@ function NumberCell({
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
   beginCellEditSession?: (rowId: string, columnKey: string) => void;
   endCellEditSession?: () => void;
+  /** Resolved by the parent table from item displayUnit / first vendor
+   *  pricing axis. Used as the soft suffix on Quantity / Min Quantity. */
+  displayUnit?: string;
 }) {
   const isCurrency = isCurrencyColumnKey(column.key);
   const inputMode: "numeric" | "decimal" = isCurrency ? "decimal" : "numeric";
@@ -534,11 +573,35 @@ function NumberCell({
     },
   };
 
+  // Unit-aware suffix (1f.6 → 1h.6): for the two number columns whose
+  // value is measured in the item's tracking unit, render the unit as a
+  // soft label beside the input. Stored value stays a plain number —
+  // this is read-time labeling only. Other number columns (packSize,
+  // custom numerics) stay bare since their value isn't unit-relative.
+  // Source of truth: parent's resolved `displayUnit` prop (item-level
+  // displayUnit → first vendor pricing unit → legacy row.values.unit).
+  // Fallback chain still includes row.values.unit + "ct" so CellEditor
+  // works in isolation (no parent prep needed).
+  const isUnitAware = column.key === "quantity" || column.key === "minQuantity";
+  const resolvedSuffix = (displayUnit ?? "").trim()
+    || String(row.values.displayUnit ?? "").trim()
+    || String(row.values.unit ?? "").trim()
+    || "ct";
+  const unitSuffix = isUnitAware ? resolvedSuffix : null;
+
   if (variant === "mobile") {
+    if (unitSuffix) {
+      return (
+        <div className="inventory-number-with-unit">
+          <input {...commonProps} className={inputClass} />
+          <span className="inventory-unit-suffix">{unitSuffix}</span>
+        </div>
+      );
+    }
     return <input {...commonProps} className={inputClass} />;
   }
 
-  return (
+  const desktopInput = (
     <input
       {...commonProps}
       onFocus={(event) => {
@@ -555,5 +618,115 @@ function NumberCell({
         }
       }}
     />
+  );
+
+  if (unitSuffix) {
+    return (
+      <div className="inventory-number-with-unit">
+        {desktopInput}
+        <span className="inventory-unit-suffix">{unitSuffix}</span>
+      </div>
+    );
+  }
+  return desktopInput;
+}
+
+/** Inline editor for the unit cell. Two display states:
+ *
+ *   - Empty + not opted-in: a "+ Add unit" button. Clicking flips local
+ *     state to show the dropdown without persisting anything yet, mirroring
+ *     the "+ Add expiration" pattern in OrdersPage's receive form. This
+ *     keeps clutter low for items that don't need a UoM (most inventory)
+ *     while one-click-revealing the picker for items that do.
+ *
+ *   - Has a value, OR opted in: the dropdown. Selecting the empty option
+ *     clears the cell back to the button state on the next render.
+ *
+ *   Local opt-in state intentionally does NOT persist — refreshing the
+ *   page on an item with no unit returns to the button. The user only
+ *   "loses" the picker if they didn't pick anything, which is fine. */
+function UnitCellEditor({
+  currentUnit,
+  allowedUnits,
+  canEdit,
+  inputClass,
+  onChange,
+}: {
+  currentUnit: string;
+  allowedUnits?: string[];
+  canEdit: boolean;
+  inputClass: string | undefined;
+  onChange: (next: string) => void;
+}) {
+  // Reveal the dropdown after the user clicks "+ Add unit". Initialized
+  // from the current value so saved units always render as the dropdown.
+  const [opted, setOpted] = useState<boolean>(currentUnit.length > 0);
+  // Selecting on opt-in: we want the dropdown to take focus when the user
+  // clicks "+ Add unit", but the React `autoFocus` prop calls .focus()
+  // *without* `preventScroll` — that bounces the surrounding horizontally-
+  // scrolling table back to scrollLeft=0 because the browser tries to
+  // bring the freshly-focused element into view. Use a ref + manual focus
+  // with `{preventScroll: true}` instead so the table's scroll position
+  // stays put.
+  const selectRef = useRef<HTMLSelectElement>(null);
+  const justOptedRef = useRef(false);
+  useEffect(() => {
+    if (justOptedRef.current && selectRef.current) {
+      selectRef.current.focus({ preventScroll: true });
+      justOptedRef.current = false;
+    }
+  }, [opted]);
+
+  // Empty + not opted in → ghost button placeholder.
+  if (!currentUnit && !opted) {
+    return (
+      <button
+        type="button"
+        className="cell-add-unit-btn"
+        disabled={!canEdit}
+        onClick={() => {
+          justOptedRef.current = true;
+          setOpted(true);
+        }}
+        title="Track a unit of measurement on this item"
+      >
+        + Add unit
+      </button>
+    );
+  }
+
+  // 1h.2c: prefer the org's curated list when set; fall back to the
+  // master KNOWN_UNITS for orgs that haven't curated yet. If the cell's
+  // existing value isn't in the curated list (legacy data), include it
+  // anyway so we don't display a mismatched-empty dropdown.
+  const baseList = allowedUnits && allowedUnits.length > 0 ? allowedUnits : KNOWN_UNITS;
+  const optionsList = currentUnit && !baseList.includes(currentUnit)
+    ? [...baseList, currentUnit]
+    : baseList;
+
+  return (
+    <select
+      ref={selectRef}
+      className={inputClass}
+      value={currentUnit}
+      onChange={(e) => {
+        const next = e.currentTarget.value;
+        onChange(next);
+        // Clearing the unit returns the cell to the "+ Add unit" button
+        // — gives users a way to undo opting in without leaving stale
+        // dropdown state behind.
+        if (!next) setOpted(false);
+      }}
+      disabled={!canEdit}
+      aria-label="Unit"
+    >
+      {/* Empty option lets the user "unset" — useful for legacy items
+       *  that pre-date the column. Default behavior at read time treats
+       *  an empty unit as "ct". */}
+      <option value=""></option>
+      {optionsList.map((u) => (
+        <option key={u} value={u}>{u}</option>
+      ))}
+    </select>
   );
 }

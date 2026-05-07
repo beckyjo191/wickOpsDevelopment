@@ -77,6 +77,14 @@ export type OrderItem = {
   reorderLink?: string;
   // For freeform items only: location the user picked when adding the item.
   location?: string;
+  // ── 1d: amount/UoM/price triplet ───────────────────────────────────────────
+  // Used by the Shop tab when the user types an inline price for an item with
+  // no per-vendor history. Server derives pricePerCanonical; persists onto
+  // the order line for the next price-history rollup.
+  purchaseAmount?: number;
+  purchaseUnit?: string;
+  purchasePrice?: number;
+  dimension?: "count" | "weight" | "volume";
 };
 
 

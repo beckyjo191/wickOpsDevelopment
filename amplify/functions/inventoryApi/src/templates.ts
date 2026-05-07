@@ -15,6 +15,8 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Condition", type: "text" },
       { label: "Notes", type: "text" },
     ],
+    // Count-only — EMS supplies are tracked individually or by case.
+    allowedUnits: ["ct", "dozen"],
   },
   {
     id: "plumbing",
@@ -27,6 +29,9 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Unit Cost", type: "number" },
       { label: "Notes", type: "text" },
     ],
+    // Count + length-style (note: ft/in not in KNOWN_UNITS yet — fall back
+    // to count for now; expand the master list in a follow-up if needed).
+    allowedUnits: ["ct", "dozen"],
   },
   {
     id: "electrical",
@@ -39,6 +44,7 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Unit Cost", type: "number" },
       { label: "Notes", type: "text" },
     ],
+    allowedUnits: ["ct", "dozen"],
   },
   {
     id: "hvac",
@@ -50,6 +56,7 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Manufacturer", type: "text" },
       { label: "Notes", type: "text" },
     ],
+    allowedUnits: ["ct", "dozen"],
   },
   {
     id: "restaurant",
@@ -61,6 +68,8 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Supplier", type: "text" },
       { label: "Notes", type: "text" },
     ],
+    // Full mix — kitchens deal in count, weight, and volume.
+    allowedUnits: ["ct", "dozen", "oz", "lb", "g", "kg", "fl oz", "cup", "pt", "qt", "gal", "ml", "l"],
   },
   {
     id: "medical",
@@ -72,6 +81,8 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Controlled", type: "boolean" },
       { label: "Notes", type: "text" },
     ],
+    // Count + medication volumes (dosing in ml is common).
+    allowedUnits: ["ct", "dozen", "ml", "fl oz"],
   },
   {
     id: "it_tech",
@@ -84,6 +95,7 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Purchase Date", type: "date" },
       { label: "Notes", type: "text" },
     ],
+    allowedUnits: ["ct", "dozen"],
   },
   {
     id: "general",
@@ -93,5 +105,7 @@ export const INDUSTRY_TEMPLATES: IndustryTemplate[] = [
       { label: "Category", type: "text" },
       { label: "Notes", type: "text" },
     ],
+    // No restriction — general orgs probably need access to everything.
+    // Omitting `allowedUnits` falls back to the master KNOWN_UNITS list.
   },
 ];

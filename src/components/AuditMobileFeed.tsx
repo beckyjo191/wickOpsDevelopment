@@ -22,7 +22,7 @@ export function AuditMobileFeed({
 }: {
   events: AuditEvent[];
   onViewItemHistory: (itemId: string, name: string) => void;
-  onUndoEvent?: (undoable: UndoableEvent) => void;
+  onUndoEvent?: (undoable: UndoableEvent | UndoableEvent[]) => void;
   undoingEventId?: string | null;
 }) {
   const days = aggregateActivityRows(events);
@@ -47,9 +47,14 @@ export function AuditMobileFeed({
                 minute: "2-digit",
               });
               const navigable = !!row.itemId && row.itemName !== "—";
-              const showUndo = !!onUndoEvent && !!row.undoableEvent;
+              const undoables = row.undoableEvents ?? [];
+              const showUndo = !!onUndoEvent && undoables.length > 0;
               const isUndoing =
-                showUndo && undoingEventId === row.undoableEvent?.eventId;
+                showUndo && undoables.some((u) => u.eventId === undoingEventId);
+              const undoPayload = undoables.length === 1 ? undoables[0] : undoables;
+              const undoTooltip = undoables.length === 1
+                ? UNDO_TOOLTIPS[undoables[0].kind]
+                : `Undo all ${undoables.length} usage logs in this row`;
               return (
                 <article
                   key={row.key}
@@ -88,9 +93,9 @@ export function AuditMobileFeed({
                       <button
                         type="button"
                         className="audit-mobile-card-undo"
-                        onClick={() => onUndoEvent?.(row.undoableEvent!)}
+                        onClick={() => onUndoEvent?.(undoPayload)}
                         disabled={isUndoing}
-                        title={UNDO_TOOLTIPS[row.undoableEvent!.kind]}
+                        title={undoTooltip}
                       >
                         <RotateCcw size={14} aria-hidden="true" />
                         {isUndoing ? "Undoing…" : "Undo"}

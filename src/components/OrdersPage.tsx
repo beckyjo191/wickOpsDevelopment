@@ -40,6 +40,7 @@ import { VendorSelect, type OrderItem } from "./ReorderTab";
 import { ShoppingListTab } from "./ShoppingListTab";
 import { ItemDetailModal } from "./inventory/ItemDetailModal";
 import { PaginationControls } from "./inventory/PaginationControls";
+import { UnitCombobox } from "./inventory/UnitCombobox";
 import { formatCurrency, parseCurrency } from "../lib/currency";
 import {
   dimensionForUnit,
@@ -1376,7 +1377,9 @@ function ComposeOrderPanel({
   onAddVendor,
   onSubmit,
   vendorPricing,
-  allowedUnits,
+  // `allowedUnits` is still passed by the parent for backward-compat but is
+  // no longer used — unit comboboxes pull straight from KNOWN_UNITS now.
+  allowedUnits: _allowedUnits,
 }: {
   inventoryRows: InventoryRow[];
   availableVendors: string[];
@@ -1904,20 +1907,19 @@ function ComposeOrderPanel({
                           />
                         )}
                         {isFreeform ? (
-                          <select
+                          // KNOWN_UNITS feeds the autocomplete suggestions;
+                          // the user can type anything (sleeve, case, etc.)
+                          // The per-org `allowedUnits` curation list was
+                          // retired in favor of always-on autocomplete.
+                          <UnitCombobox
+                            id={`order-line-${idx}`}
                             className="field manual-order-unit-select"
-                            aria-label="Unit"
+                            ariaLabel="Unit"
                             value={l.unit}
-                            onChange={(e) => updateLine(idx, { unit: e.target.value })}
+                            onChange={(v) => updateLine(idx, { unit: v })}
+                            options={KNOWN_UNITS}
                             disabled={submitting}
-                          >
-                            {/* 1h.2c: prefer org-curated allowedUnits;
-                             *  fall back to master KNOWN_UNITS for orgs
-                             *  that haven't curated yet. */}
-                            {(allowedUnits.length > 0 ? allowedUnits : KNOWN_UNITS).map((u) => (
-                              <option key={u} value={u}>{u}</option>
-                            ))}
-                          </select>
+                          />
                         ) : (
                           <span className="manual-order-unit-label" aria-label="Unit">
                             {lineAmountLabel}

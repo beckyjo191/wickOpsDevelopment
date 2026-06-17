@@ -29,8 +29,6 @@ import {
   deleteInventoryColumn,
   listModuleAccessUsers,
   loadInventoryBootstrap,
-  loadAllowedUnits,
-  setAllowedUnits as saveAllowedUnits,
   type ModuleAccessUser,
   type AppModuleKey,
   removeInventoryLocation,
@@ -189,20 +187,9 @@ export function SettingsPage({
   const [editingVendorValue, setEditingVendorValue] = useState("");
   const [renameVendorError, setRenameVendorError] = useState<string | null>(null);
   const [pendingDeleteVendor, setPendingDeleteVendor] = useState<string | null>(null);
-  // Allowed-units state (1h.2b). `units` = the org's curated list;
-  // `knownUnits` = the master list the server validates against, used to
-  // populate the "+ Add unit" picker. Loaded lazily when the section
-  // opens so we don't bloat the initial settings load.
-  const [allowedUnits, setAllowedUnitsState] = useState<string[]>([]);
-  const [knownUnits, setKnownUnits] = useState<string[]>([]);
-  // 1h.7: org-wide UoM gate. False (default, EMS-style) hides the
-  // weight/volume capture path; true unlocks dual-axis pricing forms +
-  // $/lb price-trend math.
-  const [tracksUnits, setTracksUnitsState] = useState<boolean>(false);
-  const [allowedUnitsLoaded, setAllowedUnitsLoaded] = useState(false);
-  const [allowedUnitsLoading, setAllowedUnitsLoading] = useState(false);
-  const [allowedUnitsSaving, setAllowedUnitsSaving] = useState(false);
-  const [allowedUnitsError, setAllowedUnitsError] = useState<string | null>(null);
+  // Units-of-measurement state retired alongside the hidden settings
+  // section. Re-add when the pantry / restaurant flow comes back online —
+  // see git history for the original block.
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
   const [disclosures, setDisclosures] = useState<DisclosureState>(DEFAULT_DISCLOSURE_STATE);
   const [contactSubject, setContactSubject] = useState("");
@@ -948,13 +935,6 @@ export function SettingsPage({
 
   const normalizedInventoryColumnSearch = inventoryColumnSearchTerm.trim().toLowerCase();
   const filteredInventoryColumns = columns
-    // 1h.7: `unit` is no longer a manageable grid column. UoM moved to
-    // the i modal as a per-(item, vendor) field. Existing orgs may still
-    // have a row in their columns table — hide it from the Columns
-    // manager so users can't toggle a column that the grid hard-filters
-    // out anyway. The row data is preserved in DDB for historical
-    // reads; we just don't expose it as a knob.
-    .filter((column) => column.key !== "unit")
     .filter((column) => {
       if (!normalizedInventoryColumnSearch) return true;
       const label = String(column.label ?? "").toLowerCase();
@@ -1702,149 +1682,9 @@ export function SettingsPage({
           )}
         </details>
 
-        <details
-          className="settings-section"
-          open={disclosures.allowedUnits}
-          onToggle={async (event) => {
-            const isOpen = event.currentTarget.open;
-            onDisclosureToggle("allowedUnits", isOpen);
-            // Lazy-load the unit lists on first open. Bootstrap already
-            // includes `allowedUnits`, but the master "knownUnits" set
-            // only comes back from the dedicated endpoint — fetch both
-            // here to keep them in sync.
-            if (isOpen && !allowedUnitsLoaded && !allowedUnitsLoading) {
-              setAllowedUnitsLoading(true);
-              setAllowedUnitsError(null);
-              try {
-                const result = await loadAllowedUnits();
-                setAllowedUnitsState(result.units);
-                setKnownUnits(result.knownUnits);
-                setTracksUnitsState(result.tracksUnits);
-                setAllowedUnitsLoaded(true);
-              } catch (err) {
-                setAllowedUnitsError(err instanceof Error ? err.message : "Failed to load units.");
-              } finally {
-                setAllowedUnitsLoading(false);
-              }
-            }
-          }}
-        >
-          <summary className="settings-section-title">
-            Units of measurement
-            <ChevronRight size={16} className="settings-section-chevron" aria-hidden="true" />
-          </summary>
-          {canManageInventoryColumns ? (
-            <>
-              {allowedUnitsLoading ? (
-                <div>Loading units…</div>
-              ) : (
-                <>
-                  {/* 1h.7: org-wide UoM gate. Default-off keeps the
-                   *  EMS / count-only flow simple. Pantry / restaurant
-                   *  orgs flip on to unlock the dual-axis pricing form
-                   *  (Pack count + weight per pack) and $/lb price-trend
-                   *  math. The curated chip list below is dormant when
-                   *  off; flipping back on restores the prior pick. */}
-                  <label className="settings-toggle-row">
-                    <input
-                      type="checkbox"
-                      checked={tracksUnits}
-                      disabled={allowedUnitsSaving}
-                      onChange={async () => {
-                        const nextTracks = !tracksUnits;
-                        const prevTracks = tracksUnits;
-                        setTracksUnitsState(nextTracks);
-                        setAllowedUnitsSaving(true);
-                        setAllowedUnitsError(null);
-                        try {
-                          const saved = await saveAllowedUnits(allowedUnits, nextTracks);
-                          setAllowedUnitsState(saved.units);
-                          setTracksUnitsState(saved.tracksUnits);
-                        } catch (err) {
-                          // Revert on failure so the UI matches the server.
-                          setTracksUnitsState(prevTracks);
-                          setAllowedUnitsError(
-                            err instanceof Error ? err.message : "Failed to save.",
-                          );
-                        } finally {
-                          setAllowedUnitsSaving(false);
-                        }
-                      }}
-                    />
-                    <span>
-                      <strong>Do you buy items in units of measurement?</strong>
-                      <span className="settings-toggle-hint">
-                        Turn on to track weight or volume on receipts (lb,
-                        oz, fl oz, etc.) — useful for pantry / restaurant.
-                        Off treats every item as count-only (EMS-style).
-                      </span>
-                    </span>
-                  </label>
-                  {tracksUnits ? (
-                    <>
-                      <p className="settings-section-copy">
-                        Curate which units appear in inventory and order
-                        pickers. Cuts visual noise for orgs that don't
-                        deal in every unit type.
-                      </p>
-                      <div className="settings-allowed-units-grid">
-                        {knownUnits.map((unit) => {
-                          const checked = allowedUnits.includes(unit);
-                          return (
-                            <label
-                              key={unit}
-                              className={`settings-allowed-unit-chip${checked ? " active" : ""}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={async () => {
-                                  const next = checked
-                                    ? allowedUnits.filter((u) => u !== unit)
-                                    : [...allowedUnits, unit];
-                                  if (next.length === 0) {
-                                    setAllowedUnitsError("Pick at least one allowed unit.");
-                                    return;
-                                  }
-                                  setAllowedUnitsState(next);
-                                  setAllowedUnitsSaving(true);
-                                  setAllowedUnitsError(null);
-                                  try {
-                                    const saved = await saveAllowedUnits(next, tracksUnits);
-                                    setAllowedUnitsState(saved.units);
-                                    setTracksUnitsState(saved.tracksUnits);
-                                  } catch (err) {
-                                    // Revert on failure so the UI stays
-                                    // consistent with what the server has.
-                                    setAllowedUnitsState(allowedUnits);
-                                    setAllowedUnitsError(
-                                      err instanceof Error ? err.message : "Failed to save.",
-                                    );
-                                  } finally {
-                                    setAllowedUnitsSaving(false);
-                                  }
-                                }}
-                                disabled={allowedUnitsSaving}
-                              />
-                              <span>{unit}</span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </>
-                  ) : null}
-                  {allowedUnitsError ? (
-                    <p className="field-error">{allowedUnitsError}</p>
-                  ) : null}
-                </>
-              )}
-            </>
-          ) : (
-            <p className="settings-section-copy">
-              Only administrators can change the allowed-units list.
-            </p>
-          )}
-        </details>
+        {/* Units of measurement section hidden during the EMS warm-market
+         *  push. State + loaders below remain plumbed so we can restore the
+         *  section in one edit when pantry / restaurant orgs come online. */}
 
         <details
           className="settings-section"

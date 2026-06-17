@@ -51,9 +51,6 @@ export type InventoryMobileCardsProps = {
    *  stay canonical across the app. */
   availableVendors?: string[];
   onAddVendor?: (name: string) => Promise<void>;
-  /** 1h.2c: per-org curated unit list, forwarded to CellEditor's unit
-   *  column dropdown so mobile + desktop pickers stay aligned. */
-  allowedUnits?: string[];
   /** 1h.7: per-(item, vendor) pricing rows. Mobile cards derive each
    *  row's `displayUnit` from this for the Quantity / Min Quantity
    *  suffix, mirroring the desktop table. */
@@ -95,7 +92,6 @@ export function InventoryMobileCards({
   activeTab: _activeTab,
   availableVendors,
   onAddVendor,
-  allowedUnits,
   vendorPricing,
 }: InventoryMobileCardsProps) {
   return (
@@ -308,7 +304,6 @@ export function InventoryMobileCards({
                         onSetSelectedRowId={onSetSelectedRowId}
                         availableVendors={availableVendors}
                         onAddVendor={onAddVendor}
-                        allowedUnits={allowedUnits}
                         displayUnit={rowDisplayUnit}
                       />
                     </div>

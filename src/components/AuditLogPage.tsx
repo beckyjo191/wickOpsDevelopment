@@ -4,6 +4,8 @@ import {
   fetchItemHistory,
   fetchAuditAnalytics,
   fetchVendorBreakdown,
+  listInventoryLocations,
+  type InventoryLocation,
   type VendorBreakdown,
   undoColumnDeleteEvent,
   undoRetireEvent,
@@ -18,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  MapPin,
   Package,
   RotateCcw,
   Search,
@@ -514,10 +517,11 @@ export type ActivityRowData = {
   accentColor: string;
   user: string;
   titleAttr?: string;
-  /** Set when the row aggregates exactly one event AND that event is undoable
-   *  and not yet undone. The Undo button uses these fields to dispatch to the
-   *  right reversal endpoint. */
-  undoableEvent?: UndoableEvent;
+  /** Every undoable, not-yet-undone event in this bucket. Single-event rows
+   *  produce a 1-element array; multi-event same-action buckets (e.g. five
+   *  USAGE_APPROVE events on the same item) carry all of them so one Undo
+   *  click can reverse the whole batch. Empty/undefined → no Undo button. */
+  undoableEvents?: UndoableEvent[];
 };
 
 export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
@@ -566,9 +570,24 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
     const day: DayBucket<ActivityRowData> = { label: d.label, rows: [], users: new Set() };
     for (const rowKey of d.keyOrder) {
       const bucket = d.buckets.get(rowKey)!;
-      const summary = bucket.events.length === 1
-        ? buildRichRowSummary(bucket.events[0])
-        : bucket.events.map(buildRichRowSummary).join(" · ");
+      // If every event is USAGE_APPROVE for the same item, collapse the row
+      // into one "Logged usage of <total>" instead of joining N copies of
+      // "Logged usage of 1". Mixed buckets keep the dotted join so each
+      // distinct action stays visible.
+      const allUsage = bucket.events.length > 1
+        && bucket.events.every((e) => e.action === "USAGE_APPROVE");
+      let summary: string;
+      if (bucket.events.length === 1) {
+        summary = buildRichRowSummary(bucket.events[0]);
+      } else if (allUsage) {
+        const total = bucket.events.reduce((acc, e) => {
+          const qty = Number(e.details?.quantityUsed ?? 0);
+          return acc + (Number.isFinite(qty) ? qty : 0);
+        }, 0);
+        summary = `Logged usage of ${total}`;
+      } else {
+        summary = bucket.events.map(buildRichRowSummary).join(" · ");
+      }
       const titleAttr = bucket.events.length === 1 ? eventTitleAttr(bucket.events[0]) : undefined;
       const actionList = Array.from(bucket.actions);
       const accentColor = actionList.length === 1
@@ -580,11 +599,19 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
         : userArr.length === 1
           ? userArr[0]
           : `${userArr.length} users`;
-      // Only single-event buckets are eligible for inline Undo. Aggregated
-      // buckets need the user to drill into item history first to pick the
-      // specific event to reverse.
-      const lone = bucket.events.length === 1 ? bucket.events[0] : null;
-      const undoableEvent = lone ? detectUndoable(lone) : undefined;
+      // Inline Undo: single-event buckets, plus uniform USAGE_APPROVE
+      // buckets (the rapid-fire "logged 5 saline flushes" case). One click
+      // unwinds the whole batch sequentially.
+      const undoableEvents: UndoableEvent[] = [];
+      if (bucket.events.length === 1) {
+        const lone = detectUndoable(bucket.events[0]);
+        if (lone) undoableEvents.push(lone);
+      } else if (allUsage) {
+        for (const e of bucket.events) {
+          const u = detectUndoable(e);
+          if (u) undoableEvents.push(u);
+        }
+      }
       day.rows.push({
         key: `${d.label}::${rowKey}`,
         timestamp: bucket.lastTimestamp,
@@ -594,7 +621,7 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
         accentColor,
         user: userLabel,
         titleAttr,
-        undoableEvent,
+        undoableEvents: undoableEvents.length > 0 ? undoableEvents : undefined,
       });
       for (const u of bucket.users) day.users.add(u);
     }
@@ -617,7 +644,7 @@ function FlatActivityFeed({
 }: {
   events: AuditEvent[];
   onViewItemHistory: (itemId: string, name: string) => void;
-  onUndoEvent?: (undoable: UndoableEvent) => void;
+  onUndoEvent?: (undoable: UndoableEvent | UndoableEvent[]) => void;
   undoingEventId?: string | null;
 }) {
   const days = aggregateActivityRows(events);
@@ -642,8 +669,13 @@ function FlatActivityFeed({
               minute: "2-digit",
             });
             const navigable = !!row.itemId && row.itemName !== "—";
-            const showUndo = !!onUndoEvent && !!row.undoableEvent;
-            const isUndoing = showUndo && undoingEventId === row.undoableEvent?.eventId;
+            const undoables = row.undoableEvents ?? [];
+            const showUndo = !!onUndoEvent && undoables.length > 0;
+            const isUndoing = showUndo && undoables.some((u) => u.eventId === undoingEventId);
+            const undoPayload = undoables.length === 1 ? undoables[0] : undoables;
+            const undoTooltip = undoables.length === 1
+              ? UNDO_TOOLTIPS[undoables[0].kind]
+              : `Undo all ${undoables.length} usage logs in this row`;
             return (
               <div
                 key={row.key}
@@ -680,9 +712,9 @@ function FlatActivityFeed({
                   <button
                     type="button"
                     className="audit-flat-undo-btn"
-                    onClick={() => onUndoEvent?.(row.undoableEvent!)}
+                    onClick={() => onUndoEvent?.(undoPayload)}
                     disabled={isUndoing}
-                    title={UNDO_TOOLTIPS[row.undoableEvent!.kind]}
+                    title={undoTooltip}
                   >
                     <RotateCcw size={14} /> {isUndoing ? "Undoing…" : "Undo"}
                   </button>
@@ -893,7 +925,7 @@ function FlatItemHistory({
   undoingEventId,
 }: {
   events: AuditEvent[];
-  onUndoEvent?: (undoable: UndoableEvent) => void;
+  onUndoEvent?: (undoable: UndoableEvent | UndoableEvent[]) => void;
   undoingEventId?: string | null;
 }) {
   type HistoryRowData = {
@@ -1201,11 +1233,15 @@ function StatCard({ label, value, sub, delta }: {
 function VendorDrillInPanel({
   vendor,
   period,
+  locationId,
   onClose,
   onViewItemHistory,
 }: {
   vendor: string;
   period: "7d" | "30d" | "90d";
+  /** Pass-through scope from the Analytics tab — the drill-in honors the
+   *  same per-location filter so totals reconcile with the chart row. */
+  locationId?: string;
   onClose: () => void;
   onViewItemHistory?: (itemId: string, name: string) => void;
 }) {
@@ -1217,12 +1253,12 @@ function VendorDrillInPanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetchVendorBreakdown({ vendor, period })
+    fetchVendorBreakdown({ vendor, period, ...(locationId ? { locationId } : {}) })
       .then((res) => { if (!cancelled) setData(res); })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load vendor breakdown."); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [vendor, period]);
+  }, [vendor, period, locationId]);
 
   return (
     <div className="audit-vendor-drawer-overlay" onClick={onClose} role="presentation">
@@ -1320,14 +1356,19 @@ function VendorDrillInPanel({
 
 function AnalyticsDashboard({
   analytics,
+  locationName,
   onViewItemHistory,
   onViewVendor,
 }: {
   analytics: AuditAnalytics;
+  /** When set, every section title gets a " · {locationName}" suffix so
+   *  it's obvious the numbers are scoped, not org-wide. */
+  locationName?: string;
   onViewItemHistory?: (itemId: string, name: string) => void;
   /** Slice C: click a vendor row → open the vendor drill-in panel. */
   onViewVendor?: (vendor: string) => void;
 }) {
+  const titleSuffix = locationName ? ` · ${locationName}` : "";
   const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
   const previous = analytics.previous;
 
@@ -1415,7 +1456,7 @@ function AnalyticsDashboard({
           one glance away from "who'd we buy from". */}
       {(bySpendItem.length > 0 || byUsageItem.length > 0 || byVendor.length > 0) ? (
         <section className="audit-analytics-section">
-          <h3 className="audit-analytics-section-title">Top items</h3>
+          <h3 className="audit-analytics-section-title">Top items{titleSuffix}</h3>
           <div className="audit-analytics-grid">
             <div className="audit-top-items-card">
               <div className="audit-top-items-tabs" role="tablist" aria-label="Top items view">
@@ -1538,7 +1579,7 @@ function AnalyticsDashboard({
       {/* Trends — usage + spend over time, side by side. */}
       {usageOverTime.length > 0 ? (
         <section className="audit-analytics-section">
-          <h3 className="audit-analytics-section-title">Trends</h3>
+          <h3 className="audit-analytics-section-title">Trends{titleSuffix}</h3>
           <UsageLineChart data={usageOverTime} />
         </section>
       ) : null}
@@ -1546,7 +1587,7 @@ function AnalyticsDashboard({
       {/* Loss section — only renders when there's actually loss to report. */}
       {lossRows.length > 0 ? (
         <section className="audit-analytics-section">
-          <h3 className="audit-analytics-section-title">Loss</h3>
+          <h3 className="audit-analytics-section-title">Loss{titleSuffix}</h3>
           <SimpleBarChart
             data={lossRows as unknown as Array<Record<string, unknown>>}
             labelKey="reasonLabel"
@@ -1631,9 +1672,21 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   const [analytics, setAnalytics] = useState<AuditAnalytics | null>(null);
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d" | "90d">("30d");
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
-  /** Slice B: when true, fetch the same period one year ago and overlay
-   *  YoY deltas on the KPI strip + each bar chart row. */
-  const [analyticsCompareYoY, setAnalyticsCompareYoY] = useState(false);
+  /** Per-location scoping for the Analytics tab. "" = org-wide. Persisted
+   *  to localStorage so a multi-station chief who lives on Station 3's view
+   *  doesn't have to re-select on every reload. */
+  const ANALYTICS_LOCATION_STORAGE_KEY = "wickops.analytics.locationId";
+  const [analyticsLocationId, setAnalyticsLocationIdState] = useState<string>(() => {
+    try { return localStorage.getItem(ANALYTICS_LOCATION_STORAGE_KEY) ?? ""; } catch { return ""; }
+  });
+  const setAnalyticsLocationId = useCallback((id: string) => {
+    setAnalyticsLocationIdState(id);
+    try {
+      if (id) localStorage.setItem(ANALYTICS_LOCATION_STORAGE_KEY, id);
+      else localStorage.removeItem(ANALYTICS_LOCATION_STORAGE_KEY);
+    } catch { /* private mode / quota — fine, just don't persist */ }
+  }, []);
+  const [analyticsLocations, setAnalyticsLocations] = useState<InventoryLocation[]>([]);
   /** Slice C: vendor name currently being drilled into. null = no drawer. */
   const [vendorDrillIn, setVendorDrillIn] = useState<string | null>(null);
 
@@ -1675,12 +1728,33 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   useEffect(() => {
     if (tab === "analytics" && canManageColumns) {
       setAnalyticsLoading(true);
-      fetchAuditAnalytics({ period: analyticsPeriod, compareYoY: analyticsCompareYoY })
+      fetchAuditAnalytics({
+        period: analyticsPeriod,
+        ...(analyticsLocationId ? { locationId: analyticsLocationId } : {}),
+      })
         .then(setAnalytics)
         .catch(() => setAnalytics(null))
         .finally(() => setAnalyticsLoading(false));
     }
-  }, [tab, analyticsPeriod, analyticsCompareYoY, canManageColumns, analyticsRefreshKey]);
+  }, [tab, analyticsPeriod, analyticsLocationId, canManageColumns, analyticsRefreshKey]);
+
+  // Lazy-load locations the first time the Analytics tab opens. Single-
+  // location orgs get a list of length 1; the location selector renders
+  // nothing in that case so the UI stays clean.
+  useEffect(() => {
+    if (tab !== "analytics" || !canManageColumns) return;
+    if (analyticsLocations.length > 0) return;
+    listInventoryLocations()
+      .then((locs) => {
+        setAnalyticsLocations(locs);
+        // Self-heal a stale selection (location renamed/deleted between
+        // sessions): if the persisted id isn't in the list, reset to org-wide.
+        if (analyticsLocationId && !locs.some((l) => l.id === analyticsLocationId)) {
+          setAnalyticsLocationId("");
+        }
+      })
+      .catch(() => { /* dropdown stays empty; fetchAnalytics still works org-wide */ });
+  }, [tab, canManageColumns, analyticsLocations.length, analyticsLocationId, setAnalyticsLocationId]);
 
   const viewItemHistory = useCallback(async (itemId: string, itemName: string) => {
     setTab("item-history");
@@ -1717,8 +1791,10 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   const [undoError, setUndoError] = useState<string | null>(null);
 
   const handleUndoEvent = useCallback(
-    async (undoable: UndoableEvent) => {
+    async (input: UndoableEvent | UndoableEvent[]) => {
       if (undoingEventId) return;
+      const batch = Array.isArray(input) ? input : [input];
+      if (batch.length === 0) return;
       const confirmCopy: Record<UndoableKind, string> = {
         usage: "Undo this usage? The decremented quantity will be restored to the item.",
         retire: "Undo this retire? The retire markers will be cleared and the quantity restored.",
@@ -1729,19 +1805,25 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
         retire: "Failed to undo retire.",
         column: "Failed to restore column.",
       };
-      const proceed = window.confirm(confirmCopy[undoable.kind]);
+      const proceed = batch.length === 1
+        ? window.confirm(confirmCopy[batch[0].kind])
+        : window.confirm(`Undo all ${batch.length} usage logs in this row? Each decremented quantity will be restored.`);
       if (!proceed) return;
-      setUndoingEventId(undoable.eventId);
+      // Use the first event id as the in-flight sentinel so the row's
+      // disabled state lights up while the whole batch runs.
+      setUndoingEventId(batch[0].eventId);
       setUndoError(null);
       try {
-        if (undoable.kind === "usage") {
-          if (!undoable.itemId) throw new Error("Missing item id for usage undo.");
-          await undoUsageEvent(undoable.eventId, undoable.itemId);
-        } else if (undoable.kind === "retire") {
-          if (!undoable.itemId) throw new Error("Missing item id for retire undo.");
-          await undoRetireEvent(undoable.eventId, undoable.itemId);
-        } else {
-          await undoColumnDeleteEvent(undoable.eventId);
+        for (const undoable of batch) {
+          if (undoable.kind === "usage") {
+            if (!undoable.itemId) throw new Error("Missing item id for usage undo.");
+            await undoUsageEvent(undoable.eventId, undoable.itemId);
+          } else if (undoable.kind === "retire") {
+            if (!undoable.itemId) throw new Error("Missing item id for retire undo.");
+            await undoRetireEvent(undoable.eventId, undoable.itemId);
+          } else {
+            await undoColumnDeleteEvent(undoable.eventId);
+          }
         }
         // Re-fetch so the row picks up `details.undone` from the server. We
         // refresh both the main feed and the open item history (whichever is
@@ -1754,7 +1836,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           setHistoryCursor(res.nextCursor);
         }
       } catch (err: unknown) {
-        setUndoError(err instanceof Error ? err.message : errorCopy[undoable.kind]);
+        setUndoError(err instanceof Error ? err.message : errorCopy[batch[0].kind]);
       } finally {
         setUndoingEventId(null);
       }
@@ -2024,28 +2106,39 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
 
       {tab === "analytics" && canManageColumns && (
         <div className="audit-analytics">
+          {/* Location (scope) on the left, period (window) on the right.
+              Reads "Station 3, last 30 days" — location is the primary lens,
+              period narrows the time. Period is a dropdown so a future
+              "Custom range…" option slots in naturally. */}
           <div className="audit-period-selector">
-            <div className="audit-period-buttons">
-              {(["7d", "30d", "90d"] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  className={`button button-sm${analyticsPeriod === p ? " button-primary" : " button-ghost"}`}
-                  onClick={() => setAnalyticsPeriod(p)}
+            {analyticsLocations.length > 1 && (
+              <label className="audit-location-selector">
+                <MapPin size={14} className="audit-location-selector-icon" aria-hidden="true" />
+                <select
+                  className="field"
+                  value={analyticsLocationId}
+                  onChange={(e) => setAnalyticsLocationId(e.currentTarget.value)}
+                  aria-label="Filter analytics by location"
                 >
-                  {p === "7d" ? "7 Days" : p === "30d" ? "30 Days" : "90 Days"}
-                </button>
-              ))}
-            </div>
-            {/* YoY toggle — when on, the server returns the same window from a
-                year ago and the dashboard overlays ▲/▼ chips on every metric. */}
-            <label className="audit-yoy-toggle">
-              <input
-                type="checkbox"
-                checked={analyticsCompareYoY}
-                onChange={(e) => setAnalyticsCompareYoY(e.currentTarget.checked)}
-              />
-              <span>Compare to last year</span>
+                  <option value="">All locations</option>
+                  {analyticsLocations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>{loc.name}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="audit-period-dropdown">
+              <Calendar size={14} className="audit-period-dropdown-icon" aria-hidden="true" />
+              <select
+                className="field"
+                value={analyticsPeriod}
+                onChange={(e) => setAnalyticsPeriod(e.currentTarget.value as "7d" | "30d" | "90d")}
+                aria-label="Analytics time window"
+              >
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+                <option value="90d">Last 90 days</option>
+              </select>
             </label>
           </div>
 
@@ -2054,6 +2147,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           {!analyticsLoading && analytics && (
             <AnalyticsDashboard
               analytics={analytics}
+              locationName={analyticsLocations.find((l) => l.id === analyticsLocationId)?.name}
               onViewItemHistory={viewItemHistory}
               onViewVendor={(vendor) => setVendorDrillIn(vendor)}
             />
@@ -2063,6 +2157,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
             <VendorDrillInPanel
               vendor={vendorDrillIn}
               period={analyticsPeriod}
+              locationId={analyticsLocationId || undefined}
               onClose={() => setVendorDrillIn(null)}
               onViewItemHistory={viewItemHistory}
             />

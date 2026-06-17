@@ -749,7 +749,6 @@ export function InventoryPage({
                 activeTab={filters.activeTab}
                 availableVendors={data.registeredVendors}
                 onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
-                allowedUnits={data.allowedUnits}
                 vendorPricing={data.vendorPricing}
               />
             ) : (
@@ -793,7 +792,6 @@ export function InventoryPage({
                 onRemoveRow={canEditInventory ? data.onRequestRemoveRow : undefined}
                 availableVendors={data.registeredVendors}
                 onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
-                allowedUnits={data.allowedUnits}
                 vendorPricing={data.vendorPricing}
                 onOpenItemDetails={canEditInventory ? setDetailItemId : undefined}
               />

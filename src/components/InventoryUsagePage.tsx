@@ -849,9 +849,11 @@ export function InventoryUsagePage({
                     // doing the math themselves.
                     const packSize = selectedRow ? Number(selectedRow.values.packSize) : 0;
                     const hasPackMode = Number.isFinite(packSize) && packSize > 0;
-                    const itemUnit = selectedRow
-                      ? String(selectedRow.values.unit ?? "").trim() || "ct"
-                      : "ct";
+                    // `row.values.unit` is in DEPRECATED_CORE_KEYS — and users
+                    // sometimes typed counts into it ("100 BOX") which then
+                    // collided with packSize to produce "pack of 100 100 BOX".
+                    // The label doesn't need to name the unit at all; the math
+                    // (1 pack = N) is the unambiguous information.
                     const isPackMode = hasPackMode && entry.usageMode === "pack";
                     const baseMaxQty = selectedItem?.quantity ?? 9999;
                     const effectiveMaxQty = isPackMode
@@ -885,14 +887,16 @@ export function InventoryUsagePage({
                           </div>
                           <div className="usage-entry-qty">
                             <label className="field-label" htmlFor={`usage-qty-${group.id}-${entry.id}`}>
-                              {/* Pack-mode label reads "Packs Used (pack of 100 ct)"
-                               *  — clean regardless of what `itemUnit` happens to
-                               *  hold. Log Usage doesn't have a vendor context, so
-                               *  we use a generic "pack" label (vendor-specific
-                               *  pack labels live on order/receive flows). */}
+                              {/* Two clean labels, neither references a unit
+                               *  name (the deprecated `values.unit` field was
+                               *  unreliable and made the pack-mode label
+                               *  ungrammatical). The "1 pack = N" subtext
+                               *  carries the only ambiguous bit (how big is
+                               *  one pack here) without dragging in a unit
+                               *  string that may be wrong. */}
                               {isPackMode
-                                ? `Packs Used (pack of ${packSize} ${itemUnit})`
-                                : `Used (${itemUnit})`}
+                                ? `Packs used`
+                                : `Units used`}
                             </label>
                             {hasPackMode ? (
                               <div className="reorder-price-mode usage-entry-mode" role="tablist" aria-label="Usage mode">
@@ -927,6 +931,17 @@ export function InventoryUsagePage({
                               ariaInvalid={!!entry.error}
                               ariaDescribedBy={entry.error ? `usage-entry-error-${group.id}-${entry.id}` : undefined}
                             />
+                            {/* Pack-mode footnote: spell out the conversion so
+                             *  the user can see at a glance that toggling Pack
+                             *  multiplies the deduction. "Removes N from stock"
+                             *  is more concrete than "1 pack = N" and matches
+                             *  the action they're about to take. */}
+                            {isPackMode && Number(entry.quantityUsed) > 0 ? (
+                              <p className="field-help" style={{ fontSize: "0.8em", opacity: 0.7, marginTop: "0.25rem" }}>
+                                Removes {Number(entry.quantityUsed) * packSize} from stock
+                                {Number(entry.quantityUsed) !== 1 ? ` (${Number(entry.quantityUsed)} × ${packSize})` : ` (1 pack = ${packSize})`}
+                              </p>
+                            ) : null}
                           </div>
                           {group.entries.length > 1 && (
                             <button

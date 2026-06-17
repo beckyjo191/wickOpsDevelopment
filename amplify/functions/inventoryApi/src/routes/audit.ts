@@ -6,6 +6,30 @@ import { ddb } from "../clients";
 import { json, parseNextToken, encodeNextToken } from "../http";
 import { AUDIT_BY_TIMESTAMP_INDEX, AUDIT_BY_USER_INDEX } from "../config";
 import { listAllItems } from "../items";
+import { listLocations } from "../locations";
+
+/** Build a predicate that returns true when an audit event was logged at the
+ *  given location. Location is stamped per event-kind:
+ *    - USAGE_APPROVE / ITEM_RETIRE: `details.location` (name string), set
+ *      from the structural location at log time.
+ *    - RESTOCK_RECEIVED / RESTOCK_ADDED: `details.locationId` (id), set
+ *      from where the order line was received.
+ *  Events that carry no location info are excluded under a filter — better
+ *  to omit than to lie about per-station totals. */
+const buildLocationFilter = (locationId: string | undefined, locationName: string | undefined) => {
+  if (!locationId) return () => true;
+  return (action: string, details: Record<string, unknown>): boolean => {
+    if (action === "USAGE_APPROVE" || action === "ITEM_RETIRE") {
+      const evtLocation = typeof details.location === "string" ? details.location.trim() : "";
+      return Boolean(locationName) && evtLocation === locationName;
+    }
+    if (action === "RESTOCK_RECEIVED" || action === "RESTOCK_ADDED") {
+      const evtLocationId = typeof details.locationId === "string" ? details.locationId.trim() : "";
+      return evtLocationId === locationId;
+    }
+    return false;
+  };
+};
 
 // Machine-managed valuesJson keys. ITEM_EDIT events whose only changes are in
 // this set are pure noise — the one-time parentItemId backfill, retire-row
@@ -305,6 +329,21 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   const weekStartMs = parseMs(query.weekStartMs) ?? (dayStartMs - 6 * 86400000);
   const yearStartMs = parseMs(query.yearStartMs) ?? fallbackYearStart;
 
+  // Per-location scoping. Resolve id → name once so USAGE_APPROVE /
+  // ITEM_RETIRE matching (which uses the stamped location name) doesn't
+  // re-lookup per event. Unknown id falls back to "no events match" rather
+  // than silently widening to org-wide.
+  const requestedLocationId = String(query.locationId ?? "").trim() || undefined;
+  let requestedLocationName: string | undefined;
+  if (requestedLocationId) {
+    try {
+      const locations = await listLocations(storage);
+      const match = locations.find((l) => l.id === requestedLocationId);
+      requestedLocationName = match?.name;
+    } catch { /* if locations read fails, name stays undefined; USAGE events won't match */ }
+  }
+  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName);
+
   // Scan window has to reach the oldest of (period start, year start, prev
   // year period start when compareYoY is on) so every aggregation has the
   // events it needs in a single pass.
@@ -404,10 +443,10 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     .sort((a, b) => b.quantity - a.quantity);
 
   // Run the period-bound aggregation for the current window.
-  const currentSlice = aggregatePeriodSlice(allEvents, periodSinceMs, Number.POSITIVE_INFINITY, itemUnitCost);
+  const currentSlice = aggregatePeriodSlice(allEvents, periodSinceMs, Number.POSITIVE_INFINITY, itemUnitCost, locationFilter);
   // YoY: same shape, shifted back one year. Half-open [prevSinceMs, prevUntilMs).
   const previousSlice = compareYoY
-    ? aggregatePeriodSlice(allEvents, prevSinceMs, prevUntilMs, itemUnitCost)
+    ? aggregatePeriodSlice(allEvents, prevSinceMs, prevUntilMs, itemUnitCost, locationFilter)
     : null;
 
   // Calendar-anchored usage spend (Today / 7d / YTD) — independent of the
@@ -416,10 +455,12 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   let usageSpendWeek = 0;
   let usageSpendYTD = 0;
   for (const evt of allEvents) {
-    if (String(evt.action ?? "") !== "USAGE_APPROVE") continue;
+    const action = String(evt.action ?? "");
+    if (action !== "USAGE_APPROVE") continue;
     let details: Record<string, unknown> = {};
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
     if (details.undone) continue;
+    if (!locationFilter(action, details)) continue;
     const qty = Number(details.quantityUsed ?? 0);
     if (!Number.isFinite(qty) || qty <= 0) continue;
     const itemId = String(evt.itemId ?? "");
@@ -463,6 +504,7 @@ function aggregatePeriodSlice(
   periodSinceMs: number,
   periodUntilMs: number,
   itemUnitCost: Map<string, number>,
+  locationFilter: (action: string, details: Record<string, unknown>) => boolean = () => true,
 ) {
   const usageByDay = new Map<string, number>();
   const spendByDay = new Map<string, number>();
@@ -489,6 +531,9 @@ function aggregatePeriodSlice(
 
     let details: Record<string, unknown> = {};
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
+
+    // Per-location scoping: drop events that don't match before any work.
+    if (!locationFilter(action, details)) continue;
 
     const parentItemId = typeof details.parentItemId === "string" && details.parentItemId.trim()
       ? String(details.parentItemId).trim()
@@ -645,6 +690,18 @@ export const handleVendorBreakdown = async (ctx: RouteContext) => {
   const periodSinceMs = Date.now() - days * 86400000;
   const since = new Date(periodSinceMs).toISOString();
 
+  // Per-location scoping mirrors the main analytics endpoint.
+  const requestedLocationId = String(query.locationId ?? "").trim() || undefined;
+  let requestedLocationName: string | undefined;
+  if (requestedLocationId) {
+    try {
+      const locations = await listLocations(storage);
+      const match = locations.find((l) => l.id === requestedLocationId);
+      requestedLocationName = match?.name;
+    } catch { /* ignore */ }
+  }
+  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName);
+
   // Single pass over the period — query orgId index filtered by timestamp.
   let allEvents: Record<string, unknown>[] = [];
   let lastKey: Record<string, unknown> | undefined;
@@ -687,6 +744,7 @@ export const handleVendorBreakdown = async (ctx: RouteContext) => {
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
     const evtVendor = typeof details.vendor === "string" ? details.vendor.trim() : "";
     if (evtVendor !== vendor) continue;
+    if (!locationFilter(action, details)) continue;
     const source = typeof details.source === "string" ? details.source : "";
     if (source === "donation") continue;
     const qty = Number(

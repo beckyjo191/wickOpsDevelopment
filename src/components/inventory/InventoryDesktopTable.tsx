@@ -52,9 +52,6 @@ export type InventoryDesktopTableProps = {
    *  stay canonical across the app. */
   availableVendors?: string[];
   onAddVendor?: (name: string) => Promise<void>;
-  /** 1h.2c: per-org curated unit list. Forwarded to CellEditor for the
-   *  Unit column dropdown. */
-  allowedUnits?: string[];
   /** 1h.7: per-(item, vendor) pricing rows, keyed by item id. The table
    *  uses this to derive each row's `displayUnit` for the Quantity / Min
    *  Quantity suffix (first vendor pricing row's primary axis when the
@@ -104,7 +101,6 @@ export function InventoryDesktopTable({
   onRemoveRow,
   availableVendors,
   onAddVendor,
-  allowedUnits,
   vendorPricing,
   onOpenItemDetails,
 }: InventoryDesktopTableProps) {
@@ -346,7 +342,6 @@ export function InventoryDesktopTable({
                     onSetSelectedRowId={onSetSelectedRowId}
                     availableVendors={availableVendors}
                     onAddVendor={onAddVendor}
-                    allowedUnits={allowedUnits}
                     displayUnit={rowDisplayUnit}
                   />
                 </td>

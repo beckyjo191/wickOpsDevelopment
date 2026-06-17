@@ -18,6 +18,26 @@ import { useToast } from "../shared/Toast";
 
 type ColumnType = "text" | "number" | "date" | "link" | "boolean";
 
+/** Keys for columns that USED to be core but are being phased out (see
+ *  `DEPRECATED_CORE_KEYS` in amplify/functions/inventoryApi/src/columns.ts).
+ *  Their data is preserved as a fallback during transition, but they
+ *  shouldn't be manageable per-location — the canonical action is to
+ *  delete them from Settings → Inventory Columns. Keep this list in sync
+ *  with the server-side constant; future churn should ideally stamp an
+ *  `isDeprecated` flag on the column row instead so the client doesn't
+ *  need to know specific keys. */
+const DEPRECATED_COLUMN_KEYS = new Set<string>([
+  "dimension",
+  "displayUnit",
+  "vendor",
+  "packSize",
+  "packCost",
+  "unitCost",
+  "reorderLink",
+  "category",
+  "unit",
+]);
+
 export type ColumnAttachmentDialogProps = {
   columns: InventoryColumn[];
   location: InventoryLocation;
@@ -38,9 +58,12 @@ export function ColumnAttachmentDialog({
   const [newType, setNewType] = useState<ColumnType>("text");
   const [creating, setCreating] = useState(false);
 
-  // Custom columns only — core renders everywhere by definition.
+  // Custom columns only — core renders everywhere by definition. Also
+  // hide deprecated columns: they're being phased out, so per-location
+  // attachment doesn't make sense. Users manage / delete them from
+  // Settings → Inventory Columns instead.
   const customColumns = columns
-    .filter((c) => !c.isCore)
+    .filter((c) => !c.isCore && !DEPRECATED_COLUMN_KEYS.has(c.key))
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
   const isAttached = (col: InventoryColumn): boolean => {

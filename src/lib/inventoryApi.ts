@@ -1341,9 +1341,13 @@ export const fetchAuditAnalytics = async (params: {
   /** When true, the server also returns a `previous` aggregation for the same
    *  window one year ago — used to render YoY deltas. Defaults to false. */
   compareYoY?: boolean;
+  /** When set, the server filters every aggregation to events stamped at this
+   *  location (USAGE/RETIRE by name, RESTOCK by id). Omit for org-wide. */
+  locationId?: string;
 }): Promise<AuditAnalytics> => {
   const qs = new URLSearchParams({ period: params.period });
   if (params.compareYoY) qs.set("compareYoY", "1");
+  if (params.locationId) qs.set("locationId", params.locationId);
   // Send the user's local-time day / week / year boundaries so the server's
   // calendar-anchored usageSpend buckets reflect the user's clock instead of
   // the Lambda's UTC. Without this, a usage event from 7 PM MDT yesterday
@@ -1386,8 +1390,11 @@ export type VendorBreakdown = {
 export const fetchVendorBreakdown = async (params: {
   vendor: string;
   period: "7d" | "30d" | "90d";
+  /** When set, restock events are filtered to ones received at this location. */
+  locationId?: string;
 }): Promise<VendorBreakdown> => {
   const qs = new URLSearchParams({ period: params.period, vendor: params.vendor });
+  if (params.locationId) qs.set("locationId", params.locationId);
   const url = `${INVENTORY_API_BASE_URL}/inventory/audit/analytics/vendor?${qs.toString()}`;
   const res = await authFetch(url);
   if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load vendor breakdown."));

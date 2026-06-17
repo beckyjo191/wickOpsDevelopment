@@ -20,7 +20,7 @@ import {
   type ItemVendorPricingEntry,
 } from "../../lib/inventoryApi";
 import { formatCurrency, parseCurrency } from "../../lib/currency";
-import { KNOWN_UNITS, dimensionForUnit } from "../../lib/uom";
+import { dimensionForUnit } from "../../lib/uom";
 import { VendorSelect } from "../ReorderTab";
 import { useToast } from "../shared/Toast";
 
@@ -34,10 +34,9 @@ interface ItemDetailModalProps {
    *  non-empty, the per-vendor unit dropdown limits options to these.
    *  Empty array → show the full KNOWN_UNITS master list. */
   allowedUnits?: string[];
-  /** 1h.7: org-wide gate. When false (EMS-style default), the form
-   *  hides Amount/Unit fields entirely — the user just sees Vendor,
-   *  Type, [Pack(s)], Cost. When true, Amount + Unit become available
-   *  behind the "+ Add unit" disclosure for weight/volume capture. */
+  /** Org-wide UoM gate. Currently ignored by the form — unit-of-measure
+   *  capture is hidden everywhere during the EMS warm-market push. Kept
+   *  in the prop list so callers don't need to change shape. */
   tracksUnits?: boolean;
   onClose: () => void;
   /** Update the parent's in-memory map. The parent owns the Map<itemId,
@@ -114,14 +113,6 @@ const draftFromEntry = (entry: ItemVendorPricingEntry): Draft => {
     expectedLastUpdatedAt: entry.lastUpdatedAt,
   };
 };
-
-/** Filter KNOWN_UNITS down to weight + volume units only (no count units).
- *  Used by the `packAmountUnit` dropdown — count units belong on packCount,
- *  not the bulk-amount axis. */
-const WEIGHT_VOLUME_UNITS: string[] = KNOWN_UNITS.filter((u) => {
-  const dim = dimensionForUnit(u);
-  return dim === "weight" || dim === "volume";
-});
 
 /** Build the price-per-unit summary text for one (item, vendor) row.
  *
@@ -282,11 +273,10 @@ export function ItemDetailModal({
         if (!Number.isFinite(n) || n <= 0) { toast.error("Amount per pack must be > 0."); return; }
         packAmount = n;
       }
+      // Unit-of-measure capture is hidden from the form for now (EMS warm
+      // market). Preserve any legacy unit on draft so editing an item that
+      // already has one doesn't silently strip the value.
       packAmountUnit = amountUnitRaw || undefined;
-      if (packAmount !== undefined && !packAmountUnit) {
-        toast.error("Pick a unit for the amount (lb, oz, fl oz, etc.).");
-        return;
-      }
     } else {
       // Single mode
       if (draft.packAmount.trim()) {
@@ -540,10 +530,7 @@ function PricingForm({
    *  packAmount unit dropdown intersects this with weight+volume only
    *  (count units like ct/dozen belong on packCount instead). */
   allowedUnits?: string[];
-  /** 1h.7: org-wide UoM gate. When false, the form hides the Amount /
-   *  Unit fields and the "+ Add unit" disclosure entirely — basic
-   *  EMS-style flow. When true, the disclosure surfaces and unlocks
-   *  the dual-axis Pack form. */
+  /** Currently ignored by the form — see prop docs above. */
   tracksUnits: boolean;
   onAddVendor?: (name: string) => Promise<void>;
   saving: boolean;
@@ -551,41 +538,14 @@ function PricingForm({
   onCancel: () => void;
 }) {
   const update = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
-  // Progressive disclosure (1h.7): Amount + Unit and Reorder URL hide
-  // behind "+ Add" buttons until the user opts in. Keeps the form
-  // compact for items that don't track weight/volume or don't have a
-  // vendor URL. Auto-revealed on edit when existing data is present —
-  // *regardless* of `tracksUnits`, so a row with legacy weight data
-  // doesn't go invisible if the org flips the gate off later (the user
-  // can still see / clear the value). The "+ Add unit" button is the
-  // only disclosure path that's gated by `tracksUnits`.
-  const [showAmount, setShowAmount] = useState<boolean>(
-    Boolean(draft.packAmount.trim() || draft.packAmountUnit.trim()),
-  );
+  // Reorder URL is optional — hide behind a "+ Add reorder URL" disclosure
+  // until needed. Auto-revealed when editing a row that already has one.
   const [showUrl, setShowUrl] = useState<boolean>(Boolean(draft.reorderUrl.trim()));
-  // Unit dropdown options.
-  //   - In Pack mode, the Amount-per-pack field is always weight/volume
-  //     (count goes on the separate Pack(s) field), so we filter to
-  //     weight + volume units only.
-  //   - In Single mode, the Amount field can carry any unit — count
-  //     ("3 catheters at $5/each"), weight ("5 lb of flour"), or volume
-  //     ("16 fl oz of olive oil"). We include the full curated list.
-  const baseWvUnits = (() => {
-    const curated = (allowedUnits && allowedUnits.length > 0
-      ? allowedUnits.filter((u) => {
-          const dim = dimensionForUnit(u);
-          return dim === "weight" || dim === "volume";
-        })
-      : WEIGHT_VOLUME_UNITS);
-    return curated.length > 0 ? curated : WEIGHT_VOLUME_UNITS;
-  })();
-  const baseAllUnits = (allowedUnits && allowedUnits.length > 0
-    ? allowedUnits
-    : KNOWN_UNITS);
-  const baseAmountUnits = draft.mode === "pack" ? baseWvUnits : baseAllUnits;
-  const amountUnitOptions = draft.packAmountUnit && !baseAmountUnits.includes(draft.packAmountUnit)
-    ? [...baseAmountUnits, draft.packAmountUnit]
-    : baseAmountUnits;
+  // Unit-of-measure capture is hidden for now (EMS warm market). The
+  // `tracksUnits` / `allowedUnits` props stay in the API for callers, but
+  // the form ignores them so every org sees the same simplified shape.
+  void allowedUnits;
+  void tracksUnits;
 
   return (
     <div className="item-detail-pricing-form">
@@ -639,60 +599,40 @@ function PricingForm({
           </div>
         </div>
 
+        {/* Pack mode shows Pack(s) + Amount per pack side-by-side. EMS warm
+         *  market doesn't need a unit of measure on the inner amount, so
+         *  "Amount per pack" is a plain count (e.g. "10 syringes per box").
+         *  Single mode shows only the Cost field below. */}
         {draft.mode === "pack" ? (
-          <label className="item-detail-pricing-field">
-            <span className="field-label">Pack(s)</span>
-            <input
-              className="field"
-              type="number"
-              min="0"
-              step="any"
-              placeholder="1"
-              value={draft.packCount}
-              onChange={(e) => update({ packCount: e.target.value })}
-              disabled={saving}
-              aria-label="Number of items in one pack"
-            />
-          </label>
-        ) : null}
-
-        {showAmount ? (
           <>
             <label className="item-detail-pricing-field">
-              <span className="field-label">
-                {draft.mode === "pack" ? "Amount per pack" : "Amount"}
-              </span>
+              <span className="field-label">Pack(s)</span>
               <input
                 className="field"
                 type="number"
                 min="0"
                 step="any"
-                placeholder="5"
-                value={draft.packAmount}
-                onChange={(e) => update({ packAmount: e.target.value })}
+                placeholder="1"
+                value={draft.packCount}
+                onChange={(e) => update({ packCount: e.target.value })}
                 disabled={saving}
-                aria-label={
-                  draft.mode === "pack"
-                    ? "Weight or volume in one pack"
-                    : "Weight or volume purchased"
-                }
+                aria-label="Number of packs"
               />
             </label>
 
             <label className="item-detail-pricing-field">
-              <span className="field-label">Unit</span>
-              <select
+              <span className="field-label">Amount per pack</span>
+              <input
                 className="field"
-                value={draft.packAmountUnit}
-                onChange={(e) => update({ packAmountUnit: e.target.value })}
+                type="number"
+                min="0"
+                step="any"
+                placeholder="10"
+                value={draft.packAmount}
+                onChange={(e) => update({ packAmount: e.target.value })}
                 disabled={saving}
-                aria-label="Unit for the amount"
-              >
-                <option value=""></option>
-                {amountUnitOptions.map((u) => (
-                  <option key={u} value={u}>{u}</option>
-                ))}
-              </select>
+                aria-label="Number of items in one pack"
+              />
             </label>
           </>
         ) : null}
@@ -712,24 +652,9 @@ function PricingForm({
           />
         </label>
 
-        {/* Progressive-disclosure buttons. Compact form for items that
-         *  don't track UoM or don't have a vendor URL; one click reveals
-         *  the corresponding field set. Buttons live in the wide slot so
-         *  they stretch across the grid below the priced fields. The
-         *  "+ Add unit" button only appears when the org has tracksUnits
-         *  on — EMS-style orgs never see it. */}
-        <div className="item-detail-pricing-field item-detail-pricing-field--wide item-detail-pricing-add-row">
-          {tracksUnits && !showAmount ? (
-            <button
-              type="button"
-              className="button button-ghost button-sm item-detail-pricing-add-btn"
-              onClick={() => setShowAmount(true)}
-              disabled={saving}
-            >
-              <Plus size={14} /> Add unit
-            </button>
-          ) : null}
-          {!showUrl ? (
+        {/* Reorder URL is optional — hide behind a disclosure until needed. */}
+        {!showUrl ? (
+          <div className="item-detail-pricing-field item-detail-pricing-field--wide item-detail-pricing-add-row">
             <button
               type="button"
               className="button button-ghost button-sm item-detail-pricing-add-btn"
@@ -738,8 +663,8 @@ function PricingForm({
             >
               <Plus size={14} /> Add reorder URL
             </button>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
 
         {showUrl ? (
           <label className="item-detail-pricing-field item-detail-pricing-field--wide">

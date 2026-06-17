@@ -278,14 +278,6 @@ export function useInventoryFilters({
   const visibleColumns = useMemo(
     () => {
       const base = [...columns]
-        // 1h.7: `unit` is no longer a grid column. UoM moved to the i
-        // modal as a per-(item, vendor) field. Existing orgs may still
-        // have a `unit` column row in their columns table (demoted to
-        // non-core by the backend reconcile loop) — hard-filter it here
-        // so it never renders in the grid regardless of stored
-        // isVisible. Users keep the data on item rows; they just don't
-        // see the picker on every Quantity-adjacent row anymore.
-        .filter((column) => column.key !== "unit")
         .filter((column) => {
           const override = userColumnOverrides[column.id];
           return override !== undefined ? override : column.isVisible;

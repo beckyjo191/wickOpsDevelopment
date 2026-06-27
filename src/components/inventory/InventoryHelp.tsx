@@ -15,9 +15,10 @@ function getHelpForTab(activeTab: ActiveTab, canEditInventory: boolean): HelpSec
           <>
             <p>
               Rows past their <strong>Expiration Date</strong>. Expired stock
-              doesn't count toward on-hand totals — an item can show up here
-              and still trigger Low Stock if the un-expired lots are below
-              their min.
+              still counts as on-hand until you retire it — so an expired item
+              lives here, not in Low Stock. <strong>Retiring</strong> it zeroes
+              that lot, which is what can drop the item below its min and move
+              it into Low Stock.
             </p>
             <ul>
               <li>
@@ -82,9 +83,10 @@ function getHelpForTab(activeTab: ActiveTab, canEditInventory: boolean): HelpSec
                 is the same across all lots of that item.
               </li>
               <li>
-                Expired stock doesn't count toward on-hand, so an item can
-                show up as Low Stock even if there are expired units on the
-                shelf.
+                On-hand is summed across all lots. Expired stock still counts
+                while it's on the shelf, so an expired item stays in the
+                Expired tab — not here. Retire it and, if you're then below
+                min, it shows up as Low Stock.
               </li>
               <li>
                 Paste a vendor URL into <strong>Reorder Link</strong> so

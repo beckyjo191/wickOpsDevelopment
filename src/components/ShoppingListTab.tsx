@@ -148,6 +148,10 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
     for (const row of rows) {
       const name = String(row.values.itemName ?? "").trim();
       if (!name) continue;
+      // Skip retired lots — they're removed stock (qty zeroed) and shouldn't
+      // carry a min or rowId into the aggregate. Retiring an expired lot is
+      // what drops an item's on-hand below par and surfaces it here.
+      if (row.values.retiredAt) continue;
       // Skip rows already marked as ordered — they shouldn't reappear until
       // received or canceled. Mirrors the legacy Reorder filter.
       const orderedAt = String(row.values.orderedAt ?? "").trim();

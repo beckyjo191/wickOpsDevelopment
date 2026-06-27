@@ -2,6 +2,18 @@ import { ChevronDown } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryLocation, InventoryRow } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
+/** Compact "Mon D" label for a row's orderedAt ISO timestamp (date part only,
+ *  to avoid a timezone shift). Empty string when there's no pending order. */
+const formatOrderedDate = (value: unknown): string => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.slice(0, 10));
+  if (!m) return "";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+};
+
 export type InventoryMobileCardsProps = {
   paginatedRows: { row: InventoryRow; index: number }[];
   visibleColumns: InventoryColumn[];
@@ -222,6 +234,11 @@ export function InventoryMobileCards({
                 )}
                 <div className="inventory-card-info">
                   <span className="inventory-card-name">{cardTitle}</span>
+                  {row.values.orderedAt ? (
+                    <span className="badge badge--primary inventory-ordered-pill">
+                      Ordered · {formatOrderedDate(row.values.orderedAt)}
+                    </span>
+                  ) : null}
                   <div className="inventory-card-meta">
                     {previewCols.map((col) => {
                       const val = row.values[col.key];

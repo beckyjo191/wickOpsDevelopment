@@ -3,6 +3,20 @@ import { ChevronDown, ChevronUp, Info } from "lucide-react";
 import type { ActiveTab, InventoryColumn, InventoryRow, SortDirection } from "./inventoryTypes";
 import { CellEditor } from "./CellEditor";
 
+/** Compact "Mon D" label for a row's orderedAt ISO timestamp. Empty string
+ *  when there's no pending order. Parsed from the date part to avoid a
+ *  timezone shift moving the day. */
+const formatOrderedDate = (value: unknown): string => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const datePart = raw.slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!m) return "";
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+};
+
 export type InventoryDesktopTableProps = {
   paginatedRows: { row: InventoryRow; index: number }[];
   visibleColumns: InventoryColumn[];
@@ -344,6 +358,17 @@ export function InventoryDesktopTable({
                     onAddVendor={onAddVendor}
                     displayUnit={rowDisplayUnit}
                   />
+                  {/* Pending-order marker. A low item that's already ordered
+                   *  stays in Low Stock (still physically short) but leaves the
+                   *  Reorder list — this pill explains the gap at a glance. */}
+                  {column.key === "itemName" && row.values.orderedAt ? (
+                    <span
+                      className="badge badge--primary inventory-ordered-pill"
+                      title={`Ordered ${formatOrderedDate(row.values.orderedAt)}`}
+                    >
+                      Ordered · {formatOrderedDate(row.values.orderedAt)}
+                    </span>
+                  ) : null}
                 </td>
                 );
               })}

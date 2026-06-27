@@ -10,6 +10,85 @@
   padding: 1.15rem;
 }
 
+/* Legal-page nav: overrides the marketing landing's sticky/translucent nav
+   so Terms/Privacy/Cookies render as simple top bars. The .legal-page parent
+   scopes these so they don't leak back into the marketing page. */
+.legal-page .lp-nav {
+  position: static;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: min(1120px, 100%);
+  margin: 0 auto;
+  height: auto;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-bottom: 0;
+  z-index: auto;
+}
+
+.legal-page .lp-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--lp-brand);
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.legal-page .lp-brand-mark-image {
+  height: 2rem;
+  width: auto;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.legal-page .lp-brand-word {
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.legal-page .lp-nav-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.legal-page .lp-link {
+  color: var(--lp-link);
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.legal-page .lp-link:hover {
+  text-decoration: underline;
+}
+
+.legal-page .lp-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 0.95rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.legal-page .lp-button-primary {
+  color: #fff;
+  background: linear-gradient(180deg, var(--primary) 0%, var(--primary-strong) 100%);
+}
+
+.legal-page .lp-button-primary:hover {
+  background: linear-gradient(180deg, var(--primary-hover) 0%, var(--primary-hover-strong) 100%);
+}
+
 .legal-content {
   width: min(860px, 100%);
   margin: 1.5rem auto 2rem;

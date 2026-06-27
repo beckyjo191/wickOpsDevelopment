@@ -4,7 +4,9 @@ import {
   fetchItemHistory,
   fetchAuditAnalytics,
   fetchVendorBreakdown,
+  fetchAnalyticsBreakdown,
   listInventoryLocations,
+  type AnalyticsBreakdown,
   type InventoryLocation,
   type VendorBreakdown,
   undoColumnDeleteEvent,
@@ -174,6 +176,10 @@ function isAllDefaultValues(vals: Record<string, unknown>): boolean {
  */
 function isNoiseEvent(event: AuditEvent): boolean {
   const details = event.details ?? {};
+  // Continuation stubs created by the retire flow (qty 0 + min carried over,
+  // so the item stays in the reorder list). The user didn't intentionally
+  // add anything, so the matching ITEM_CREATE is machine noise.
+  if (event.action === "ITEM_CREATE" && details.skeleton === true) return true;
   if (event.action === "ITEM_EDIT") {
     const rawChanges = Array.isArray(details.changes)
       ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
@@ -201,6 +207,12 @@ function isNoiseEvent(event: AuditEvent): boolean {
   return false;
 }
 
+// Action → accent-rail color. Each value drives the per-row `--row-accent`
+// custom property (set inline in FlatActivityFeed / FlatItemHistory) that paints
+// the left rail. INVARIANT: every value must be a design-system status token
+// (var(--success | --primary | --warning | --danger | --text-muted)) — never a
+// raw hex — so the rail stays inside the token set even though it's applied via
+// inline style. New actions: pick the status token that matches their tone.
 const ACTION_COLORS: Record<string, string> = {
   ITEM_CREATE: "var(--success)",
   ITEM_EDIT: "var(--primary)",
@@ -586,7 +598,23 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
         }, 0);
         summary = `Logged usage of ${total}`;
       } else {
-        summary = bucket.events.map(buildRichRowSummary).join(" · ");
+        // Mixed-action buckets: build segment list, then de-dupe identical
+        // adjacent or repeated strings into "segment (×N)". Stops a row from
+        // reading "Received 2 · Ordered 2 from BoundTree · Ordered 2 from
+        // BoundTree" when the user placed two same-shape orders that day.
+        // Preserves order of first appearance so the timeline still reads
+        // chronologically.
+        const segments = bucket.events.map(buildRichRowSummary);
+        const counts = new Map<string, number>();
+        for (const s of segments) counts.set(s, (counts.get(s) ?? 0) + 1);
+        const seenInOrder: string[] = [];
+        for (const s of segments) {
+          if (seenInOrder.includes(s)) continue;
+          seenInOrder.push(s);
+        }
+        summary = seenInOrder
+          .map((s) => (counts.get(s)! > 1 ? `${s} (×${counts.get(s)})` : s))
+          .join(" · ");
       }
       const titleAttr = bucket.events.length === 1 ? eventTitleAttr(bucket.events[0]) : undefined;
       const actionList = Array.from(bucket.actions);
@@ -1091,6 +1119,8 @@ function SimpleBarChart({
   rowKey,
   rowDelta,
   emptyHint,
+  viewAllCount,
+  onViewAll,
 }: {
   data: Array<Record<string, unknown>>;
   labelKey: string;
@@ -1106,7 +1136,12 @@ function SimpleBarChart({
   rowDelta?: (row: Record<string, unknown>) => DeltaInfo | null;
   /** Override the default empty-state hint. */
   emptyHint?: string;
+  /** Pre-cap total. When > data.length, renders a "View all (N)" header link. */
+  viewAllCount?: number;
+  /** Called when the View all link is clicked. */
+  onViewAll?: () => void;
 }) {
+  const showViewAll = !!onViewAll && typeof viewAllCount === "number" && viewAllCount > data.length;
   if (!data.length) return (
     <div className="audit-chart-card">
       <h4 className="audit-chart-title">{title}</h4>
@@ -1117,7 +1152,19 @@ function SimpleBarChart({
   const fmt = formatValue ?? ((v: number) => Math.round(v).toLocaleString());
   return (
     <div className="audit-chart-card">
-      <h4 className="audit-chart-title">{title}</h4>
+      <div className="audit-chart-header">
+        <h4 className="audit-chart-title">{title}</h4>
+        {showViewAll ? (
+          <button
+            type="button"
+            className="audit-chart-view-all"
+            onClick={onViewAll}
+            title={`See all ${viewAllCount} items in a side panel`}
+          >
+            View all ({viewAllCount})
+          </button>
+        ) : null}
+      </div>
       <div className="audit-bar-chart">
         {data.slice(0, 10).map((d, i) => {
           const val = Number(d[valueKey] ?? 0);
@@ -1353,12 +1400,273 @@ function VendorDrillInPanel({
   );
 }
 
+/** Side drawer that shows the full breakdown (uncapped) for one analytics
+ *  chart. Reuses the chart card visual language so opening it feels like
+ *  zooming into the top-10 card, not jumping to a different surface.
+ *  Includes a search box for long lists and an Export CSV button so buyers
+ *  can grab the raw numbers without us needing to build per-column sort
+ *  primitives. */
+type BreakdownScope = "purchased" | "used" | "vendors";
+
+const BREAKDOWN_TITLES: Record<BreakdownScope, string> = {
+  purchased: "All items by purchase cost",
+  used: "All items used",
+  vendors: "All vendors by spend",
+};
+
+function downloadCsv(filename: string, rows: string[][]) {
+  const csv = rows
+    .map((row) => row
+      .map((cell) => {
+        const s = String(cell ?? "");
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      })
+      .join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function BreakdownDrawer({
+  scope,
+  period,
+  locationId,
+  locationName,
+  onClose,
+  onViewItemHistory,
+  onViewVendor,
+}: {
+  scope: BreakdownScope;
+  period: "7d" | "30d" | "90d";
+  locationId?: string;
+  /** When set, suffixes the title and the export filename. */
+  locationName?: string;
+  onClose: () => void;
+  onViewItemHistory?: (itemId: string, name: string) => void;
+  onViewVendor?: (vendor: string) => void;
+}) {
+  const [data, setData] = useState<AnalyticsBreakdown | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  /** "Used" scope shows two axes (qty + $); user toggles between them. */
+  const [usedSortBy, setUsedSortBy] = useState<"qty" | "cost">("qty");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetchAnalyticsBreakdown({ scope, period, ...(locationId ? { locationId } : {}) })
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load breakdown."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [scope, period, locationId]);
+
+  const titleSuffix = locationName ? ` · ${locationName}` : "";
+  const periodLabel = period === "7d" ? "Last 7 days" : period === "30d" ? "Last 30 days" : "Last 90 days";
+
+  // Normalize the scope-shaped response into a flat row list + label/value
+  // pair the renderer doesn't have to switch on.
+  type FlatRow = { key: string; label: string; value: number; itemId?: string; vendor?: string; row: Record<string, unknown> };
+  let rows: FlatRow[] = [];
+  let valueFormatter: (n: number) => string = formatUsd;
+  if (data?.scope === "purchased") {
+    rows = data.items.map((r) => ({
+      key: r.itemId || r.itemName,
+      label: r.itemName,
+      value: r.spend,
+      itemId: r.itemId,
+      row: r as unknown as Record<string, unknown>,
+    }));
+  } else if (data?.scope === "used") {
+    const sorted = [...data.items].sort((a, b) =>
+      usedSortBy === "cost" ? b.cost - a.cost : b.qtyUsed - a.qtyUsed,
+    );
+    rows = sorted.map((r) => ({
+      key: r.itemId || r.itemName,
+      label: r.itemName,
+      value: usedSortBy === "cost" ? r.cost : r.qtyUsed,
+      itemId: r.itemId,
+      row: r as unknown as Record<string, unknown>,
+    }));
+    valueFormatter = usedSortBy === "cost" ? formatUsd : formatQty;
+  } else if (data?.scope === "vendors") {
+    rows = data.vendors.map((r) => ({
+      key: r.vendor,
+      label: r.vendor,
+      value: r.spend,
+      vendor: r.vendor,
+      row: r as unknown as Record<string, unknown>,
+    }));
+  }
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredRows = normalizedSearch
+    ? rows.filter((r) => r.label.toLowerCase().includes(normalizedSearch))
+    : rows;
+  const max = filteredRows.length > 0 ? Math.max(...filteredRows.map((r) => r.value), 1) : 1;
+
+  const handleExport = () => {
+    const safeLocation = locationName ? `-${locationName.replace(/[^a-z0-9]+/gi, "-")}` : "";
+    const filename = `wickops-${scope}${safeLocation}-${period}.csv`;
+    if (data?.scope === "purchased") {
+      const header = ["Item", "Spend", "Qty received"];
+      const body = data.items.map((r) => [r.itemName, String(r.spend), String(r.qtyReceived)]);
+      downloadCsv(filename, [header, ...body]);
+      return;
+    }
+    if (data?.scope === "used") {
+      const header = ["Item", "Qty used", "Cost"];
+      const body = data.items.map((r) => [r.itemName, String(r.qtyUsed), String(r.cost)]);
+      downloadCsv(filename, [header, ...body]);
+      return;
+    }
+    if (data?.scope === "vendors") {
+      const header = ["Vendor", "Spend", "Order count"];
+      const body = data.vendors.map((r) => [r.vendor, String(r.spend), String(r.orderCount)]);
+      downloadCsv(filename, [header, ...body]);
+      return;
+    }
+  };
+
+  return (
+    <div className="audit-vendor-drawer-overlay" onClick={onClose} role="presentation">
+      <aside
+        className="audit-vendor-drawer"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={`${BREAKDOWN_TITLES[scope]} breakdown`}
+      >
+        <div className="audit-vendor-drawer-header">
+          <div>
+            <h3 className="audit-vendor-drawer-title">{BREAKDOWN_TITLES[scope]}{titleSuffix}</h3>
+            <p className="audit-vendor-drawer-sub">{periodLabel}</p>
+          </div>
+          <button
+            type="button"
+            className="audit-vendor-drawer-close"
+            onClick={onClose}
+            aria-label="Close breakdown"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <p className="audit-empty">{error}</p>
+        ) : (
+          <>
+            <div className="audit-breakdown-toolbar">
+              <label className="audit-breakdown-search">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  type="search"
+                  className="field"
+                  placeholder={scope === "vendors" ? "Search vendors…" : "Search items…"}
+                  value={search}
+                  onChange={(e) => setSearch(e.currentTarget.value)}
+                />
+              </label>
+              {scope === "used" ? (
+                <div className="audit-breakdown-axis-toggle" role="tablist" aria-label="Sort axis">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={usedSortBy === "qty"}
+                    className={`audit-top-items-tab ${usedSortBy === "qty" ? "is-active" : ""}`}
+                    onClick={() => setUsedSortBy("qty")}
+                  >
+                    Qty
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={usedSortBy === "cost"}
+                    className={`audit-top-items-tab ${usedSortBy === "cost" ? "is-active" : ""}`}
+                    onClick={() => setUsedSortBy("cost")}
+                  >
+                    $
+                  </button>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="button button-ghost button-sm audit-breakdown-export"
+                onClick={handleExport}
+                disabled={rows.length === 0}
+              >
+                Export CSV
+              </button>
+            </div>
+
+            <div className="audit-breakdown-meta">
+              {filteredRows.length} of {rows.length} shown
+            </div>
+
+            {filteredRows.length === 0 ? (
+              <p className="audit-empty">No matches.</p>
+            ) : (
+              <div className="audit-bar-chart audit-breakdown-list">
+                {filteredRows.map((r) => {
+                  const pct = Math.max((r.value / max) * 100, 2);
+                  const clickable =
+                    (scope !== "vendors" && !!onViewItemHistory && !!r.itemId)
+                    || (scope === "vendors" && !!onViewVendor && !!r.vendor);
+                  return (
+                    <div key={r.key} className="audit-bar-row">
+                      {clickable ? (
+                        <button
+                          type="button"
+                          className="audit-bar-label audit-bar-label--clickable"
+                          title={r.label}
+                          onClick={() => {
+                            if (scope === "vendors" && onViewVendor && r.vendor) {
+                              onViewVendor(r.vendor);
+                            } else if (onViewItemHistory && r.itemId) {
+                              onViewItemHistory(r.itemId, r.label);
+                            }
+                          }}
+                        >
+                          {r.label.slice(0, 40)}
+                        </button>
+                      ) : (
+                        <span className="audit-bar-label" title={r.label}>
+                          {r.label.slice(0, 40)}
+                        </span>
+                      )}
+                      <div className="audit-bar-track">
+                        <div className="audit-bar-fill" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="audit-bar-value">{valueFormatter(r.value)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
 
 function AnalyticsDashboard({
   analytics,
   locationName,
   onViewItemHistory,
   onViewVendor,
+  onOpenBreakdown,
 }: {
   analytics: AuditAnalytics;
   /** When set, every section title gets a " · {locationName}" suffix so
@@ -1367,6 +1675,8 @@ function AnalyticsDashboard({
   onViewItemHistory?: (itemId: string, name: string) => void;
   /** Slice C: click a vendor row → open the vendor drill-in panel. */
   onViewVendor?: (vendor: string) => void;
+  /** "View all (N)" link on each chart card opens the breakdown drawer. */
+  onOpenBreakdown?: (scope: BreakdownScope) => void;
 }) {
   const titleSuffix = locationName ? ` · ${locationName}` : "";
   const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
@@ -1443,7 +1753,7 @@ function AnalyticsDashboard({
           delta={deltaSpend}
         />
         <StatCard
-          label={totals.lossQty === 1 ? "Item lost" : "Items lost"}
+          label={totals.lossQty === 1 ? "Item retired" : "Items retired"}
           value={formatQty(totals.lossQty)}
           sub={totals.lossValue > 0 ? `~${formatUsd(totals.lossValue)}` : undefined}
           delta={deltaLoss}
@@ -1507,6 +1817,8 @@ function AnalyticsDashboard({
                     true,
                   ) : undefined}
                   emptyHint="No data for this period."
+                  viewAllCount={analytics.totalCounts?.bySpendItem}
+                  onViewAll={onOpenBreakdown ? () => onOpenBreakdown("purchased") : undefined}
                 />
               ) : topItemsView === "usedCost" ? (
                 <SimpleBarChart
@@ -1529,6 +1841,8 @@ function AnalyticsDashboard({
                     true,
                   ) : undefined}
                   emptyHint="No data for this period."
+                  viewAllCount={analytics.totalCounts?.byUsageItem}
+                  onViewAll={onOpenBreakdown ? () => onOpenBreakdown("used") : undefined}
                 />
               ) : (
                 <SimpleBarChart
@@ -1551,6 +1865,8 @@ function AnalyticsDashboard({
                     false,
                   ) : undefined}
                   emptyHint="No usage logged in this period."
+                  viewAllCount={analytics.totalCounts?.byUsageItem}
+                  onViewAll={onOpenBreakdown ? () => onOpenBreakdown("used") : undefined}
                 />
               )}
             </div>
@@ -1571,6 +1887,8 @@ function AnalyticsDashboard({
                 true,
               ) : undefined}
               emptyHint="No vendor-tagged restocks in this period."
+              viewAllCount={analytics.totalCounts?.byVendor}
+              onViewAll={onOpenBreakdown ? () => onOpenBreakdown("vendors") : undefined}
             />
           </div>
         </section>
@@ -1584,10 +1902,10 @@ function AnalyticsDashboard({
         </section>
       ) : null}
 
-      {/* Loss section — only renders when there's actually loss to report. */}
+      {/* Retired section — only renders when there's actually retired stock to report. */}
       {lossRows.length > 0 ? (
         <section className="audit-analytics-section">
-          <h3 className="audit-analytics-section-title">Loss{titleSuffix}</h3>
+          <h3 className="audit-analytics-section-title">Retired{titleSuffix}</h3>
           <SimpleBarChart
             data={lossRows as unknown as Array<Record<string, unknown>>}
             labelKey="reasonLabel"
@@ -1689,6 +2007,8 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   const [analyticsLocations, setAnalyticsLocations] = useState<InventoryLocation[]>([]);
   /** Slice C: vendor name currently being drilled into. null = no drawer. */
   const [vendorDrillIn, setVendorDrillIn] = useState<string | null>(null);
+  /** Breakdown drawer scope. null = closed. */
+  const [breakdownScope, setBreakdownScope] = useState<BreakdownScope | null>(null);
 
   const loadFeed = useCallback(async (append = false, cursor?: string | null) => {
     setLoading(true);
@@ -2150,6 +2470,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
               locationName={analyticsLocations.find((l) => l.id === analyticsLocationId)?.name}
               onViewItemHistory={viewItemHistory}
               onViewVendor={(vendor) => setVendorDrillIn(vendor)}
+              onOpenBreakdown={(scope) => setBreakdownScope(scope)}
             />
           )}
 
@@ -2160,6 +2481,21 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
               locationId={analyticsLocationId || undefined}
               onClose={() => setVendorDrillIn(null)}
               onViewItemHistory={viewItemHistory}
+            />
+          ) : null}
+
+          {breakdownScope ? (
+            <BreakdownDrawer
+              scope={breakdownScope}
+              period={analyticsPeriod}
+              locationId={analyticsLocationId || undefined}
+              locationName={analyticsLocations.find((l) => l.id === analyticsLocationId)?.name}
+              onClose={() => setBreakdownScope(null)}
+              onViewItemHistory={viewItemHistory}
+              onViewVendor={(vendor) => {
+                setBreakdownScope(null);
+                setVendorDrillIn(vendor);
+              }}
             />
           ) : null}
         </div>

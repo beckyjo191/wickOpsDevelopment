@@ -47,6 +47,17 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         .map((value: unknown) => String(value ?? "").trim())
         .filter((value: string) => value.length > 0)
     : [];
+  // Rows created as continuation stubs by the retire flow — the user didn't
+  // intentionally add them, so the resulting ITEM_CREATE event is machine
+  // noise. Stamp `skeleton: true` on those events so the activity feed can
+  // filter them out (same pattern as system-field-only ITEM_EDITs).
+  const skeletonRowIds: Set<string> = new Set(
+    Array.isArray(body?.skeletonRowIds)
+      ? body.skeletonRowIds
+          .map((value: unknown) => String(value ?? "").trim())
+          .filter((value: string) => value.length > 0)
+      : [],
+  );
 
   // Batch-read existing rows for audit diff. Also project locationId so save
   // can preserve the structural pointer when the client doesn't supply one.
@@ -230,13 +241,17 @@ export const handleSaveItems = async (ctx: RouteContext) => {
     } else {
       // Brand new row — only log creation if it has actual content. Stamp
       // location info so the activity feed can render "added at <Location>".
+      // Skeleton rows (continuation stubs from a retire) carry `skeleton:
+      // true` so the activity feed treats them as noise.
       if (!isAllDefaults(values as Record<string, unknown>)) {
+        const isSkeleton = skeletonRowIds.has(rowId);
         auditEvents.push(
           buildAuditEvent(access, "ITEM_CREATE", rowId, itemName, {
             initialValues: values,
             snapshot,
             locationId,
             locationName: locationNameById.get(locationId) ?? null,
+            ...(isSkeleton ? { skeleton: true } : {}),
           }),
         );
       }

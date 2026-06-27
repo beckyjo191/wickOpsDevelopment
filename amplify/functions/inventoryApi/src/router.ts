@@ -8,7 +8,7 @@ import { ensureStorageForOrganization } from "./storage";
 import { handleGetOrgModules, handleUpdateOrgModules, handleListModuleAccessUsers, handleUpdateUserModuleAccess, handleRevokeUserAccess } from "./routes/modules";
 import { handleUpdateCurrentUserDisplayName, handleSyncCurrentUserEmail, handleSaveUserColumnVisibility } from "./routes/profile";
 import { handleListOnboardingTemplates, handleApplyOnboardingTemplate } from "./routes/onboarding";
-import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics, handleVendorBreakdown } from "./routes/audit";
+import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics, handleVendorBreakdown, handleAnalyticsBreakdown } from "./routes/audit";
 import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestockOrder, handleCloseRestockOrder } from "./routes/restock";
 import { handleGetPriceHistory } from "./routes/price-history";
 import { handleListVendorPricing, handleUpsertVendorPricing, handleDeleteVendorPricing } from "./routes/vendor-pricing";
@@ -53,6 +53,7 @@ const routes: Route[] = [
   { method: "GET",    pattern: /\/inventory\/audit\/item\/[^/]+$/,      needsStorage: true, module: "inventory", handler: handleAuditItemHistory },
   { method: "GET",    pattern: "/inventory/audit/analytics",            needsStorage: true, module: "inventory", handler: handleAuditAnalytics },
   { method: "GET",    pattern: "/inventory/audit/analytics/vendor",     needsStorage: true, module: "inventory", handler: handleVendorBreakdown },
+  { method: "GET",    pattern: "/inventory/audit/analytics/breakdown",  needsStorage: true, module: "inventory", handler: handleAnalyticsBreakdown },
 
   // Restock
   { method: "GET",    pattern: "/inventory/restock/orders",             needsStorage: true, module: "inventory", handler: handleListRestockOrders },

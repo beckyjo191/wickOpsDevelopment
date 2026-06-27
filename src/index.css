@@ -21,6 +21,10 @@
   --primary-strong: #1D4ED8;
   --primary-hover: #3B82F6;
   --primary-hover-strong: #2563EB;
+  /* Text/icon color on a primary fill (buttons, active tabs). Theme-independent
+   * because --primary stays Ignite Blue in both themes. Replaces scattered raw
+   * #fff so on-primary contrast is set in one place. */
+  --primary-contrast: #ffffff;
   --focus: #2563EB;
   --focus-ring: rgba(37, 99, 235, 0.2);
   --focus-ring-soft: rgba(37, 99, 235, 0.15);
@@ -82,11 +86,65 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
+  --radius-xl: 12px; /* dialogs / large cards */
   --radius-pill: 999px;
+
+  /* Control-height scale — applied app-wide. Theme-independent.
+   * sm: dense inline controls · md: standard fields/selects/buttons · lg: prominent search
+   * Responsive: desktop values tighten control heights for visual consistency; under the
+   * touch breakpoint (≤600px) each step grows so tap targets stay ≥44px (see override below). */
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+  --control-h-lg: 44px;
+
+  /* Type scale — rem-based, theme-independent. Documented in
+   * design-system/foundations/typography.html. The documented scale runs
+   * Display → Heading → Body → Small → Dense → Label; --text-xs / --text-2xs
+   * extend it below Label for dense metadata (activity-feed timestamps,
+   * secondary lines, mobile-card sublabels) that previously used raw px÷16
+   * values like 0.71875rem / 0.6875rem. Snap to these tokens — don't reintroduce
+   * bespoke sub-14px sizes. */
+  --text-sm: 0.875rem;    /* Small — secondary copy (14px) */
+  --text-dense: 0.8rem;   /* Dense — table cells, compact rows (12.8px) */
+  --text-label: 0.78rem;  /* Label — uppercase field labels (12.5px) */
+  --text-xs: 0.75rem;     /* Extra-small — dense metadata (12px) */
+  --text-2xs: 0.6875rem;  /* Smallest — timestamps, sublabels (11px) */
+}
+
+/* Touch breakpoint: bump the control-height scale so tap targets stay finger-
+ * friendly on phones (md lands on the 44px iOS minimum; lg goes to 48px). This
+ * grows every consumer of the scale at once — controls never shrink below their
+ * desktop size on small screens. 600px matches the app's mobile breakpoint. */
+@media (max-width: 600px) {
+  :root {
+    --control-h-sm: 40px;
+    --control-h-md: 44px;
+    --control-h-lg: 48px;
+  }
+}
+
+/* Small-text floor for the Activity feed's mobile cards. 780px matches the
+ * feed→cards switch in useMobileDetect, so the floor engages exactly where the
+ * dense cards render. max(11px, …) keeps the smallest steps from dropping below
+ * ~11px if the device uses a sub-16px base font, while still scaling UP with
+ * user zoom / large-font accessibility settings (a hard 11px would cap that). */
+@media (max-width: 780px) {
+  :root {
+    --text-xs: max(11px, 0.75rem);
+    --text-2xs: max(11px, 0.6875rem);
+  }
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Brand-tint every native form control in one place so checkboxes and radios
+ * tick in Ignite Blue instead of the browser default gray. Per-component
+ * accent-color rules become redundant against this base. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--primary);
 }
 
 html,

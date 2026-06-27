@@ -1,6 +1,6 @@
 import "./LandingPage.css";
 import "./LegalPage.css";
-import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
+import logoThumb from "../assets/brand/wickops-app-icon.svg";
 
 export function TermsPage() {
   return (

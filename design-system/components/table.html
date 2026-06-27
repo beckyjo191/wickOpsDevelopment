@@ -1,0 +1,40 @@
+<!-- @dsCard group="Components" name="Inventory table" subtitle="Sticky header · zebra rows · hover & selected" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Inventory table</title>
+<style>
+:root{--surface:#fff;--text:#0F172A;--text-heading:#0A0F1E;--text-soft:#64748B;--table-header:#F1F5F9;--table-grid:#CBD5E1;--table-grid-strong:#E2E8F0;--table-row-even:#FAFBFC;--table-row-hover:#F0F7FF;--table-row-selected:#DBEAFE;--table-row-selected-border:#BFDBFE;--table-row-selected-accent:#2563EB}
+[data-theme="dark"]{--surface:#1E2A3B;--text:#F1F5F9;--text-heading:#F8FAFC;--text-soft:#94A3B8;--table-header:#1E2A3B;--table-grid:#2E3D52;--table-grid-strong:#243346;--table-row-even:#141C2C;--table-row-hover:#2C3D52;--table-row-selected:#334A60;--table-row-selected-border:#3D5270;--table-row-selected-accent:#60A5FA}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.title{margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-soft)}
+table{border-collapse:collapse;width:100%}
+th{color:var(--text-heading);font-weight:700;font-size:.8rem;text-align:left;background:var(--table-header);padding:.55rem .6rem;border-bottom:1px solid var(--table-grid);border-right:1px solid var(--table-grid-strong)}
+td{background:var(--surface);color:var(--text);font-size:.82rem;padding:.55rem .6rem;border-bottom:1px solid var(--table-grid);border-right:1px solid var(--table-grid-strong)}
+tr:nth-child(even) td{background:var(--table-row-even)}
+tr.hover td{background:var(--table-row-hover)}
+tr.sel td{background:var(--table-row-selected);box-shadow:inset 0 1px 0 var(--table-row-selected-border),inset 0 -1px 0 var(--table-row-selected-border)}
+tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--table-row-selected-accent),inset 0 1px 0 var(--table-row-selected-border),inset 0 -1px 0 var(--table-row-selected-border)}
+</style>
+<div class="split">
+  <section class="pane light">
+    <p class="title">Inventory table — Light</p>
+    <table><thead><tr><th>Item</th><th>Qty</th><th>Min</th><th>Expires</th></tr></thead><tbody>
+      <tr><td>Nitrile gloves — L</td><td>120</td><td>50</td><td>2027-03</td></tr>
+      <tr><td>Saline 0.9%</td><td>18</td><td>24</td><td>2026-09</td></tr>
+      <tr class="hover"><td>Gauze 4×4</td><td>200</td><td>100</td><td>—</td></tr>
+      <tr class="sel"><td>Epinephrine 1mg</td><td>6</td><td>10</td><td>2026-07</td></tr>
+    </tbody></table>
+  </section>
+  <section class="pane dark" data-theme="dark">
+    <p class="title">Inventory table — Dark</p>
+    <table><thead><tr><th>Item</th><th>Qty</th><th>Min</th><th>Expires</th></tr></thead><tbody>
+      <tr><td>Nitrile gloves — L</td><td>120</td><td>50</td><td>2027-03</td></tr>
+      <tr><td>Saline 0.9%</td><td>18</td><td>24</td><td>2026-09</td></tr>
+      <tr class="hover"><td>Gauze 4×4</td><td>200</td><td>100</td><td>—</td></tr>
+      <tr class="sel"><td>Epinephrine 1mg</td><td>6</td><td>10</td><td>2026-07</td></tr>
+    </tbody></table>
+  </section>
+</div>

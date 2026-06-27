@@ -1,0 +1,41 @@
+<!-- @dsCard group="Components" name="Cards" subtitle="app-card · dash-module-card · empty-state" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Cards</title>
+<style>
+:root{--primary:#2563EB;--primary-strong:#1D4ED8;--surface:#fff;--surface-alt:#f8fafc;--surface-raised:#fff;--text:#0F172A;--text-heading:#0A0F1E;--text-soft:#64748B;--text-muted:#475569;--border:#CBD5E1;--shadow:0 1px 3px rgba(0,0,0,.3);--radius-md:6px;--radius-lg:8px}
+[data-theme="dark"]{--surface:#1E2A3B;--surface-alt:#243346;--surface-raised:#1E2A3B;--text:#F1F5F9;--text-heading:#F8FAFC;--text-soft:#94A3B8;--text-muted:#CBD5E1;--border:#2E3D52}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.title{margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-soft)}
+.stack{display:flex;flex-direction:column;gap:16px}
+.app-card{background:linear-gradient(165deg,var(--surface),var(--surface-raised));border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow);padding:1.5rem}
+.app-card h3{margin:0 0 .35rem;font-size:1rem;color:var(--text-heading)}
+.app-card p{margin:0;font-size:.875rem;color:var(--text-soft);line-height:1.45}
+.dash-module-card{border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:1.1rem;display:flex;flex-direction:column;gap:.5rem}
+.dash-module-card h4{margin:0;font-size:.95rem;color:var(--text-heading)}
+.dash-module-card p{margin:0;font-size:.82rem;color:var(--text-muted)}
+.empty-state{border:1px dashed var(--border);border-radius:var(--radius-lg);background:var(--surface-alt);padding:1.25rem;color:var(--text-muted);text-align:center}
+.empty-state .et{margin:0 0 .2rem;font-size:1rem;font-weight:600;color:var(--text-heading)}
+.empty-state .eh{margin:0;font-size:.875rem;line-height:1.45}
+</style>
+<div class="split">
+  <section class="pane light">
+    <p class="title">Cards — Light</p>
+    <div class="stack">
+      <div class="app-card"><h3>app-card</h3><p>Primary content surface with a subtle 165° gradient, 8px radius, and soft shadow. Used to frame forms and detail panels.</p></div>
+      <div class="dash-module-card"><h4>dash-module-card</h4><p>Quick-action module tile used on the dashboard. Flat surface, 10px radius.</p></div>
+      <div class="empty-state"><p class="et">No items yet</p><p class="eh">Add your first inventory item to get started.</p></div>
+    </div>
+  </section>
+  <section class="pane dark" data-theme="dark">
+    <p class="title">Cards — Dark</p>
+    <div class="stack">
+      <div class="app-card"><h3>app-card</h3><p>Primary content surface with a subtle 165° gradient, 8px radius, and soft shadow. Used to frame forms and detail panels.</p></div>
+      <div class="dash-module-card"><h4>dash-module-card</h4><p>Quick-action module tile used on the dashboard. Flat surface, 10px radius.</p></div>
+      <div class="empty-state"><p class="et">No items yet</p><p class="eh">Add your first inventory item to get started.</p></div>
+    </div>
+  </section>
+</div>

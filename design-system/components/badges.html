@@ -1,0 +1,38 @@
+<!-- @dsCard group="Components" name="Badges" subtitle="Neutral / primary / success / warning / danger · uppercase" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Badges</title>
+<style>
+:root{--primary:#2563EB;--danger:#DC2626;--danger-border:#FCA5A5;--danger-surface:#FEF2F2;--warning:#EA580C;--warning-border:#FDBA74;--warning-surface:#FFF7ED;--success:#16A34A;--success-border:#86EFAC;--success-surface:#F0FDF4;--surface-alt:#f8fafc;--text-muted:#475569;--border:#CBD5E1;--radius-sm:4px}
+[data-theme="dark"]{--primary:#2563EB;--danger:#FCA5A5;--danger-border:#7F1D1D;--danger-surface:#2D1515;--warning:#FB923C;--warning-border:#431407;--warning-surface:#1C0E04;--success:#86EFAC;--success-border:#14532D;--success-surface:#052E16;--surface-alt:#243346;--text-muted:#CBD5E1;--border:#2E3D52}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.title{margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-muted)}
+.sub{margin:18px 0 8px;font-size:11px;font-weight:600;color:var(--text-muted)}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.badge{display:inline-flex;align-items:center;gap:.25rem;padding:.15rem .5rem;border-radius:var(--radius-sm);border:1px solid transparent;font-size:.75rem;font-weight:600;line-height:1.4;white-space:nowrap;background:var(--surface-alt);color:var(--text-muted)}
+.badge--neutral{background:var(--surface-alt);color:var(--text-muted);border-color:var(--border)}
+.badge--primary{background:color-mix(in oklab,var(--primary) 14%,transparent);color:var(--primary);border-color:color-mix(in oklab,var(--primary) 25%,transparent)}
+.badge--success{background:var(--success-surface);color:var(--success);border-color:var(--success-border)}
+.badge--warning{background:var(--warning-surface);color:var(--warning);border-color:var(--warning-border)}
+.badge--danger{background:var(--danger-surface);color:var(--danger);border-color:var(--danger-border)}
+.badge--uppercase{text-transform:uppercase;letter-spacing:.04em;font-weight:700;font-size:.7rem}
+</style>
+<div class="split">
+  <section class="pane light">
+    <p class="title">Badges — Light</p>
+    <p class="sub">Variants</p>
+    <div class="row"><span class="badge badge--neutral">Neutral</span><span class="badge badge--primary">Primary</span><span class="badge badge--success">In stock</span><span class="badge badge--warning">Low</span><span class="badge badge--danger">Out</span></div>
+    <p class="sub">Uppercase modifier</p>
+    <div class="row"><span class="badge badge--success badge--uppercase">Active</span><span class="badge badge--danger badge--uppercase">Expired</span><span class="badge badge--neutral badge--uppercase">Draft</span></div>
+  </section>
+  <section class="pane dark" data-theme="dark">
+    <p class="title">Badges — Dark</p>
+    <p class="sub">Variants</p>
+    <div class="row"><span class="badge badge--neutral">Neutral</span><span class="badge badge--primary">Primary</span><span class="badge badge--success">In stock</span><span class="badge badge--warning">Low</span><span class="badge badge--danger">Out</span></div>
+    <p class="sub">Uppercase modifier</p>
+    <div class="row"><span class="badge badge--success badge--uppercase">Active</span><span class="badge badge--danger badge--uppercase">Expired</span><span class="badge badge--neutral badge--uppercase">Draft</span></div>
+  </section>
+</div>

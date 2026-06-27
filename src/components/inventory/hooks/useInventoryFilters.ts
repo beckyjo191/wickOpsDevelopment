@@ -64,6 +64,18 @@ const getDaysUntilExpiration = (value: string | number | boolean | null | undefi
   return Math.floor((targetStart - todayStart) / (1000 * 60 * 60 * 24));
 };
 
+/** A lot's own Min Quantity is "tracked" only when it's a real number > 0.
+ *  Blank / null / 0 means "no reorder threshold for this lot" — treated as 0.
+ *  Used to keep untracked lots out of the Low Stock tab even when a min-bearing
+ *  sibling lot makes the item group low. Mirrors the Reorder tab's per-lot
+ *  hasMin check (min=0 is a valid "discontinuing this" signal). */
+const rowHasMinQuantity = (row: InventoryRow): boolean => {
+  const raw = row.values.minQuantity;
+  if (raw === null || raw === undefined || String(raw).trim() === "") return false;
+  const num = Number(raw);
+  return Number.isFinite(num) && num > 0;
+};
+
 function toDateInputValue(value: unknown): string {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -312,13 +324,65 @@ export function useInventoryFilters({
     return out;
   }, [rows, visibleColumns]);
 
+  // Low stock is an ITEM-level signal, not a per-lot one: a single lot hitting
+  // 0 doesn't mean the item needs reordering if its other lots still cover the
+  // minimum. Mirror the Reorder/Shop aggregation rule (see ShoppingListTab.tsx)
+  // — group lots by (location, lowercased itemName), SUM quantity across lots,
+  // take the MAX minQuantity, and flag the whole group low only when the total
+  // on-hand is below that threshold. Keyed by location so each location's stock
+  // is its own pool (a different cabinet's overstock can't mask a low one).
+  const lowStockItemKeys = useMemo(() => {
+    const lowStockKeyForRow = (row: InventoryRow): string => {
+      const name = String(row.values.itemName ?? "").trim().toLowerCase();
+      // Blank-name rows can't be grouped meaningfully — key by id so each one
+      // stands alone (falls back to the old per-row behavior for that row).
+      return name ? `${row.locationId}::${name}` : `id:${row.id}`;
+    };
+    const agg = new Map<string, { totalQty: number; maxMin: number }>();
+    for (const row of rows) {
+      if (row.values.retiredAt) continue;
+      // NOTE: already-ordered lots are NOT skipped here. A pending order hasn't
+      // arrived, so you're still physically below par — the item stays in Low
+      // Stock (and the dashboard) until the order is received. Only the Reorder
+      // list hides ordered items, since there's nothing left to buy. So Low
+      // Stock = dashboard, and Reorder = that set minus what's already on order.
+      const key = lowStockKeyForRow(row);
+      const qty = Number(row.values.quantity);
+      const min = Number(row.values.minQuantity);
+      const entry = agg.get(key) ?? { totalQty: 0, maxMin: 0 };
+      // Expired-but-not-retired stock STILL counts toward on-hand — it's
+      // physically on the shelf. Expiry is its own workflow (the Expired tab);
+      // retiring an expired lot zeroes its quantity, and THAT is what can drop
+      // an item below par into Low Stock. Matches the Shop reorder list. The min
+      // is the item's threshold, not a per-lot value ("highest min wins").
+      if (Number.isFinite(qty)) entry.totalQty += qty;
+      if (Number.isFinite(min) && min > entry.maxMin) entry.maxMin = min;
+      agg.set(key, entry);
+    }
+    const lowKeys = new Set<string>();
+    for (const [key, { totalQty, maxMin }] of agg) {
+      if (maxMin > 0 && totalQty < maxMin) lowKeys.add(key);
+    }
+    return lowKeys;
+  }, [rows]);
+
+  // Same keying as the aggregation above — used to test a row against the
+  // precomputed set of low item-groups.
+  const lowStockKeyForRow = (row: InventoryRow): string => {
+    const name = String(row.values.itemName ?? "").trim().toLowerCase();
+    return name ? `${row.locationId}::${name}` : `id:${row.id}`;
+  };
+
   const tabCounts = useMemo(() => {
     let expired = 0;
     let exp30 = 0;
     let exp60 = 0;
-    let lowStock = 0;
     let retired = 0;
     let missingPricing = 0;
+    // Low stock counts distinct ITEMS, not lots — so the badge matches the
+    // dashboard's "N items low" and the Reorder list. A multi-lot low item is
+    // one entry here even though the tab still lists each of its lots.
+    const lowItemKeys = new Set<string>();
     for (const row of rows) {
       if (effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) continue;
       const isRetired = Boolean(row.values.retiredAt);
@@ -331,29 +395,25 @@ export function useInventoryFilters({
       if (isExpired) expired++;
       if (!isRetired && daysUntil !== null && daysUntil > 0 && daysUntil <= 30) exp30++;
       if (!isRetired && daysUntil !== null && daysUntil > 0 && daysUntil <= 60) exp60++;
-      const quantityRaw = row.values.quantity;
-      const minQuantityRaw = row.values.minQuantity;
-      const quantity = Number(quantityRaw);
-      const minQuantity = Number(minQuantityRaw);
-      const hasMin =
-        minQuantityRaw !== null &&
-        minQuantityRaw !== undefined &&
-        String(minQuantityRaw).trim() !== "" &&
-        Number.isFinite(minQuantity) &&
-        minQuantity > 0;
       // Retired rows are hidden from the inventory grid (see filteredRows), so
       // they shouldn't inflate the Low Stock badge count either — the Reorder
-      // tab reads them directly for reorder surfacing.
-      const isLowStock = !isRetired && hasMin && Number.isFinite(quantity) && quantity < minQuantity;
-      if (isLowStock) lowStock++;
+      // tab reads them directly for reorder surfacing. Low stock is aggregated
+      // across all lots of the item (see lowStockItemKeys above), so an
+      // overstocked item with one zeroed lot no longer counts.
+      // ...and the lot itself must carry a min — a blank-min lot is untracked,
+      // so it neither counts nor shows in Low Stock even if a sibling lot of
+      // the same item triggers the group.
+      const isLowStock =
+        !isRetired && rowHasMinQuantity(row) && lowStockItemKeys.has(lowStockKeyForRow(row));
+      if (isLowStock) lowItemKeys.add(lowStockKeyForRow(row));
       // Missing pricing: a non-retired item with no vendorPricing entries.
       // After 1g.7's migration, items that had vendor + pricing already
       // carry a row, so anything still missing is genuinely uncovered.
       const hasAnyPricing = (vendorPricing.get(row.id)?.size ?? 0) > 0;
       if (!isRetired && !hasAnyPricing) missingPricing++;
     }
-    return { expired, exp30, exp60, lowStock, retired, missingPricing };
-  }, [rows, effectiveLocationId, vendorPricing]);
+    return { expired, exp30, exp60, lowStock: lowItemKeys.size, retired, missingPricing };
+  }, [rows, effectiveLocationId, vendorPricing, lowStockItemKeys]);
 
   // ── THE BIG filteredRows memo ──
   const filteredRows = useMemo(() => {
@@ -393,16 +453,6 @@ export function useInventoryFilters({
           return false;
         }
         if (isPinnedRow) return true;
-        const quantityRaw = row.values.quantity;
-        const minQuantityRaw = row.values.minQuantity;
-        const quantity = Number(quantityRaw);
-        const minQuantity = Number(minQuantityRaw);
-        const hasMinQuantity =
-          minQuantityRaw !== null &&
-          minQuantityRaw !== undefined &&
-          String(minQuantityRaw).trim() !== "" &&
-          Number.isFinite(minQuantity) &&
-          minQuantity > 0;
         const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
 
         // Retired rows are preserved in storage so retirement history survives
@@ -415,7 +465,13 @@ export function useInventoryFilters({
 
         let passesTab = true;
         if (activeFilter === "lowStock") {
-          passesTab = hasMinQuantity && Number.isFinite(quantity) && quantity < minQuantity;
+          // Item-level: a lot only shows here when its item-group's TOTAL
+          // on-hand is below the (max) minimum. An overstocked item with one
+          // zeroed lot drops out entirely — no placeholder row (unlike the
+          // expiry tabs, which keep the lot to surface the date). The lot must
+          // also carry its own min — blank-min ("untracked") lots stay out
+          // even when a min-bearing sibling makes the item group low.
+          passesTab = rowHasMinQuantity(row) && lowStockItemKeys.has(lowStockKeyForRow(row));
         }
         if (activeFilter === "expired") passesTab = daysUntil !== null && daysUntil <= 0;
         if (activeFilter === "exp30") passesTab = daysUntil !== null && daysUntil > 0 && daysUntil <= 30;
@@ -534,6 +590,23 @@ export function useInventoryFilters({
       sorted.splice(insertAt, 0, editEntry);
     }
 
+    // Low Stock shows ONE row per item. A depleted item with several lots
+    // (e.g. 5× "0/2 Sodium Chloride" at different dates) collapses to a single
+    // representative — after the qty-asc sort that's the lowest/representative
+    // lot. The badge already counts distinct items, so this makes the visible
+    // row count match the badge, the dashboard, and the Reorder list. A row
+    // pinned for editing is never collapsed away.
+    if (activeFilter === "lowStock") {
+      const seenKeys = new Set<string>();
+      sorted = sorted.filter(({ row }) => {
+        if (editingId && row.id === editingId) return true;
+        const key = lowStockKeyForRow(row);
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        return true;
+      });
+    }
+
     return sorted;
   }, [
     rows,
@@ -546,6 +619,7 @@ export function useInventoryFilters({
     sortStateByTab,
     sortEpoch,
     vendorPricing,
+    lowStockItemKeys,
   ]);
 
   const filteredRowIds = useMemo(

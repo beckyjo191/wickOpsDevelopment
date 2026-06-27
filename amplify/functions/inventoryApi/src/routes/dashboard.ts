@@ -1,5 +1,5 @@
 // ── Route handlers: dashboard ───────────────────────────────────────────────
-import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
 import type { RouteContext } from "../types";
 import { json } from "../http";
@@ -28,6 +28,14 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
   const locationNameById = new Map(locations.map((l) => [l.id, l.name]));
   const byLocationMap = new Map<string, { expiredCount: number; expiringSoonCount: number; lowStockCount: number }>();
 
+  // Low stock is item-level, not per-lot: a single zeroed lot doesn't mean the
+  // item needs reordering if its other lots cover the minimum. Aggregate lots
+  // by (location, lowercased itemName) — SUM quantity, MAX minQuantity — and
+  // flag the group low only when the total is below threshold. Mirrors the
+  // frontend (useInventoryFilters.ts) and the Reorder/Shop rule. Quantity-only
+  // counts (expired/expiring) stay per-lot since each lot has its own date.
+  const lowAgg = new Map<string, { locationName: string; totalQty: number; maxMin: number }>();
+
   for (const item of items) {
     let values: Record<string, unknown> = {};
     try {
@@ -35,6 +43,14 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
     } catch {
       continue;
     }
+
+    // Retired lots are handled stock (qty zeroed, kept for loss history) — they
+    // don't count toward expired/expiring/low. Matches the frontend, which
+    // hides retired rows from every grid count.
+    if (values.retiredAt) continue;
+    // NOTE: already-ordered lots are NOT skipped — a pending order hasn't
+    // arrived, so the item is still physically low and stays in this count
+    // (mirrors the Low Stock tab). Only the Reorder list hides ordered items.
 
     const locationId = String((item as { locationId?: string }).locationId ?? "").trim();
     const locationName = locationNameById.get(locationId) ?? "";
@@ -55,17 +71,27 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
       }
     }
 
+    const name = String(values.itemName ?? "").trim().toLowerCase();
+    // Blank-name items can't be grouped — key by id so each stands alone.
+    const aggKey = name ? `${locationId}::${name}` : `id:${item.id}`;
     const quantity = Number(values.quantity);
     const minQuantity = Number(values.minQuantity);
-    const hasMinQty =
-      values.minQuantity !== null &&
-      values.minQuantity !== undefined &&
-      String(values.minQuantity).trim() !== "" &&
-      Number.isFinite(minQuantity) &&
-      minQuantity > 0;
-    if (hasMinQty && Number.isFinite(quantity) && quantity < minQuantity) {
+    const entry = lowAgg.get(aggKey) ?? { locationName, totalQty: 0, maxMin: 0 };
+    // Expired-but-not-retired stock still counts toward on-hand (matches the
+    // frontend + Shop list) — retiring an expired lot is what drops an item
+    // below par. The min still defines the item's threshold.
+    if (Number.isFinite(quantity)) entry.totalQty += quantity;
+    if (Number.isFinite(minQuantity) && minQuantity > entry.maxMin) entry.maxMin = minQuantity;
+    lowAgg.set(aggKey, entry);
+  }
+
+  // Second pass: resolve each item-group to a single low/not-low verdict and
+  // tally the org-wide + per-location counts.
+  for (const { locationName, totalQty, maxMin } of lowAgg.values()) {
+    if (maxMin > 0 && totalQty < maxMin) {
       lowStockCount += 1;
-      locCounts.lowStockCount += 1;
+      const locCounts = byLocationMap.get(locationName);
+      if (locCounts) locCounts.lowStockCount += 1;
     }
   }
 
@@ -145,6 +171,49 @@ export const handleBootstrap = async (ctx: RouteContext) => {
   const { units: allowedUnits, tracksUnits } = allowedUnitsResult;
   let items = page.items;
   let nextToken = page.nextToken;
+
+  // Self-heal stale "ordered" markers. A row can keep `orderedAt` after its
+  // order was closed/cancelled if the client-side cleanup failed or raced (the
+  // close path now clears it server-side, but legacy rows predate that). Clear
+  // orderedAt on any loaded row that isn't referenced by a still-open order, so
+  // the reorder list + "Ordered" pill reflect reality. Best-effort: never block
+  // bootstrap on the reconciliation.
+  try {
+    const ordersScan = await ddb.send(new ScanCommand({
+      TableName: storage.restockOrdersTable,
+      FilterExpression: "orgId = :orgId",
+      ExpressionAttributeValues: { ":orgId": access.organizationId },
+    }));
+    const openRowIds = new Set<string>();
+    for (const ord of ordersScan.Items ?? []) {
+      if (String(ord.status) === "closed") continue;
+      let orderItems: Array<{ itemId?: string }> = [];
+      try { orderItems = JSON.parse(String(ord.itemsJson ?? "[]")) ?? []; } catch { /* ignore */ }
+      for (const oi of orderItems) {
+        const id = String(oi?.itemId ?? "").trim();
+        if (id) openRowIds.add(id);
+      }
+    }
+    const heals: Promise<unknown>[] = [];
+    items = items.map((it) => {
+      let values: Record<string, unknown> = {};
+      try { values = JSON.parse(String(it.valuesJson ?? "{}")) ?? {}; } catch { return it; }
+      if (!values.orderedAt || openRowIds.has(String(it.id))) return it;
+      delete values.orderedAt;
+      delete values.reorderCheckedAt;
+      const valuesJson = JSON.stringify(values);
+      heals.push(ddb.send(new UpdateCommand({
+        TableName: storage.itemTable,
+        Key: { id: it.id },
+        ConditionExpression: "organizationId = :org AND #module = :module",
+        UpdateExpression: "SET valuesJson = :values",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: { ":org": access.organizationId, ":module": "inventory", ":values": valuesJson },
+      })).catch(() => {}));
+      return { ...it, valuesJson };
+    });
+    if (heals.length > 0) await Promise.all(heals);
+  } catch { /* reconciliation is best-effort */ }
 
   // Seed a single blank row so new orgs never see an empty table.
   if (items.length === 0) {

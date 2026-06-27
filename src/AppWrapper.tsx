@@ -4,7 +4,7 @@ import {
   View,
 } from '@aws-amplify/ui-react';
 import App from './App';
-import logoOriginal from "./assets/brand/wickops-logo-original.svg";
+import logoOriginal from "./assets/brand/wickops-lockup-dark.svg";
 
 type AppWrapperProps = {
   initialState?: "signIn" | "signUp";

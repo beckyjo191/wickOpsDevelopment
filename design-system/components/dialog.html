@@ -1,0 +1,31 @@
+<!-- @dsCard group="Components" name="Confirm dialog" subtitle="Modal overlay · title / message / action pair" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Confirm dialog</title>
+<style>
+:root{--primary:#2563EB;--primary-strong:#1D4ED8;--danger:#DC2626;--danger-border:#FCA5A5;--surface:#fff;--surface-soft:#eff6ff;--text-heading:#0A0F1E;--text-soft:#64748B;--border:#CBD5E1;--shadow-raised:0 4px 12px rgba(0,0,0,.2);--radius-md:6px;--radius-lg:8px}
+[data-theme="dark"]{--surface:#1E2A3B;--surface-soft:#243040;--text-heading:#F8FAFC;--text-soft:#94A3B8;--border:#2E3D52;--danger:#FCA5A5;--danger-border:#7f3a3a;--shadow-raised:0 4px 12px rgba(0,0,0,.4)}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:0}.pane.light{background:#e8edf3}.pane.dark{background:#060a14}
+.scene{position:relative;min-height:300px;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.45)}
+.confirm-dialog{width:min(380px,100%);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-raised);overflow:hidden}
+.confirm-dialog-body{padding:1.25rem 1.25rem 1rem;text-align:center}
+.confirm-dialog-title{margin:0 0 .35rem;font-size:1rem;font-weight:700;color:var(--text-heading)}
+.confirm-dialog-message{margin:0;font-size:.875rem;color:var(--text-soft);line-height:1.45}
+.confirm-dialog-actions{display:flex;gap:.5rem;padding:.75rem 1rem 1rem}
+.button{flex:1;height:40px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:var(--radius-md);font-weight:700;cursor:pointer;font-family:inherit}
+.button-secondary{color:var(--text-heading);background:var(--surface-soft);border-color:var(--border)}
+.button-danger{color:var(--danger);background:var(--surface);border-color:var(--danger-border)}
+</style>
+<div class="split">
+  <section class="pane light"><div class="scene"><div class="confirm-dialog">
+    <div class="confirm-dialog-body"><p class="confirm-dialog-title">Delete this item?</p><p class="confirm-dialog-message">“Nitrile gloves — L” will be permanently removed from inventory. This can’t be undone.</p></div>
+    <div class="confirm-dialog-actions"><button class="button button-secondary">Cancel</button><button class="button button-danger">Delete</button></div>
+  </div></div></section>
+  <section class="pane dark" data-theme="dark"><div class="scene"><div class="confirm-dialog">
+    <div class="confirm-dialog-body"><p class="confirm-dialog-title">Delete this item?</p><p class="confirm-dialog-message">“Nitrile gloves — L” will be permanently removed from inventory. This can’t be undone.</p></div>
+    <div class="confirm-dialog-actions"><button class="button button-secondary">Cancel</button><button class="button button-danger">Delete</button></div>
+  </div></div></section>
+</div>

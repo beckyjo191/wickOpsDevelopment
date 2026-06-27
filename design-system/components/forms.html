@@ -1,0 +1,46 @@
+<!-- @dsCard group="Components" name="Form fields" subtitle="Input / select / label · default, focus, error" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Form fields</title>
+<style>
+:root{--primary:#2563EB;--focus:#2563EB;--focus-ring:rgba(37,99,235,.2);--focus-ring-soft:rgba(37,99,235,.15);--danger:#DC2626;--surface:#fff;--text:#0F172A;--text-soft:#64748B;--border:#CBD5E1;--radius-sm:4px;--radius-md:6px}
+[data-theme="dark"]{--surface:#1E2A3B;--text:#F1F5F9;--text-soft:#94A3B8;--border:#2E3D52;--danger:#FCA5A5;--focus-ring:rgba(59,130,246,.3);--focus-ring-soft:rgba(59,130,246,.22)}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.title{margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-soft)}
+.col{display:flex;flex-direction:column;gap:18px;max-width:320px}
+.field,.select{width:100%;height:42px;border-radius:var(--radius-md);border:1px solid var(--border);background:var(--surface);color:var(--text);padding:0 .75rem;font-size:.98rem;font-family:inherit}
+.field.focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--focus-ring)}
+.field--sm{min-height:44px;border-radius:var(--radius-sm)}
+@media (pointer:fine){
+  .field--sm{height:32px;min-height:0;padding:0 .5rem;font-size:.82rem}
+  .field--sm.focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px var(--focus-ring-soft)}
+}
+.field--error{border-color:var(--danger)}
+.field-label{display:block;margin:0 0 .3rem;font-size:.78rem;font-weight:600;color:var(--text-soft);letter-spacing:.01em;text-transform:uppercase}
+.field-error{margin:.3rem 0 0;font-size:.82rem;line-height:1.35;color:var(--danger)}
+</style>
+<div class="split">
+  <section class="pane light">
+    <p class="title">Form fields — Light</p>
+    <div class="col">
+      <div><label class="field-label">Item name</label><input class="field" value="Nitrile gloves"></div>
+      <div><label class="field-label">Focused</label><input class="field focus" value="Typing…"></div>
+      <div><label class="field-label">Compact — sm · pointer/desktop only</label><input class="field field--sm focus" value="32px + 2px soft ring (fine pointer); full size + ≥44px on touch"></div>
+      <div><label class="field-label">Vendor</label><select class="select"><option>Grainger</option><option>McMaster-Carr</option></select></div>
+      <div><label class="field-label">Min quantity</label><input class="field field--error" value="-3"><p class="field-error">Must be a positive number.</p></div>
+    </div>
+  </section>
+  <section class="pane dark" data-theme="dark">
+    <p class="title">Form fields — Dark</p>
+    <div class="col">
+      <div><label class="field-label">Item name</label><input class="field" value="Nitrile gloves"></div>
+      <div><label class="field-label">Focused</label><input class="field focus" value="Typing…"></div>
+      <div><label class="field-label">Compact — sm · pointer/desktop only</label><input class="field field--sm focus" value="32px + 2px soft ring (fine pointer); full size + ≥44px on touch"></div>
+      <div><label class="field-label">Vendor</label><select class="select"><option>Grainger</option><option>McMaster-Carr</option></select></div>
+      <div><label class="field-label">Min quantity</label><input class="field field--error" value="-3"><p class="field-error">Must be a positive number.</p></div>
+    </div>
+  </section>
+</div>

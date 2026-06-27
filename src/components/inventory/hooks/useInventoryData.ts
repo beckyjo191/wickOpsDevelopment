@@ -1503,7 +1503,10 @@ export function useInventoryData({
     savingRef.current = true;
     setSaving(true);
     try {
-      await saveInventoryItems([...retiredRowsToSave, ...stubsToCreate], [], { retireMetadata });
+      await saveInventoryItems([...retiredRowsToSave, ...stubsToCreate], [], {
+        retireMetadata,
+        skeletonRowIds: stubsToCreate.map((s) => s.id),
+      });
       const snap = lastSavedSnapshotRef.current;
       const nextSnap = new Map(snap);
       for (const row of retiredRowsToSave) {

@@ -775,6 +775,45 @@ export const handleCloseRestockOrder = async (ctx: RouteContext) => {
     ExpressionAttributeValues: updateVals,
   }));
 
+  // Clear the "ordered" marker on every inventory row this order placed, so a
+  // closed/cancelled order's items rejoin the reorder list and stop showing the
+  // "Ordered" pill. The receive flow already clears this per line; doing it here
+  // makes close/cancel authoritative instead of relying on the client cleanup
+  // (which could silently fail or race). Freeform items have no row yet — the
+  // client materializes those separately. Best-effort per row: a single failure
+  // must not fail the close.
+  let closedItems: Array<{ itemId?: string }> = [];
+  try { closedItems = JSON.parse(String(result.Item.itemsJson ?? "[]")) ?? []; } catch { /* ignore */ }
+  const affectedRowIds = Array.from(new Set(
+    closedItems
+      .map((oi) => String(oi?.itemId ?? "").trim())
+      .filter((id) => id && !id.startsWith("freeform-")),
+  ));
+  await Promise.all(affectedRowIds.map(async (rowId) => {
+    try {
+      const got = await ddb.send(new GetCommand({ TableName: storage.itemTable, Key: { id: rowId } }));
+      if (!got.Item || got.Item.organizationId !== access.organizationId) return;
+      let values: Record<string, unknown> = {};
+      try { values = JSON.parse(String(got.Item.valuesJson ?? "{}")) ?? {}; } catch { return; }
+      if (values.orderedAt === undefined && values.reorderCheckedAt === undefined) return;
+      delete values.orderedAt;
+      delete values.reorderCheckedAt;
+      await ddb.send(new UpdateCommand({
+        TableName: storage.itemTable,
+        Key: { id: rowId },
+        ConditionExpression: "organizationId = :org AND #module = :module",
+        UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :now",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: {
+          ":org": access.organizationId,
+          ":module": "inventory",
+          ":values": JSON.stringify(values),
+          ":now": now,
+        },
+      }));
+    } catch { /* best-effort; never fail the close on a single row */ }
+  }));
+
   await writeAuditEvents(storage.auditTable, [
     buildAuditEvent(access, "RESTOCK_ORDER_CLOSED", null, null, {
       orderId,

@@ -505,6 +505,10 @@ function aggregatePeriodSlice(
   periodUntilMs: number,
   itemUnitCost: Map<string, number>,
   locationFilter: (action: string, details: Record<string, unknown>) => boolean = () => true,
+  /** Per-list cap. Top-N for the dashboard view (default 10); pass Infinity
+   *  for the "view all" breakdown endpoint. `totalCounts` always reflects
+   *  the pre-cap size so the UI can show "View all (47)". */
+  cap: number = 10,
 ) {
   const usageByDay = new Map<string, number>();
   const spendByDay = new Map<string, number>();
@@ -617,42 +621,49 @@ function aggregatePeriodSlice(
       totalSpend: spendByDay.get(date) ?? 0,
     }));
 
-  const byVendor = [...vendorSpend.entries()]
+  const byVendorFull = [...vendorSpend.entries()]
     .map(([vendor, v]) => ({
       vendor,
       spend: v.spend,
       orderCount: v.orderIds.size + v.restockCount,
     }))
-    .sort((a, b) => b.spend - a.spend)
-    .slice(0, 10);
+    .sort((a, b) => b.spend - a.spend);
+  const byVendor = Number.isFinite(cap) ? byVendorFull.slice(0, cap) : byVendorFull;
 
-  const bySpendItem = [...itemSpend.values()]
+  const bySpendItemFull = [...itemSpend.values()]
     .map((v) => ({
       itemId: v.itemId,
       itemName: v.itemName || "Unnamed item",
       spend: v.spend,
       qtyReceived: v.qtyReceived,
     }))
-    .sort((a, b) => b.spend - a.spend)
-    .slice(0, 10);
+    .sort((a, b) => b.spend - a.spend);
+  const bySpendItem = Number.isFinite(cap) ? bySpendItemFull.slice(0, cap) : bySpendItemFull;
 
-  // Union of top 10 by qty + top 10 by cost — so a client-side toggle between
-  // "Used (qty)" and "Used ($)" always has a fully-populated list to render.
+  // Two-axis usage data. Dashboard view: union of top N by qty + top N by
+  // cost so the client-side toggle always has data on both axes. Full
+  // view (cap=Infinity): return everything; the drawer sorts by whichever
+  // axis the user is looking at.
   const usageMapped = [...usageByItem.values()].map((v) => ({
     itemId: v.itemId,
     itemName: v.itemName || "Unnamed item",
     qtyUsed: v.qtyUsed,
     cost: v.cost,
   }));
-  const topByQty = [...usageMapped].sort((a, b) => b.qtyUsed - a.qtyUsed).slice(0, 10);
-  const topByCost = [...usageMapped].sort((a, b) => b.cost - a.cost).slice(0, 10);
-  const seen = new Set<string>();
-  const byUsageItem: typeof usageMapped = [];
-  for (const row of [...topByQty, ...topByCost]) {
-    const key = row.itemId || row.itemName;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    byUsageItem.push(row);
+  let byUsageItem: typeof usageMapped;
+  if (Number.isFinite(cap)) {
+    const topByQty = [...usageMapped].sort((a, b) => b.qtyUsed - a.qtyUsed).slice(0, cap);
+    const topByCost = [...usageMapped].sort((a, b) => b.cost - a.cost).slice(0, cap);
+    const seen = new Set<string>();
+    byUsageItem = [];
+    for (const row of [...topByQty, ...topByCost]) {
+      const key = row.itemId || row.itemName;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      byUsageItem.push(row);
+    }
+  } else {
+    byUsageItem = [...usageMapped].sort((a, b) => b.qtyUsed - a.qtyUsed);
   }
 
   const lossByReasonArr = [...lossByReason.entries()]
@@ -671,6 +682,12 @@ function aggregatePeriodSlice(
     bySpendItem,
     byUsageItem,
     lossByReason: lossByReasonArr,
+    /** Pre-cap sizes for the "View all (N)" CTAs on the dashboard. */
+    totalCounts: {
+      byVendor: byVendorFull.length,
+      bySpendItem: bySpendItemFull.length,
+      byUsageItem: usageMapped.length,
+    },
   };
 }
 
@@ -810,4 +827,95 @@ export const handleVendorBreakdown = async (ctx: RouteContext) => {
     },
     items: itemsArr,
   });
+};
+
+/** Full breakdown for the "View all" drawer on the Analytics tab. Returns
+ *  the uncapped sorted list for one scope so the dashboard's main analytics
+ *  call can stay light. Honors the same period + location filter the user
+ *  picked on the tab. */
+export const handleAnalyticsBreakdown = async (ctx: RouteContext) => {
+  const { access, storage, query } = ctx;
+  if (!access.canManageColumns) {
+    return json(403, { error: "Only admins can view analytics." });
+  }
+  const scope = String(query.scope ?? "").trim();
+  if (scope !== "purchased" && scope !== "used" && scope !== "vendors") {
+    return json(400, { error: "Invalid scope. Use purchased, used, or vendors." });
+  }
+
+  const period = query.period ?? "30d";
+  const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
+  const periodSinceMs = Date.now() - days * 86400000;
+
+  // Per-location scope mirrors the main analytics endpoint.
+  const requestedLocationId = String(query.locationId ?? "").trim() || undefined;
+  let requestedLocationName: string | undefined;
+  if (requestedLocationId) {
+    try {
+      const locations = await listLocations(storage);
+      const match = locations.find((l) => l.id === requestedLocationId);
+      requestedLocationName = match?.name;
+    } catch { /* ignore */ }
+  }
+  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName);
+
+  // Item cost map — needed for "used" so events without stamped unitCost
+  // can fall back on the current item price. Skip for other scopes to save
+  // a table scan.
+  const itemUnitCost = new Map<string, number>();
+  if (scope === "used") {
+    try {
+      const allItems = await listAllItems(storage, access.organizationId);
+      for (const item of allItems) {
+        let values: Record<string, unknown> = {};
+        try { values = JSON.parse(String((item as { valuesJson?: string }).valuesJson ?? "{}")); } catch { /* ignore */ }
+        const cost = Number(values.unitCost ?? 0);
+        const parentId = typeof values.parentItemId === "string" && values.parentItemId.trim()
+          ? String(values.parentItemId).trim()
+          : item.id;
+        if (Number.isFinite(cost) && cost > 0) {
+          const existing = itemUnitCost.get(parentId) ?? 0;
+          if (cost > existing) itemUnitCost.set(parentId, cost);
+          const idExisting = itemUnitCost.get(item.id) ?? 0;
+          if (cost > idExisting) itemUnitCost.set(item.id, cost);
+        }
+      }
+    } catch { /* ignore — unstamped events just drop to 0 */ }
+  }
+
+  // Pull events in the period.
+  const since = new Date(periodSinceMs).toISOString();
+  let allEvents: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const result = await ddb.send(
+      new QueryCommand({
+        TableName: storage.auditTable,
+        IndexName: AUDIT_BY_TIMESTAMP_INDEX,
+        KeyConditionExpression: "orgId = :orgId AND #ts >= :since",
+        ExpressionAttributeValues: { ":orgId": access.organizationId, ":since": since },
+        ExpressionAttributeNames: { "#ts": "timestamp" },
+        ScanIndexForward: true,
+        Limit: 1000,
+        ...(lastKey ? { ExclusiveStartKey: lastKey } : {}),
+      }),
+    );
+    allEvents = allEvents.concat(result.Items ?? []);
+    lastKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastKey && allEvents.length < 10000);
+
+  // Reuse the same aggregator with the cap disabled. We pull only the list
+  // matching the requested scope to keep payloads small.
+  const slice = aggregatePeriodSlice(
+    allEvents,
+    periodSinceMs,
+    Number.POSITIVE_INFINITY,
+    itemUnitCost,
+    locationFilter,
+    Number.POSITIVE_INFINITY,
+  );
+
+  if (scope === "purchased") return json(200, { scope, period, items: slice.bySpendItem });
+  if (scope === "used") return json(200, { scope, period, items: slice.byUsageItem });
+  return json(200, { scope, period, vendors: slice.byVendor });
 };

@@ -1,0 +1,53 @@
+<!-- @dsCard group="Foundations" name="Typography & scale" subtitle="Inter · headings, body, labels · radii" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Typography & scale</title>
+<style>
+:root{--surface:#fff;--surface-alt:#f8fafc;--text:#0F172A;--text-heading:#0A0F1E;--text-soft:#64748B;--border:#CBD5E1;--radius-sm:4px;--radius-md:6px;--radius-lg:8px;--radius-pill:999px}
+[data-theme="dark"]{--surface:#1E2A3B;--surface-alt:#243346;--text:#F1F5F9;--text-heading:#F8FAFC;--text-soft:#94A3B8;--border:#2E3D52}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.title{margin:0 0 18px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-soft)}
+.spec{color:var(--text-soft);font-size:11px;font-family:ui-monospace,Menlo,monospace}
+.t-row{padding:10px 0;border-bottom:1px solid var(--border)}
+.h1{font-size:2.2rem;font-weight:800;color:var(--text-heading);line-height:1}
+.h2{font-size:1.05rem;font-weight:700;color:var(--text-heading)}
+.body{font-size:.98rem;color:var(--text)}
+.small{font-size:.875rem;color:var(--text-soft)}
+.dense{font-size:.8rem;color:var(--text)}
+.label{font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.01em;color:var(--text-soft)}
+.xs{font-size:.75rem;color:var(--text)}
+.x2s{font-size:.6875rem;color:var(--text-soft)}
+.radii{display:flex;gap:14px;margin-top:18px}
+.radii .b{width:64px;height:48px;background:var(--surface);border:1px solid var(--border);display:flex;align-items:flex-end;justify-content:center;padding-bottom:4px}
+</style>
+<div class="split">
+  <section class="pane light">
+    <p class="title">Typography — Light</p>
+    <div class="t-row"><div class="h1">Display 2.2rem / 800</div><div class="spec">plan price, hero numerals</div></div>
+    <div class="t-row"><div class="h2">Heading 1.05rem / 700</div><div class="spec">--text-heading · card titles</div></div>
+    <div class="t-row"><div class="body">Body 0.98rem / 400 — the quick brown fox.</div><div class="spec">--text · field & content</div></div>
+    <div class="t-row"><div class="small">Small 0.875rem — secondary copy.</div><div class="spec">--text-soft · descriptions</div></div>
+    <div class="t-row"><div class="dense">Dense 0.8rem — table cells, compact inputs.</div><div class="spec">--text · table & sm fields</div></div>
+    <div class="t-row"><div class="label">Label 0.78rem / 600 uppercase</div><div class="spec">--text-label · field labels</div></div>
+    <div class="t-row"><div class="xs">XS 0.75rem — dense metadata.</div><div class="spec">--text-xs · feed timestamps</div></div>
+    <div class="t-row"><div class="x2s">2XS 0.6875rem — smallest sublabels.</div><div class="spec">--text-2xs · sublabels, chips</div></div>
+    <p class="title" style="margin-top:22px">Radii</p>
+    <div class="radii"><div class="b" style="border-radius:4px"><span class="spec">4</span></div><div class="b" style="border-radius:6px"><span class="spec">6</span></div><div class="b" style="border-radius:8px"><span class="spec">8</span></div><div class="b" style="border-radius:999px"><span class="spec">pill</span></div></div>
+  </section>
+  <section class="pane dark" data-theme="dark">
+    <p class="title">Typography — Dark</p>
+    <div class="t-row"><div class="h1">Display 2.2rem / 800</div><div class="spec">plan price, hero numerals</div></div>
+    <div class="t-row"><div class="h2">Heading 1.05rem / 700</div><div class="spec">--text-heading · card titles</div></div>
+    <div class="t-row"><div class="body">Body 0.98rem / 400 — the quick brown fox.</div><div class="spec">--text · field & content</div></div>
+    <div class="t-row"><div class="small">Small 0.875rem — secondary copy.</div><div class="spec">--text-soft · descriptions</div></div>
+    <div class="t-row"><div class="dense">Dense 0.8rem — table cells, compact inputs.</div><div class="spec">--text · table & sm fields</div></div>
+    <div class="t-row"><div class="label">Label 0.78rem / 600 uppercase</div><div class="spec">--text-label · field labels</div></div>
+    <div class="t-row"><div class="xs">XS 0.75rem — dense metadata.</div><div class="spec">--text-xs · feed timestamps</div></div>
+    <div class="t-row"><div class="x2s">2XS 0.6875rem — smallest sublabels.</div><div class="spec">--text-2xs · sublabels, chips</div></div>
+    <p class="title" style="margin-top:22px">Radii</p>
+    <div class="radii"><div class="b" style="border-radius:4px"><span class="spec">4</span></div><div class="b" style="border-radius:6px"><span class="spec">6</span></div><div class="b" style="border-radius:8px"><span class="spec">8</span></div><div class="b" style="border-radius:999px"><span class="spec">pill</span></div></div>
+  </section>
+</div>

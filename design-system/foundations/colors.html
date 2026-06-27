@@ -1,0 +1,42 @@
+<!-- @dsCard group="Foundations" name="Color tokens" subtitle="Brand, status, surfaces, text — light & dark" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Color tokens</title>
+<style>
+:root{--primary:#2563EB;--primary-strong:#1D4ED8;--danger:#DC2626;--danger-border:#FCA5A5;--danger-surface:#FEF2F2;--warning:#EA580C;--warning-border:#FDBA74;--warning-surface:#FFF7ED;--caution:#EAB308;--caution-border:#FDE047;--caution-surface:#FEFCE8;--success:#16A34A;--success-border:#86EFAC;--success-surface:#F0FDF4;--notice:#2563EB;--notice-border:#93C5FD;--notice-surface:#EFF6FF;--surface:#fff;--surface-alt:#f8fafc;--surface-soft:#eff6ff;--surface-hover:#f0f7ff;--surface-active:#dbeafe;--text:#0F172A;--text-heading:#0A0F1E;--text-soft:#64748B;--text-muted:#475569;--border:#CBD5E1;--border-strong:#94A3B8;--radius-md:6px;--radius-lg:8px}
+[data-theme="dark"]{--surface:#1E2A3B;--surface-alt:#243346;--surface-soft:#243040;--surface-hover:#2C3D52;--surface-active:#334A60;--text:#F1F5F9;--text-heading:#F8FAFC;--text-soft:#94A3B8;--text-muted:#CBD5E1;--border:#2E3D52;--border-strong:#3D5270;--danger:#FCA5A5;--warning:#FB923C;--caution:#FACC15;--success:#86EFAC;--notice:#93C5FD}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.gtitle{margin:0 0 6px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-soft)}
+.group{margin:0 0 22px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px}
+.sw{border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden;background:var(--surface)}
+.chip{height:46px}
+.meta{padding:6px 8px}
+.name{font-size:11px;font-weight:700;color:var(--text-heading);font-family:ui-monospace,Menlo,monospace}
+.val{font-size:10px;color:var(--text-soft);font-family:ui-monospace,Menlo,monospace}
+</style>
+<div class="split">
+  <section class="pane light" id="L"></section>
+  <section class="pane dark" data-theme="dark" id="D"></section>
+</div>
+<script>
+const groups = [
+  ["Brand", [["--primary","#2563EB","#2563EB"],["--primary-strong","#1D4ED8","#1D4ED8"]]],
+  ["Status", [["--danger","#DC2626","#FCA5A5"],["--warning","#EA580C","#FB923C"],["--caution","#EAB308","#FACC15"],["--success","#16A34A","#86EFAC"],["--notice","#2563EB","#93C5FD"]]],
+  ["Status surfaces", [["--danger-surface","#FEF2F2","#FEF2F2"],["--warning-surface","#FFF7ED","#FFF7ED"],["--caution-surface","#FEFCE8","#FEFCE8"],["--success-surface","#F0FDF4","#F0FDF4"],["--notice-surface","#EFF6FF","#EFF6FF"]]],
+  ["Surfaces", [["--surface","#ffffff","#1E2A3B"],["--surface-alt","#f8fafc","#243346"],["--surface-soft","#eff6ff","#243040"],["--surface-hover","#f0f7ff","#2C3D52"],["--surface-active","#dbeafe","#334A60"]]],
+  ["Text", [["--text","#0F172A","#F1F5F9"],["--text-heading","#0A0F1E","#F8FAFC"],["--text-soft","#64748B","#94A3B8"],["--text-muted","#475569","#CBD5E1"]]],
+  ["Borders", [["--border","#CBD5E1","#2E3D52"],["--border-strong","#94A3B8","#3D5270"]]],
+];
+function render(el, idx){
+  el.innerHTML = groups.map(([title, rows]) =>
+    `<div class="group"><p class="gtitle">${title}</p><div class="grid">`+
+    rows.map(([name,l,d])=>{const v=idx===0?l:d;return `<div class="sw"><div class="chip" style="background:${v}"></div><div class="meta"><div class="name">${name}</div><div class="val">${v}</div></div></div>`}).join("")+
+    `</div></div>`).join("");
+}
+render(document.getElementById("L"),0);
+render(document.getElementById("D"),1);
+</script>

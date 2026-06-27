@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="WickOps favicon">
-  <rect width="48" height="48" rx="11" fill="#0A0F1E"></rect>
-  <g transform="translate(8 8) scale(0.32)">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="WickOps app icon">
+  <rect width="256" height="256" rx="58" fill="#0A0F1E"></rect>
+  <g transform="translate(48 48) scale(1.6)">
     <g fill="#2563EB">
       <circle cx="50" cy="50" r="33"></circle>
       <polygon points="41,18 44,5 56,5 59,18" transform="rotate(0 50 50)"></polygon>

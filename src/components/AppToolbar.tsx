@@ -1,5 +1,5 @@
 import { Settings as SettingsIcon } from "lucide-react";
-import logoThumb from "../assets/brand/wickops-logo-thumb.svg";
+import logoThumb from "../assets/brand/wickops-app-icon.svg";
 
 interface AppToolbarProps {
   view: string;

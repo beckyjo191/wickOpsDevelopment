@@ -306,6 +306,10 @@ export const saveInventoryItems = async (
   options?: {
     restockMetadata?: Record<string, RestockMetadata>;
     retireMetadata?: Record<string, RetireMetadata>;
+    /** Row ids the client created as continuation stubs for a retire. The
+     *  server stamps `skeleton: true` on their ITEM_CREATE audit events so
+     *  the activity feed can filter them out. */
+    skeletonRowIds?: string[];
   },
 ): Promise<void> => {
   const base = requireBaseUrl();
@@ -323,6 +327,7 @@ export const saveInventoryItems = async (
       deletedRowIds,
       ...(options?.restockMetadata ? { restockMetadata: options.restockMetadata } : {}),
       ...(options?.retireMetadata ? { retireMetadata: options.retireMetadata } : {}),
+      ...(options?.skeletonRowIds && options.skeletonRowIds.length > 0 ? { skeletonRowIds: options.skeletonRowIds } : {}),
     }),
   });
 
@@ -1252,6 +1257,13 @@ export type AuditAnalyticsSlice = {
   bySpendItem: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }>;
   byUsageItem: Array<{ itemId: string; itemName: string; qtyUsed: number; cost: number }>;
   lossByReason: Array<{ reason: string; qty: number; value: number }>;
+  /** Pre-cap sizes so the dashboard can show "View all (N)" CTAs when
+   *  there's a long tail past the top-10 rendered in the chart. */
+  totalCounts?: {
+    byVendor: number;
+    bySpendItem: number;
+    byUsageItem: number;
+  };
 };
 
 export type AuditAnalytics = AuditAnalyticsSlice & {
@@ -1398,6 +1410,26 @@ export const fetchVendorBreakdown = async (params: {
   const url = `${INVENTORY_API_BASE_URL}/inventory/audit/analytics/vendor?${qs.toString()}`;
   const res = await authFetch(url);
   if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load vendor breakdown."));
+  return res.json();
+};
+
+/** Full breakdown for one Analytics chart — uncapped sorted list. Honors
+ *  the same period + location filter the user picked on the tab. */
+export type AnalyticsBreakdown =
+  | { scope: "purchased"; period: string; items: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }> }
+  | { scope: "used"; period: string; items: Array<{ itemId: string; itemName: string; qtyUsed: number; cost: number }> }
+  | { scope: "vendors"; period: string; vendors: Array<{ vendor: string; spend: number; orderCount: number }> };
+
+export const fetchAnalyticsBreakdown = async (params: {
+  scope: "purchased" | "used" | "vendors";
+  period: "7d" | "30d" | "90d";
+  locationId?: string;
+}): Promise<AnalyticsBreakdown> => {
+  const qs = new URLSearchParams({ scope: params.scope, period: params.period });
+  if (params.locationId) qs.set("locationId", params.locationId);
+  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/analytics/breakdown?${qs.toString()}`;
+  const res = await authFetch(url);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load breakdown."));
   return res.json();
 };
 

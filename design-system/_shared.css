@@ -1,0 +1,112 @@
+/* WickOps design tokens — extracted from src/index.css (light + dark).
+   Dark theme is scoped with [data-theme="dark"] so previews can show both
+   themes side by side. In the real app the selector is :root[data-theme="dark"]. */
+:root {
+  --primary:#2563EB; --primary-strong:#1D4ED8; --primary-hover:#3B82F6; --primary-hover-strong:#2563EB;
+  --focus:#2563EB; --focus-ring:rgba(37,99,235,.2); --focus-ring-soft:rgba(37,99,235,.15); --link:#2563EB;
+  --danger:#DC2626; --danger-border:#FCA5A5; --danger-surface:#FEF2F2;
+  --warning:#EA580C; --warning-border:#FDBA74; --warning-surface:#FFF7ED;
+  --caution:#EAB308; --caution-border:#FDE047; --caution-surface:#FEFCE8;
+  --success:#16A34A; --success-border:#86EFAC; --success-surface:#F0FDF4;
+  --notice:#2563EB; --notice-border:#93C5FD; --notice-surface:#EFF6FF;
+  --bg-top:#f8fafc; --bg-bottom:#f1f5f9;
+  --surface:#ffffff; --surface-alt:#f8fafc; --surface-raised:#ffffff;
+  --surface-soft:#eff6ff; --surface-hover:#f0f7ff; --surface-active:#dbeafe;
+  --location-active-bg:#DBEAFE; --location-active-border:#BFDBFE;
+  --text:#0F172A; --text-heading:#0A0F1E; --text-soft:#64748B; --text-muted:#475569;
+  --border:#CBD5E1; --border-strong:#94A3B8;
+  --shadow:0 1px 3px rgba(0,0,0,.3); --shadow-soft:0 4px 12px rgba(0,0,0,.15);
+  --shadow-raised:0 4px 12px rgba(0,0,0,.2); --shadow-dialog:0 8px 32px rgba(0,0,0,.25);
+  --table-header:#F1F5F9; --table-grid:#CBD5E1; --table-grid-strong:#E2E8F0;
+  --table-row-even:#FAFBFC; --table-row-hover:#F0F7FF; --table-row-selected:#DBEAFE;
+  --table-row-selected-border:#BFDBFE; --table-row-selected-accent:#2563EB;
+  --radius-sm:4px; --radius-md:6px; --radius-lg:8px; --radius-xl:12px; --radius-pill:999px;
+  /* Type scale (theme-independent). Documented in foundations/typography.html.
+     --text-xs / --text-2xs extend the scale below Label for dense metadata. */
+  --text-sm:0.875rem; --text-dense:0.8rem; --text-label:0.78rem;
+  --text-xs:0.75rem; --text-2xs:0.6875rem;
+  --primary-contrast:#ffffff;
+}
+[data-theme="dark"] {
+  --bg-top:#0A0F1E; --bg-bottom:#0A0F1E;
+  --surface:#1E2A3B; --surface-alt:#243346; --surface-raised:#1E2A3B;
+  --surface-soft:#243040; --surface-hover:#2C3D52; --surface-active:#334A60;
+  --focus-ring:rgba(59,130,246,.3); --focus-ring-soft:rgba(59,130,246,.22);
+  --location-active-bg:#1E3A5F; --location-active-border:#2563EB;
+  --text:#F1F5F9; --text-heading:#F8FAFC; --text-soft:#94A3B8; --text-muted:#CBD5E1;
+  --border:#2E3D52; --border-strong:#3D5270;
+  --danger:#FCA5A5; --warning:#FB923C; --caution:#FACC15; --success:#86EFAC;
+  --notice:#93C5FD; --link:#60A5FA;
+  --table-header:#1E2A3B; --table-grid:#2E3D52; --table-row-even:#141C2C;
+  --table-row-hover:#2C3D52; --table-row-selected:#334A60;
+  --shadow-soft:0 4px 12px rgba(0,0,0,.4); --shadow-raised:0 4px 12px rgba(0,0,0,.4);
+  --shadow-dialog:0 8px 32px rgba(0,0,0,.5);
+}
+
+/* Preview scaffold (not part of the app) */
+* { box-sizing: border-box; }
+body { margin:0; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--text); background: var(--bg-top); }
+.ds-split { display:grid; grid-template-columns:1fr 1fr; min-height:100%; }
+.ds-pane { padding:28px; }
+.ds-pane.light { background:#f8fafc; }
+.ds-pane.dark { background:#0A0F1E; }
+.ds-title { margin:0 0 18px; font-size:11px; font-weight:700; letter-spacing:.09em;
+  text-transform:uppercase; color: var(--text-soft); }
+.ds-row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+.ds-col { display:flex; flex-direction:column; gap:14px; }
+
+/* ---- Buttons ---- */
+.button { height:var(--control-h-md); display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid transparent; border-radius:var(--radius-md); padding:0 .95rem;
+  font-weight:700; letter-spacing:.01em; cursor:pointer; font-family:inherit;
+  transition:transform .1s ease, background-color .1s ease, border-color .1s ease; }
+.button:active:not(:disabled) { transform:translateY(1px); }
+.button:disabled { opacity:.6; cursor:not-allowed; }
+.button-primary { color:var(--primary-contrast); background:linear-gradient(180deg,var(--primary),var(--primary-strong)); }
+.button-secondary { color:var(--text-heading); background:var(--surface-soft); border-color:var(--border); }
+.button-ghost { color:var(--text-heading); background:transparent; border-color:var(--border); }
+.button-danger { color:var(--danger); background:var(--surface); border-color:var(--danger-border); }
+.button-sm { height:auto; padding:.25rem .6rem; font-size:.8rem; }
+
+/* ---- Fields ---- */
+.field, .select { width:100%; height:var(--control-h-md); border-radius:var(--radius-md);
+  border:1px solid var(--border); background:var(--surface); color:var(--text);
+  padding:0 .75rem; font-size:.98rem; font-family:inherit; }
+.field:focus, .select:focus { outline:none; border-color:var(--focus); box-shadow:0 0 0 2px var(--focus-ring-soft); }
+/* Compact field used by dense surfaces (table cells, toolbars, inline editors).
+   Touch is the default: it stays a full-size control with a ≥44px tap target and
+   the standard 2px soft focus ring. The 32px density only engages
+   for fine pointers — mirroring the app, where below 781px the inventory table is
+   replaced by the card view and editing falls back to full-size fields. */
+.field--sm { min-height:44px; border-radius:var(--radius-sm); }
+@media (pointer: fine) {
+  .field--sm { height:32px; min-height:0; padding:0 .5rem; font-size:.82rem; }
+  .field--sm:focus { box-shadow:0 0 0 2px var(--focus-ring-soft); }
+}
+.field--error { border-color:var(--danger) !important; }
+.field-label { display:block; margin:0 0 .3rem; font-size:.78rem; font-weight:600;
+  color:var(--text-soft); letter-spacing:.01em; text-transform:uppercase; }
+.field-error { margin:.3rem 0 0; font-size:.82rem; line-height:1.35; color:var(--danger); }
+
+/* ---- Badges ---- */
+.badge { display:inline-flex; align-items:center; gap:.25rem; padding:.15rem .5rem;
+  border-radius:var(--radius-sm); border:1px solid transparent; font-size:.75rem;
+  font-weight:600; line-height:1.4; white-space:nowrap;
+  background:var(--surface-alt); color:var(--text-muted); }
+.badge--neutral { background:var(--surface-alt); color:var(--text-muted); border-color:var(--border); }
+.badge--primary { background:color-mix(in oklab,var(--primary) 14%,transparent); color:var(--primary);
+  border-color:color-mix(in oklab,var(--primary) 25%,transparent); }
+.badge--success { background:var(--success-surface); color:var(--success); border-color:var(--success-border); }
+.badge--warning { background:var(--warning-surface); color:var(--warning); border-color:var(--warning-border); }
+.badge--danger { background:var(--danger-surface); color:var(--danger); border-color:var(--danger-border); }
+.badge--uppercase { text-transform:uppercase; letter-spacing:.04em; font-weight:700; font-size:.7rem; }
+
+/* ---- Alert cards ---- */
+.app-alert-card { display:flex; align-items:center; gap:.75rem; padding:.65rem 1rem;
+  border-radius:var(--radius-lg); border:1px solid var(--border); background:var(--surface-alt);
+  cursor:pointer; font-size:.875rem; font-weight:500; text-align:left; width:100%; }
+.app-alert-card--danger { background:var(--danger-surface); border-color:var(--danger-border); color:var(--danger); }
+.app-alert-card--warning { background:var(--warning-surface); border-color:var(--warning-border); color:var(--warning); }
+.app-alert-card--caution { background:var(--caution-surface); border-color:var(--caution-border); color:var(--caution); }
+.app-alert-card--info { background:var(--surface-soft); border-color:var(--primary); color:var(--primary); }

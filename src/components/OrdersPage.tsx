@@ -76,10 +76,17 @@ function formatDateTime(iso: string): string {
   });
 }
 
-function orderTotalCost(items: RestockOrderItem[]): number | null {
+// Cost basis differs by order state. Open/partial orders are still estimates,
+// so we cost the quantity ordered. Once an order is closed it's final — the
+// total must reflect what was actually received, not the pre-close estimate
+// (a line ordered for 5 but received as 3 should cost 3, not 5).
+function orderTotalCost(items: RestockOrderItem[], closed: boolean): number | null {
   const itemsWithCost = items.filter((i) => i.unitCost !== undefined);
   if (itemsWithCost.length === 0) return null;
-  return itemsWithCost.reduce((sum, i) => sum + (i.unitCost ?? 0) * i.qtyOrdered, 0);
+  return itemsWithCost.reduce(
+    (sum, i) => sum + (i.unitCost ?? 0) * (closed ? i.qtyReceived : i.qtyOrdered),
+    0,
+  );
 }
 
 function StatusBadge({ status, cancelled }: { status: RestockOrder["status"]; cancelled?: boolean }) {
@@ -697,7 +704,7 @@ function OrderCard({
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelNote, setCancelNote] = useState("");
 
-  const total = orderTotalCost(order.items);
+  const total = orderTotalCost(order.items, order.status === "closed");
   // Per-line progress instead of per-unit qty totals. Per-unit math gets
   // misleading when an item was ordered as units but received as boxes (or
   // vice versa) because qtyOrdered and qtyReceived end up in different units
@@ -932,7 +939,7 @@ function OrderCard({
                           : formatCurrency(item.unitCost)
                       ) : "—"}
                     </td>
-                    <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost * item.qtyOrdered) : "—"}</td>
+                    <td>{item.unitCost !== undefined ? formatCurrency(item.unitCost * (order.status === "closed" ? item.qtyReceived : item.qtyOrdered)) : "—"}</td>
                   </tr>
                 );
               })}

@@ -1,0 +1,41 @@
+<!-- @dsCard group="Components" name="Plan cards" subtitle="Pricing tier · default & highlighted with badge" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Plan cards</title>
+<style>
+:root{--primary:#2563EB;--primary-strong:#1D4ED8;--primary-hover:#3B82F6;--surface:#fff;--surface-alt:#f8fafc;--text-heading:#0A0F1E;--text-soft:#64748B;--border:#CBD5E1;--border-strong:#94A3B8;--shadow:0 1px 3px rgba(0,0,0,.3);--shadow-soft:0 4px 12px rgba(0,0,0,.15);--radius-lg:8px;--radius-pill:999px;--radius-md:6px}
+[data-theme="dark"]{--surface:#1E2A3B;--surface-alt:#243346;--text-heading:#F8FAFC;--text-soft:#94A3B8;--border:#2E3D52;--border-strong:#3D5270;--shadow:0 1px 3px rgba(0,0,0,.5);--shadow-soft:0 4px 12px rgba(0,0,0,.4)}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.title{margin:0 0 24px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-soft)}
+.row{display:flex;gap:16px;align-items:stretch}
+.plan-card{position:relative;flex:1;display:flex;flex-direction:column;gap:.5rem;padding:1.4rem 1.25rem 1.25rem;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface-alt)}
+.plan-card-highlight{border-color:var(--primary);background:var(--surface);box-shadow:var(--shadow)}
+.plan-card-badge{position:absolute;top:-12px;left:50%;transform:translateX(-50%);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;padding:3px 12px;border-radius:var(--radius-pill);background:var(--primary);color:#fff;white-space:nowrap}
+.plan-card-name{font-size:1.05rem;font-weight:700;color:var(--text-heading)}
+.plan-card-price{display:flex;align-items:baseline;gap:3px;margin:.15rem 0 .25rem}
+.plan-card-price-amount{font-size:2.2rem;font-weight:800;color:var(--text-heading);line-height:1}
+.plan-card-price-period{font-size:.9rem;color:var(--text-soft)}
+.plan-card-desc{font-size:.875rem;color:var(--text-soft);line-height:1.45;padding-bottom:.5rem;border-bottom:1px solid var(--border)}
+.button{margin-top:.6rem;height:40px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:var(--radius-md);font-weight:700;cursor:pointer;font-family:inherit}
+.button-primary{color:#fff;background:linear-gradient(180deg,var(--primary),var(--primary-strong))}
+.button-secondary{color:var(--text-heading);background:var(--surface);border-color:var(--border)}
+</style>
+<div class="split">
+  <section class="pane light">
+    <p class="title">Plan cards — Light</p>
+    <div class="row">
+      <div class="plan-card"><div class="plan-card-name">Starter</div><div class="plan-card-price"><span class="plan-card-price-amount">$29</span><span class="plan-card-price-period">/mo</span></div><div class="plan-card-desc">Single location, core inventory tracking.</div><button class="button button-secondary">Choose</button></div>
+      <div class="plan-card plan-card-highlight"><span class="plan-card-badge">Most popular</span><div class="plan-card-name">Pro</div><div class="plan-card-price"><span class="plan-card-price-amount">$79</span><span class="plan-card-price-period">/mo</span></div><div class="plan-card-desc">Multi-location, analytics, and vendor ordering.</div><button class="button button-primary">Choose</button></div>
+    </div>
+  </section>
+  <section class="pane dark" data-theme="dark">
+    <p class="title">Plan cards — Dark</p>
+    <div class="row">
+      <div class="plan-card"><div class="plan-card-name">Starter</div><div class="plan-card-price"><span class="plan-card-price-amount">$29</span><span class="plan-card-price-period">/mo</span></div><div class="plan-card-desc">Single location, core inventory tracking.</div><button class="button button-secondary">Choose</button></div>
+      <div class="plan-card plan-card-highlight"><span class="plan-card-badge">Most popular</span><div class="plan-card-name">Pro</div><div class="plan-card-price"><span class="plan-card-price-amount">$79</span><span class="plan-card-price-period">/mo</span></div><div class="plan-card-desc">Multi-location, analytics, and vendor ordering.</div><button class="button button-primary">Choose</button></div>
+    </div>
+  </section>
+</div>

@@ -1,0 +1,44 @@
+<!-- @dsCard group="Components" name="Buttons" subtitle="Primary / secondary / ghost / danger · default & sm · states" -->
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Buttons</title>
+<style>
+:root{--primary:#2563EB;--primary-strong:#1D4ED8;--primary-hover:#3B82F6;--primary-hover-strong:#2563EB;--focus:#2563EB;--danger:#DC2626;--danger-border:#FCA5A5;--surface:#fff;--surface-alt:#f8fafc;--surface-soft:#eff6ff;--surface-active:#dbeafe;--text:#0F172A;--text-heading:#0A0F1E;--text-soft:#64748B;--border:#CBD5E1;--border-strong:#94A3B8;--radius-sm:4px;--radius-md:6px}
+[data-theme="dark"]{--surface:#1E2A3B;--surface-alt:#243346;--surface-soft:#243040;--surface-active:#334A60;--text:#F1F5F9;--text-heading:#F8FAFC;--text-soft:#94A3B8;--border:#2E3D52;--border-strong:#3D5270;--danger:#FCA5A5;--danger-border:#FCA5A5}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.split{display:grid;grid-template-columns:1fr 1fr}
+.pane{padding:28px}.pane.light{background:#f8fafc}.pane.dark{background:#0A0F1E}
+.title{margin:0 0 16px;font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text-soft)}
+.sub{margin:18px 0 8px;font-size:11px;font-weight:600;color:var(--text-soft)}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.button{height:40px;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;border-radius:var(--radius-md);padding:0 .95rem;font-weight:700;letter-spacing:.01em;cursor:pointer;font-family:inherit}
+.button:disabled{opacity:.6;cursor:not-allowed}
+.button-primary{color:var(--surface);background:linear-gradient(180deg,var(--primary),var(--primary-strong))}
+.button-primary.hover{background:linear-gradient(180deg,var(--primary-hover),var(--primary-hover-strong))}
+.button-secondary{color:var(--text-heading);background:var(--surface-soft);border-color:var(--border)}
+.button-ghost{color:var(--text-heading);background:transparent;border-color:var(--border)}
+.button-danger{color:var(--danger);background:var(--surface);border-color:var(--danger-border)}
+.button.focus{outline:2px solid var(--focus);outline-offset:2px;border-radius:var(--radius-sm)}
+.button-sm{height:auto;padding:.25rem .6rem;font-size:.8rem}
+</style>
+<div class="split">
+  <section class="pane light">
+    <p class="title">Buttons — Light</p>
+    <p class="sub">Variants</p>
+    <div class="row"><button class="button button-primary">Primary</button><button class="button button-secondary">Secondary</button><button class="button button-ghost">Ghost</button><button class="button button-danger">Danger</button></div>
+    <p class="sub">States (primary)</p>
+    <div class="row"><button class="button button-primary">Default</button><button class="button button-primary hover">Hover</button><button class="button button-primary focus">Focus</button><button class="button button-primary" disabled>Disabled</button></div>
+    <p class="sub">Small (.button-sm)</p>
+    <div class="row"><button class="button button-primary button-sm">Primary</button><button class="button button-secondary button-sm">Secondary</button><button class="button button-ghost button-sm">Ghost</button></div>
+  </section>
+  <section class="pane dark" data-theme="dark">
+    <p class="title">Buttons — Dark</p>
+    <p class="sub">Variants</p>
+    <div class="row"><button class="button button-primary">Primary</button><button class="button button-secondary">Secondary</button><button class="button button-ghost">Ghost</button><button class="button button-danger">Danger</button></div>
+    <p class="sub">States (primary)</p>
+    <div class="row"><button class="button button-primary">Default</button><button class="button button-primary hover">Hover</button><button class="button button-primary focus">Focus</button><button class="button button-primary" disabled>Disabled</button></div>
+    <p class="sub">Small (.button-sm)</p>
+    <div class="row"><button class="button button-primary button-sm">Primary</button><button class="button button-secondary button-sm">Secondary</button><button class="button button-ghost button-sm">Ghost</button></div>
+  </section>
+</div>

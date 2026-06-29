@@ -54,6 +54,10 @@ interface OrdersPageProps {
   /** Optional: lets the user change scope from inside Orders without
    *  flipping back to Inventory. When omitted the dropdown is read-only. */
   onSelectedLocationIdChange?: (locationId: string | null) => void;
+  /** Order id to focus on mount — set when arriving from a clicked Order
+   *  row in the activity feed. The page finds the matching OrderCard,
+   *  expands it, and scrolls it into view. */
+  initialFocusOrderId?: string;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -681,6 +685,8 @@ function OrderCard({
   vendorPricing,
   onRefresh,
   onOpenItemDetails,
+  initialExpanded,
+  highlight,
 }: {
   order: RestockOrder;
   hasExpirationColumn: boolean;
@@ -695,8 +701,24 @@ function OrderCard({
    *  to that item. Modal edits live-update the form's pack-size
    *  readout via the parent's vendorPricing map. */
   onOpenItemDetails?: (itemId: string) => void;
+  /** When true, the card starts expanded — used when the user navigated
+   *  here from a clicked activity row so the order detail is visible
+   *  immediately instead of requiring another click. */
+  initialExpanded?: boolean;
+  /** When true, the card flashes a temporary highlight after mount so the
+   *  user can spot it after the scroll. */
+  highlight?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(!!initialExpanded);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // On mount: if this card is the focus target, scroll it into view. The
+  // highlight class is applied via the static prop so a CSS animation can
+  // briefly draw attention to it.
+  useEffect(() => {
+    if (highlight && rootRef.current) {
+      rootRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlight]);
   const [showReceive, setShowReceive] = useState(false);
   const [closing, setClosing] = useState(false);
   // When true, the card swaps its action row for an inline confirm + note
@@ -755,7 +777,11 @@ function OrderCard({
   }
 
   return (
-    <div className={`order-card order-card--${order.status}`}>
+    <div
+      ref={rootRef}
+      id={`order-${order.id}`}
+      className={`order-card order-card--${order.status}${highlight ? " order-card--highlight" : ""}`}
+    >
       <div className="order-card-main">
         <div className="order-card-top">
           <div className="order-card-identity">
@@ -2090,7 +2116,7 @@ function ComposeOrderPanel({
 
 // ── Main Orders Page ───────────────────────────────────────────────────────
 
-export function OrdersPage({ selectedLocationId }: OrdersPageProps) {
+export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPageProps) {
   const [orders, setOrders] = useState<RestockOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2399,6 +2425,15 @@ export function OrdersPage({ selectedLocationId }: OrdersPageProps) {
   // stays in tree as `./ReorderTab` since OrderItem + VendorSelect still
   // export from there; reverting is "re-add the tab button + render".
   const [activeTab, setActiveTab] = useState<OrdersTab>("shop");
+  // When arriving via an activity-feed click, flip to the sub-tab that
+  // contains the focused order. Pagination + page-jump is handled below
+  // once the closed-orders pagination is in scope.
+  useEffect(() => {
+    if (!initialFocusOrderId) return;
+    const target = orders.find((o) => o.id === initialFocusOrderId);
+    if (!target) return;
+    setActiveTab(target.status === "closed" ? "closed" : "pending");
+  }, [initialFocusOrderId, orders]);
   // The compose panel lives on its own "New Order" tab. It's a clean slate
   // every time — low-stock items aren't pre-filled. The Reorder tab's
   // per-vendor checklist (Mark as Ordered) is the path for routine reorders;
@@ -2568,6 +2603,28 @@ export function OrdersPage({ selectedLocationId }: OrdersPageProps) {
     return days;
   }, [filteredClosedOrders, closedOrdersSafePage]);
 
+  // When arriving with a focus id targeting a closed order, jump to the page
+  // it sits on so its OrderCard actually renders. Without this, the focused
+  // order can be on page 2+ and never mount.
+  useEffect(() => {
+    if (!initialFocusOrderId) return;
+    const idx = filteredClosedOrders.findIndex((o) => o.id === initialFocusOrderId);
+    if (idx < 0) return;
+    const targetPage = Math.floor(idx / CLOSED_ORDERS_PAGE_SIZE) + 1;
+    if (targetPage !== closedOrdersPage) setClosedOrdersPage(targetPage);
+  }, [initialFocusOrderId, filteredClosedOrders, closedOrdersPage]);
+
+  // Day label that contains the focused order — used to force the
+  // corresponding closed-orders DaySection open so its OrderCard actually
+  // mounts (DaySection skips children when collapsed). Only meaningful for
+  // closed orders; pending orders aren't day-grouped.
+  const focusedClosedDayLabel = useMemo(() => {
+    if (!initialFocusOrderId) return null;
+    const target = filteredClosedOrders.find((o) => o.id === initialFocusOrderId);
+    if (!target) return null;
+    return dayGroupLabel(target.closedAt ?? target.createdAt);
+  }, [initialFocusOrderId, filteredClosedOrders]);
+
   // Compact label for the "Date range" pill button. Only shows when at least
   // one bound is set; format mirrors the audit feed's terse date style.
   const dateRangeLabel = useMemo(() => {
@@ -2679,6 +2736,8 @@ export function OrdersPage({ selectedLocationId }: OrdersPageProps) {
                       vendorPricing={vendorPricing}
                       onRefresh={handleOrderChanged}
                       onOpenItemDetails={setDetailItemId}
+                      initialExpanded={order.id === initialFocusOrderId}
+                      highlight={order.id === initialFocusOrderId}
                     />
                   ))
                 )}
@@ -2807,7 +2866,11 @@ export function OrdersPage({ selectedLocationId }: OrdersPageProps) {
                               key={day.label}
                               label={day.label}
                               summary={`${day.orders.length} order${day.orders.length !== 1 ? "s" : ""}`}
-                              defaultOpen={day.label === "Today" || day.label === "Yesterday"}
+                              defaultOpen={
+                                day.label === "Today"
+                                || day.label === "Yesterday"
+                                || day.label === focusedClosedDayLabel
+                              }
                             >
                               <div className="closed-orders-day-cards">
                                 {day.orders.map((order) => (
@@ -2819,6 +2882,8 @@ export function OrdersPage({ selectedLocationId }: OrdersPageProps) {
                                     vendorPricing={vendorPricing}
                                     onRefresh={handleOrderChanged}
                                     onOpenItemDetails={setDetailItemId}
+                                    initialExpanded={order.id === initialFocusOrderId}
+                                    highlight={order.id === initialFocusOrderId}
                                   />
                                 ))}
                               </div>

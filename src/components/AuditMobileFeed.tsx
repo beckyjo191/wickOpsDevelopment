@@ -17,11 +17,15 @@ import {
 export function AuditMobileFeed({
   events,
   onViewItemHistory,
+  onOpenInOrders,
   onUndoEvent,
   undoingEventId,
 }: {
   events: AuditEvent[];
   onViewItemHistory: (itemId: string, name: string) => void;
+  /** Click target for per-order activity rows — mirrors the desktop feed
+   *  so mobile users can also jump to the Orders tab. */
+  onOpenInOrders?: (orderId: string) => void;
   onUndoEvent?: (undoable: UndoableEvent | UndoableEvent[]) => void;
   undoingEventId?: string | null;
 }) {
@@ -47,6 +51,16 @@ export function AuditMobileFeed({
                 minute: "2-digit",
               });
               const navigable = !!row.itemId && row.itemName !== "—";
+              const orderNavigable = !!row.orderId && !!onOpenInOrders;
+              const clickable = orderNavigable || navigable;
+              const onRowClick = () => {
+                if (orderNavigable) onOpenInOrders!(row.orderId!);
+                else if (navigable) onViewItemHistory(row.itemId!, row.itemName);
+              };
+              const cardTitle = row.titleAttr
+                ?? (orderNavigable ? "Open this order in the Orders tab"
+                  : navigable ? `View history for ${row.itemName}`
+                  : undefined);
               const undoables = row.undoableEvents ?? [];
               const showUndo = !!onUndoEvent && undoables.length > 0;
               const isUndoing =
@@ -74,14 +88,9 @@ export function AuditMobileFeed({
                   <button
                     type="button"
                     className="audit-mobile-card-body"
-                    onClick={() =>
-                      navigable && onViewItemHistory(row.itemId!, row.itemName)
-                    }
-                    disabled={!navigable}
-                    title={
-                      row.titleAttr ??
-                      (navigable ? `View history for ${row.itemName}` : undefined)
-                    }
+                    onClick={onRowClick}
+                    disabled={!clickable}
+                    title={cardTitle}
                   >
                     <span className="audit-mobile-card-itemname">
                       {row.itemName}

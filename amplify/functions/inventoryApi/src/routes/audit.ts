@@ -9,24 +9,42 @@ import { listAllItems } from "../items";
 import { listLocations } from "../locations";
 
 /** Build a predicate that returns true when an audit event was logged at the
- *  given location. Location is stamped per event-kind:
- *    - USAGE_APPROVE / ITEM_RETIRE: `details.location` (name string), set
- *      from the structural location at log time.
- *    - RESTOCK_RECEIVED / RESTOCK_ADDED: `details.locationId` (id), set
- *      from where the order line was received.
- *  Events that carry no location info are excluded under a filter — better
- *  to omit than to lie about per-station totals. */
-const buildLocationFilter = (locationId: string | undefined, locationName: string | undefined) => {
-  if (!locationId) return () => true;
-  return (action: string, details: Record<string, unknown>): boolean => {
+ *  given location.
+ *
+ *  Resolution order per event:
+ *    1. `details.locationId` (preferred — stamped at event-emit time)
+ *    2. `details.location` name (legacy USAGE_APPROVE / ITEM_RETIRE stamping)
+ *    3. Fall back to the item's CURRENT structural locationId via
+ *       `itemLocationMap`. This heals historical events that pre-date the
+ *       per-event location stamping — without it, every USAGE_APPROVE from
+ *       before the stamping work would silently drop under any filter.
+ *
+ *  Events with no resolvable location are excluded under a filter so we
+ *  never lie about per-station totals. */
+const buildLocationFilter = (
+  locationId: string | undefined,
+  locationName: string | undefined,
+  itemLocationMap?: Map<string, string>,
+) => {
+  if (!locationId) return (_action: string, _details: Record<string, unknown>, _itemId?: string) => true;
+  return (action: string, details: Record<string, unknown>, itemId?: string): boolean => {
+    // 1. Explicit locationId on the event wins for any action.
+    const evtLocationId = typeof details.locationId === "string" ? details.locationId.trim() : "";
+    if (evtLocationId) return evtLocationId === locationId;
+
+    // 2. Legacy name match for USAGE/RETIRE events that stamped only the name.
     if (action === "USAGE_APPROVE" || action === "ITEM_RETIRE") {
       const evtLocation = typeof details.location === "string" ? details.location.trim() : "";
-      return Boolean(locationName) && evtLocation === locationName;
+      if (evtLocation && locationName && evtLocation === locationName) return true;
     }
-    if (action === "RESTOCK_RECEIVED" || action === "RESTOCK_ADDED") {
-      const evtLocationId = typeof details.locationId === "string" ? details.locationId.trim() : "";
-      return evtLocationId === locationId;
+
+    // 3. Fall back to the item's current location — heals events that
+    //    never stamped any location info.
+    if (itemId && itemLocationMap) {
+      const itemLoc = itemLocationMap.get(itemId);
+      if (itemLoc) return itemLoc === locationId;
     }
+
     return false;
   };
 };
@@ -329,10 +347,12 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   const weekStartMs = parseMs(query.weekStartMs) ?? (dayStartMs - 6 * 86400000);
   const yearStartMs = parseMs(query.yearStartMs) ?? fallbackYearStart;
 
-  // Per-location scoping. Resolve id → name once so USAGE_APPROVE /
-  // ITEM_RETIRE matching (which uses the stamped location name) doesn't
-  // re-lookup per event. Unknown id falls back to "no events match" rather
-  // than silently widening to org-wide.
+  // Per-location scoping. Resolve id → name once so legacy USAGE_APPROVE
+  // events that stamped only the location name can still match. Unknown id
+  // falls back to "no events match" rather than silently widening to org-
+  // wide. The filter itself is built AFTER the items table read below so
+  // it can carry an itemId → locationId map for events that never stamped
+  // location info (the fallback path heals historical data).
   const requestedLocationId = String(query.locationId ?? "").trim() || undefined;
   let requestedLocationName: string | undefined;
   if (requestedLocationId) {
@@ -340,9 +360,8 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
       const locations = await listLocations(storage);
       const match = locations.find((l) => l.id === requestedLocationId);
       requestedLocationName = match?.name;
-    } catch { /* if locations read fails, name stays undefined; USAGE events won't match */ }
+    } catch { /* if locations read fails, name stays undefined; legacy events without locationId won't match by name */ }
   }
-  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName);
 
   // Scan window has to reach the oldest of (period start, year start, prev
   // year period start when compareYoY is on) so every aggregation has the
@@ -383,6 +402,10 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   // matters we can stamp unitCost into USAGE_APPROVE event details and prefer
   // that.
   const itemUnitCost = new Map<string, number>();
+  // itemId → current locationId. Drives the location filter's fallback path:
+  // events that pre-date per-event location stamping still attribute to the
+  // correct station via their item's current structural location.
+  const itemLocationMap = new Map<string, string>();
   // Items missing pricing — surfaced on the Analytics tab so the user can
   // backfill quickly. Keyed by parentItemId (preferred) or itemId so
   // duplicate lots collapse to one row in the picker. We track the
@@ -408,6 +431,17 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
         : item.id;
       const itemNameRaw = String(values.itemName ?? "").trim();
       const isRetired = values.retiredAt !== undefined && values.retiredAt !== null && String(values.retiredAt).trim() !== "";
+
+      // Capture the item's current location for the analytics filter
+      // fallback. Same value stored under both raw id and parentItemId so
+      // events stamped against either resolve.
+      const itemLocationId = typeof (item as { locationId?: unknown }).locationId === "string"
+        ? String((item as { locationId?: unknown }).locationId).trim()
+        : "";
+      if (itemLocationId) {
+        itemLocationMap.set(String(item.id), itemLocationId);
+        if (parentId !== item.id) itemLocationMap.set(parentId, itemLocationId);
+      }
 
       if (Number.isFinite(cost) && cost > 0) {
         // Prefer the highest unitCost across lots — defensible default when
@@ -442,6 +476,10 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   const missingPriceItems = [...missingPriceMap.values()]
     .sort((a, b) => b.quantity - a.quantity);
 
+  // Build the filter now that the itemLocationMap is populated. The map
+  // lets the filter heal events that never stamped a location.
+  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName, itemLocationMap);
+
   // Run the period-bound aggregation for the current window.
   const currentSlice = aggregatePeriodSlice(allEvents, periodSinceMs, Number.POSITIVE_INFINITY, itemUnitCost, locationFilter);
   // YoY: same shape, shifted back one year. Half-open [prevSinceMs, prevUntilMs).
@@ -460,7 +498,7 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
     let details: Record<string, unknown> = {};
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
     if (details.undone) continue;
-    if (!locationFilter(action, details)) continue;
+    if (!locationFilter(action, details, String(evt.itemId ?? ""))) continue;
     const qty = Number(details.quantityUsed ?? 0);
     if (!Number.isFinite(qty) || qty <= 0) continue;
     const itemId = String(evt.itemId ?? "");
@@ -504,7 +542,7 @@ function aggregatePeriodSlice(
   periodSinceMs: number,
   periodUntilMs: number,
   itemUnitCost: Map<string, number>,
-  locationFilter: (action: string, details: Record<string, unknown>) => boolean = () => true,
+  locationFilter: (action: string, details: Record<string, unknown>, itemId?: string) => boolean = () => true,
   /** Per-list cap. Top-N for the dashboard view (default 10); pass Infinity
    *  for the "view all" breakdown endpoint. `totalCounts` always reflects
    *  the pre-cap size so the UI can show "View all (47)". */
@@ -537,7 +575,7 @@ function aggregatePeriodSlice(
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
 
     // Per-location scoping: drop events that don't match before any work.
-    if (!locationFilter(action, details)) continue;
+    if (!locationFilter(action, details, itemId)) continue;
 
     const parentItemId = typeof details.parentItemId === "string" && details.parentItemId.trim()
       ? String(details.parentItemId).trim()
@@ -717,7 +755,28 @@ export const handleVendorBreakdown = async (ctx: RouteContext) => {
       requestedLocationName = match?.name;
     } catch { /* ignore */ }
   }
-  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName);
+  // Build itemId → current locationId so the filter can fall back to the
+  // item's structural location for events that didn't stamp location info.
+  const itemLocationMap = new Map<string, string>();
+  if (requestedLocationId) {
+    try {
+      const allItems = await listAllItems(storage, access.organizationId);
+      for (const item of allItems) {
+        const itemLocationId = typeof (item as { locationId?: unknown }).locationId === "string"
+          ? String((item as { locationId?: unknown }).locationId).trim()
+          : "";
+        if (!itemLocationId) continue;
+        itemLocationMap.set(String(item.id), itemLocationId);
+        let values: Record<string, unknown> = {};
+        try { values = JSON.parse(String((item as { valuesJson?: string }).valuesJson ?? "{}")); } catch { /* ignore */ }
+        const parentId = typeof values.parentItemId === "string" && values.parentItemId.trim()
+          ? String(values.parentItemId).trim()
+          : "";
+        if (parentId && parentId !== item.id) itemLocationMap.set(parentId, itemLocationId);
+      }
+    } catch { /* items read failure → no fallback, events without locationId won't match */ }
+  }
+  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName, itemLocationMap);
 
   // Single pass over the period — query orgId index filtered by timestamp.
   let allEvents: Record<string, unknown>[] = [];
@@ -761,7 +820,7 @@ export const handleVendorBreakdown = async (ctx: RouteContext) => {
     try { details = JSON.parse(String(evt.detailsJson ?? "{}")); } catch { /* ignore */ }
     const evtVendor = typeof details.vendor === "string" ? details.vendor.trim() : "";
     if (evtVendor !== vendor) continue;
-    if (!locationFilter(action, details)) continue;
+    if (!locationFilter(action, details, String(evt.itemId ?? ""))) continue;
     const source = typeof details.source === "string" ? details.source : "";
     if (source === "donation") continue;
     const qty = Number(
@@ -857,31 +916,43 @@ export const handleAnalyticsBreakdown = async (ctx: RouteContext) => {
       requestedLocationName = match?.name;
     } catch { /* ignore */ }
   }
-  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName);
-
-  // Item cost map — needed for "used" so events without stamped unitCost
-  // can fall back on the current item price. Skip for other scopes to save
-  // a table scan.
+  // Item cost map (only built for "used" scope) + item location map (built
+  // whenever a location filter is active). One items table scan covers both.
   const itemUnitCost = new Map<string, number>();
-  if (scope === "used") {
+  const itemLocationMap = new Map<string, string>();
+  if (scope === "used" || requestedLocationId) {
     try {
       const allItems = await listAllItems(storage, access.organizationId);
       for (const item of allItems) {
         let values: Record<string, unknown> = {};
         try { values = JSON.parse(String((item as { valuesJson?: string }).valuesJson ?? "{}")); } catch { /* ignore */ }
-        const cost = Number(values.unitCost ?? 0);
         const parentId = typeof values.parentItemId === "string" && values.parentItemId.trim()
           ? String(values.parentItemId).trim()
           : item.id;
-        if (Number.isFinite(cost) && cost > 0) {
-          const existing = itemUnitCost.get(parentId) ?? 0;
-          if (cost > existing) itemUnitCost.set(parentId, cost);
-          const idExisting = itemUnitCost.get(item.id) ?? 0;
-          if (cost > idExisting) itemUnitCost.set(item.id, cost);
+
+        if (scope === "used") {
+          const cost = Number(values.unitCost ?? 0);
+          if (Number.isFinite(cost) && cost > 0) {
+            const existing = itemUnitCost.get(parentId) ?? 0;
+            if (cost > existing) itemUnitCost.set(parentId, cost);
+            const idExisting = itemUnitCost.get(item.id) ?? 0;
+            if (cost > idExisting) itemUnitCost.set(item.id, cost);
+          }
+        }
+
+        if (requestedLocationId) {
+          const itemLocationId = typeof (item as { locationId?: unknown }).locationId === "string"
+            ? String((item as { locationId?: unknown }).locationId).trim()
+            : "";
+          if (itemLocationId) {
+            itemLocationMap.set(String(item.id), itemLocationId);
+            if (parentId !== item.id) itemLocationMap.set(parentId, itemLocationId);
+          }
         }
       }
-    } catch { /* ignore — unstamped events just drop to 0 */ }
+    } catch { /* ignore — unstamped events just drop to 0 / fall through filter */ }
   }
+  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName, itemLocationMap);
 
   // Pull events in the period.
   const since = new Date(periodSinceMs).toISOString();

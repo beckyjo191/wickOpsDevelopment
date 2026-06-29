@@ -45,6 +45,13 @@ type AppliedUsageDetail = {
    *  audit event so analytics can value historical usage at then-current
    *  pricing rather than a moving "current" item cost. */
   unitCost: number;
+  /** Item's structural locationId at the moment of approval, stamped on the
+   *  audit event so per-station analytics filters can attribute the usage
+   *  without falling back to the item's current location. */
+  locationId?: string;
+  /** Human-readable location name at the moment of approval, kept alongside
+   *  locationId for display in the activity feed without a join. */
+  locationName?: string;
   snapshot: Record<string, unknown>;
 };
 
@@ -55,6 +62,16 @@ export const applyUsageEntries = async (
 ): Promise<{ error?: string; appliedDetails?: AppliedUsageDetail[] }> => {
   const items = await listAllItems(storage, access.organizationId);
   const byId = new Map(items.map((item) => [String(item.id), item]));
+  // Resolve location names once so each USAGE_APPROVE event can stamp both
+  // locationId (for analytics filtering) and a human-readable name (for the
+  // activity feed). Failures here are non-fatal: the locationId still goes
+  // on the event, the name is just omitted.
+  const locationNameById = new Map<string, string>();
+  try {
+    const { listLocations } = await import("../locations");
+    const locations = await listLocations(storage);
+    for (const loc of locations) locationNameById.set(loc.id, loc.name);
+  } catch { /* name lookup failed — locationId-only is still correct */ }
 
   for (let i = 0; i < pendingEntries.length; i += 1) {
     const entry = pendingEntries[i];
@@ -112,6 +129,9 @@ export const applyUsageEntries = async (
       const snap: Record<string, unknown> = { quantity: nextQuantity };
       if (values.minQuantity !== undefined && values.minQuantity !== null) snap.minQuantity = values.minQuantity;
       if (values.expirationDate !== undefined && values.expirationDate !== null && values.expirationDate !== "") snap.expirationDate = values.expirationDate;
+      const itemLocationId = typeof (item as { locationId?: unknown }).locationId === "string"
+        ? String((item as { locationId?: unknown }).locationId).trim()
+        : "";
       appliedDetails.push({
         itemId: entry.itemId,
         itemName: entry.itemName,
@@ -119,6 +139,10 @@ export const applyUsageEntries = async (
         quantityBefore,
         quantityAfter: nextQuantity,
         unitCost,
+        ...(itemLocationId ? { locationId: itemLocationId } : {}),
+        ...(itemLocationId && locationNameById.get(itemLocationId)
+          ? { locationName: locationNameById.get(itemLocationId) }
+          : {}),
         snapshot: snap,
       });
     } catch (err: any) {
@@ -216,6 +240,10 @@ export const handleSubmitUsage = async (ctx: RouteContext) => {
       // the price we paid at the time, not whatever the item costs today.
       ...(detail.unitCost > 0 ? { unitCost: detail.unitCost } : {}),
       ...(notes ? { notes } : {}),
+      // Stamp location so per-station analytics filters can attribute this
+      // event without having to look up the item's current location.
+      ...(detail.locationId ? { locationId: detail.locationId } : {}),
+      ...(detail.locationName ? { location: detail.locationName } : {}),
       snapshot: detail.snapshot,
     }));
   }
@@ -337,6 +365,9 @@ export const handleApproveSubmission = async (ctx: RouteContext) => {
       // Then-current per-unit cost. Lets analytics value historical usage at
       // the price we paid at the time, not whatever the item costs today.
       ...(detail.unitCost > 0 ? { unitCost: detail.unitCost } : {}),
+      // Stamp location for per-station analytics filters.
+      ...(detail.locationId ? { locationId: detail.locationId } : {}),
+      ...(detail.locationName ? { location: detail.locationName } : {}),
       snapshot: detail.snapshot,
     }));
   }

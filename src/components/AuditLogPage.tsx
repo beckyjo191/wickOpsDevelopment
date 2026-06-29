@@ -49,6 +49,11 @@ interface AuditLogPageProps {
    *  Passes the item name rather than id because we filter inventory via
    *  search term — robust across lots + renames. */
   onOpenInInventory?: (itemName: string) => void;
+  /** Called when the user clicks a per-order row in the activity feed
+   *  (Order placed / received / cancelled). Parent switches to the Orders
+   *  tab and focuses the matching order — same affordance as
+   *  `onOpenInInventory` but for orders. */
+  onOpenInOrders?: (orderId: string) => void;
   /** Notifies parent of the current sub-tab so subnav-level UI (e.g. tab-aware
    *  help button) can react. Fires on mount and on every change. */
   onTabChange?: (tab: AuditTab) => void;
@@ -327,7 +332,10 @@ function buildRichRowSummary(event: AuditEvent): string {
   }
   if (derived === "ITEM_RETIRE") {
     const reason = typeof details.reason === "string" ? details.reason : "";
-    return reason ? `Retired (${reason})` : "Retired";
+    const notes = typeof details.notes === "string" ? details.notes : "";
+    const notePart = notes ? ` ${formatNotePreview(notes)}` : "";
+    const base = reason ? `Retired (${reason})` : "Retired";
+    return `${base}${notePart}`;
   }
   if (derived === "ITEM_UNRETIRE") {
     const restored = details.quantityRestored;
@@ -399,8 +407,10 @@ function buildRichRowSummary(event: AuditEvent): string {
   }
   if (derived === "USAGE_APPROVE") {
     const used = details.quantityUsed;
-    if (used !== undefined) return `Logged usage of ${used}`;
-    return "Usage logged";
+    const notes = typeof details.notes === "string" ? details.notes : "";
+    const notePart = notes ? ` ${formatNotePreview(notes)}` : "";
+    if (used !== undefined) return `Logged usage of ${used}${notePart}`;
+    return `Usage logged${notePart}`;
   }
   if (derived === "USAGE_REJECT") {
     const reason = typeof details.reason === "string" ? details.reason : "";
@@ -459,7 +469,27 @@ function buildRichRowSummary(event: AuditEvent): string {
 /** Returns a URL for the event if it has one (currently just ITEM_EDIT
  *  events that touch the reorderLink field). Used to build the title attr
  *  so users can hover the row to see the full URL behind a `boundtree.com`. */
+/** Max characters of a note shown inline in the activity row before
+ *  truncating. The full text is always available via the row's title
+ *  attribute (native hover tooltip) and in the per-item history view. */
+const NOTE_PREVIEW_MAX = 50;
+
+function formatNotePreview(note: string): string {
+  const cleaned = note.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  if (cleaned.length <= NOTE_PREVIEW_MAX) return `— "${cleaned}"`;
+  return `— "${cleaned.slice(0, NOTE_PREVIEW_MAX)}…"`;
+}
+
 function eventTitleAttr(event: AuditEvent): string | undefined {
+  const details = event.details ?? {};
+  // Full note text on hover for events that carry one. Lets a user with
+  // the cursor on a row read a long note that the inline preview
+  // truncates without leaving the feed.
+  const notes = typeof details.notes === "string" ? details.notes.trim() : "";
+  if (notes && (event.action === "USAGE_APPROVE" || event.action === "ITEM_RETIRE")) {
+    return notes;
+  }
   if (event.action !== "ITEM_EDIT") return undefined;
   const linkChange = getVisibleEditChanges(event).find((c) => c.field === "reorderLink");
   if (!linkChange) return undefined;
@@ -534,6 +564,10 @@ export type ActivityRowData = {
    *  USAGE_APPROVE events on the same item) carry all of them so one Undo
    *  click can reverse the whole batch. Empty/undefined → no Undo button. */
   undoableEvents?: UndoableEvent[];
+  /** Set when this row is a synthetic per-order bucket (Order placed /
+   *  received / cancelled). Clicking the row jumps to the Orders tab and
+   *  focuses the matching order — same affordance as itemId for item rows. */
+  orderId?: string;
 };
 
 export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
@@ -544,27 +578,74 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
     users: Set<string>;
     itemId: string | null;
     itemName: string;
+    /** "item" = per-item bucket (default). "order" = synthetic per-(orderId,
+     *  action) bucket that collapses multi-line order events into one row so
+     *  receiving 75 items in a single order doesn't flood the feed with 75
+     *  rows. The per-item history view still shows the underlying events. */
+    kind: "item" | "order";
+    orderId?: string;
+    orderAction?: "placed" | "received";
+    vendor?: string;
   };
   type DayAcc = { label: string; keyOrder: string[]; buckets: Map<string, Bucket> };
   const dayAccs: DayAcc[] = [];
   let currentDay: DayAcc | null = null;
+
+  // Pre-pass: which orderIds had any RESTOCK_RECEIVED event in the loaded
+  // window? Used to distinguish a "cancelled" close (no receive ever
+  // happened) from a "closed" close (some/all stock arrived first).
+  const receivedOrderIds = new Set<string>();
+  for (const e of events) {
+    if (e.action !== "RESTOCK_RECEIVED") continue;
+    const oid = typeof e.details?.orderId === "string" ? e.details.orderId.trim() : "";
+    if (oid) receivedOrderIds.add(oid);
+  }
+
   for (const e of events) {
     const label = dayGroupLabel(e.timestamp);
     if (!currentDay || currentDay.label !== label) {
       currentDay = { label, keyOrder: [], buckets: new Map() };
       dayAccs.push(currentDay);
     }
+
+    // Order-level routing: RESTOCK_ORDER_CREATE and RESTOCK_RECEIVED events
+    // collapse to one bucket per (orderId, action) so a 30-line order reads
+    // as two feed rows (placed, received) instead of 60.
+    const eventOrderId = typeof e.details?.orderId === "string" ? e.details.orderId.trim() : "";
+    const isOrderPlacedEvent = e.action === "RESTOCK_ORDER_CREATE" && !!eventOrderId;
+    const isOrderReceivedEvent = e.action === "RESTOCK_RECEIVED" && !!eventOrderId;
     const itemId = e.itemId ? String(e.itemId) : null;
-    const rowKey = itemId ?? `event:${e.eventId}`;
+
+    let rowKey: string;
+    let kind: "item" | "order";
+    let orderAction: "placed" | "received" | undefined;
+    if (isOrderPlacedEvent) {
+      rowKey = `order:${eventOrderId}:placed`;
+      kind = "order";
+      orderAction = "placed";
+    } else if (isOrderReceivedEvent) {
+      rowKey = `order:${eventOrderId}:received`;
+      kind = "order";
+      orderAction = "received";
+    } else {
+      rowKey = itemId ?? `event:${e.eventId}`;
+      kind = "item";
+    }
+
     let bucket = currentDay.buckets.get(rowKey);
     if (!bucket) {
+      const vendor = typeof e.details?.vendor === "string" ? e.details.vendor.trim() : "";
       bucket = {
         events: [],
         lastTimestamp: e.timestamp,
         actions: new Set(),
         users: new Set(),
-        itemId,
-        itemName: String(e.itemName ?? "").trim(),
+        itemId: kind === "order" ? null : itemId,
+        itemName: kind === "order" ? "" : String(e.itemName ?? "").trim(),
+        kind,
+        orderId: eventOrderId || undefined,
+        orderAction,
+        vendor: vendor || undefined,
       };
       currentDay.buckets.set(rowKey, bucket);
       currentDay.keyOrder.push(rowKey);
@@ -574,7 +655,13 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
     bucket.actions.add(deriveAction(e));
     const u = e.userName || e.userEmail;
     if (u) bucket.users.add(u);
-    if (!bucket.itemName && e.itemName) bucket.itemName = String(e.itemName).trim();
+    if (bucket.kind === "item" && !bucket.itemName && e.itemName) {
+      bucket.itemName = String(e.itemName).trim();
+    }
+    if (!bucket.vendor) {
+      const vendor = typeof e.details?.vendor === "string" ? e.details.vendor.trim() : "";
+      if (vendor) bucket.vendor = vendor;
+    }
   }
 
   const days: Array<DayBucket<ActivityRowData>> = [];
@@ -589,8 +676,35 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
       const allUsage = bucket.events.length > 1
         && bucket.events.every((e) => e.action === "USAGE_APPROVE");
       let summary: string;
-      if (bucket.events.length === 1) {
-        summary = buildRichRowSummary(bucket.events[0]);
+      if (bucket.kind === "order") {
+        // Synthetic per-order bucket — collapses all line-level events for
+        // one order into "Order placed/received — Vendor (N items)".
+        const distinctItems = new Set(
+          bucket.events.map((e) => String(e.itemId ?? "")).filter(Boolean),
+        );
+        const itemCount = distinctItems.size || bucket.events.length;
+        const verb = bucket.orderAction === "placed" ? "Order placed" : "Order received";
+        const vendorPart = bucket.vendor ? ` — ${bucket.vendor}` : "";
+        const countPart = ` (${itemCount} item${itemCount !== 1 ? "s" : ""})`;
+        summary = `${verb}${vendorPart}${countPart}`;
+      } else if (bucket.events.length === 1) {
+        const lone = bucket.events[0];
+        // Special case: standalone RESTOCK_ORDER_CLOSED — relabel "cancelled"
+        // vs "closed" based on whether any RESTOCK_RECEIVED event exists for
+        // this orderId in the loaded window. Heuristic but matches the user's
+        // mental model in the common case.
+        if (lone.action === "RESTOCK_ORDER_CLOSED") {
+          const oid = typeof lone.details?.orderId === "string" ? lone.details.orderId.trim() : "";
+          const wasReceived = !!oid && receivedOrderIds.has(oid);
+          const vendor = typeof lone.details?.vendor === "string" ? lone.details.vendor.trim() : "";
+          const note = typeof lone.details?.note === "string" ? lone.details.note.trim() : "";
+          const verb = wasReceived ? "Order closed" : "Order cancelled";
+          const vendorPart = vendor ? ` — ${vendor}` : "";
+          const notePart = note ? ` (${note})` : "";
+          summary = `${verb}${vendorPart}${notePart}`;
+        } else {
+          summary = buildRichRowSummary(lone);
+        }
       } else if (allUsage) {
         const total = bucket.events.reduce((acc, e) => {
           const qty = Number(e.details?.quantityUsed ?? 0);
@@ -598,25 +712,15 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
         }, 0);
         summary = `Logged usage of ${total}`;
       } else {
-        // Mixed-action buckets: build segment list, then de-dupe identical
-        // adjacent or repeated strings into "segment (×N)". Stops a row from
-        // reading "Received 2 · Ordered 2 from BoundTree · Ordered 2 from
-        // BoundTree" when the user placed two same-shape orders that day.
-        // Preserves order of first appearance so the timeline still reads
-        // chronologically.
-        const segments = bucket.events.map(buildRichRowSummary);
-        const counts = new Map<string, number>();
-        for (const s of segments) counts.set(s, (counts.get(s) ?? 0) + 1);
-        const seenInOrder: string[] = [];
-        for (const s of segments) {
-          if (seenInOrder.includes(s)) continue;
-          seenInOrder.push(s);
-        }
-        summary = seenInOrder
-          .map((s) => (counts.get(s)! > 1 ? `${s} (×${counts.get(s)})` : s))
-          .join(" · ");
+        // Mixed-action item bucket — plain dotted join so distinct events
+        // stay visible. No dedupe across event ids: two same-shape events
+        // from different orderIds are genuinely different and shouldn't be
+        // visually merged.
+        summary = bucket.events.map(buildRichRowSummary).join(" · ");
       }
-      const titleAttr = bucket.events.length === 1 ? eventTitleAttr(bucket.events[0]) : undefined;
+      const titleAttr = bucket.events.length === 1 && bucket.kind === "item"
+        ? eventTitleAttr(bucket.events[0])
+        : undefined;
       const actionList = Array.from(bucket.actions);
       const accentColor = actionList.length === 1
         ? (ACTION_COLORS[actionList[0]] ?? "var(--text-muted)")
@@ -640,6 +744,16 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
           if (u) undoableEvents.push(u);
         }
       }
+      // RESTOCK_ORDER_CLOSED is bucketed per-event (one row per close event)
+      // but still has an orderId in its details — carry it so the row can
+      // link to the matching order, same as the order-bucket rows do.
+      const orderIdForRow = bucket.kind === "order"
+        ? bucket.orderId
+        : (bucket.events.length === 1 && bucket.events[0].action === "RESTOCK_ORDER_CLOSED"
+          ? (typeof bucket.events[0].details?.orderId === "string"
+            ? bucket.events[0].details.orderId.trim() || undefined
+            : undefined)
+          : undefined);
       day.rows.push({
         key: `${d.label}::${rowKey}`,
         timestamp: bucket.lastTimestamp,
@@ -650,6 +764,7 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
         user: userLabel,
         titleAttr,
         undoableEvents: undoableEvents.length > 0 ? undoableEvents : undefined,
+        ...(orderIdForRow ? { orderId: orderIdForRow } : {}),
       });
       for (const u of bucket.users) day.users.add(u);
     }
@@ -667,11 +782,16 @@ export const UNDO_TOOLTIPS: Record<UndoableKind, string> = {
 function FlatActivityFeed({
   events,
   onViewItemHistory,
+  onOpenInOrders,
   onUndoEvent,
   undoingEventId,
 }: {
   events: AuditEvent[];
   onViewItemHistory: (itemId: string, name: string) => void;
+  /** Click target for synthetic per-order rows (Order placed / received /
+   *  cancelled). Jumps to the Orders tab and focuses the matching order,
+   *  mirroring the item-history flow for item rows. */
+  onOpenInOrders?: (orderId: string) => void;
   onUndoEvent?: (undoable: UndoableEvent | UndoableEvent[]) => void;
   undoingEventId?: string | null;
 }) {
@@ -697,6 +817,7 @@ function FlatActivityFeed({
               minute: "2-digit",
             });
             const navigable = !!row.itemId && row.itemName !== "—";
+            const orderNavigable = !!row.orderId && !!onOpenInOrders;
             const undoables = row.undoableEvents ?? [];
             const showUndo = !!onUndoEvent && undoables.length > 0;
             const isUndoing = showUndo && undoables.some((u) => u.eventId === undoingEventId);
@@ -704,6 +825,18 @@ function FlatActivityFeed({
             const undoTooltip = undoables.length === 1
               ? UNDO_TOOLTIPS[undoables[0].kind]
               : `Undo all ${undoables.length} usage logs in this row`;
+            const clickable = orderNavigable || navigable;
+            const onRowClick = () => {
+              if (orderNavigable) {
+                onOpenInOrders!(row.orderId!);
+              } else if (navigable) {
+                onViewItemHistory(row.itemId!, row.itemName);
+              }
+            };
+            const rowTitle = row.titleAttr
+              ?? (orderNavigable ? "Open this order in the Orders tab"
+                : navigable ? `View history for ${row.itemName}`
+                : undefined);
             return (
               <div
                 key={row.key}
@@ -713,9 +846,9 @@ function FlatActivityFeed({
                 <button
                   type="button"
                   className="audit-flat-row-main"
-                  onClick={() => navigable && onViewItemHistory(row.itemId!, row.itemName)}
-                  disabled={!navigable}
-                  title={row.titleAttr ?? (navigable ? `View history for ${row.itemName}` : undefined)}
+                  onClick={onRowClick}
+                  disabled={!clickable}
+                  title={rowTitle}
                 >
                   <span className="audit-flat-cell audit-flat-time">{time}</span>
                   <span className="audit-flat-cell audit-flat-content">
@@ -1051,6 +1184,14 @@ function formatUsd(value: number): string {
 function formatQty(value: number): string {
   if (!Number.isFinite(value)) return "0";
   return Math.round(value).toLocaleString();
+}
+
+/** Money formatter for CSV cells. Unlike formatUsd (display), this emits a
+ *  plain 2-decimal number with no "$" or thousands separators so spreadsheets
+ *  parse it as a number, and truncates float noise (0.44789999… → "0.45"). */
+function formatMoneyCsv(value: number): string {
+  if (!Number.isFinite(value)) return "0.00";
+  return value.toFixed(2);
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -1519,19 +1660,19 @@ function BreakdownDrawer({
     const filename = `wickops-${scope}${safeLocation}-${period}.csv`;
     if (data?.scope === "purchased") {
       const header = ["Item", "Spend", "Qty received"];
-      const body = data.items.map((r) => [r.itemName, String(r.spend), String(r.qtyReceived)]);
+      const body = data.items.map((r) => [r.itemName, formatMoneyCsv(r.spend), String(r.qtyReceived)]);
       downloadCsv(filename, [header, ...body]);
       return;
     }
     if (data?.scope === "used") {
       const header = ["Item", "Qty used", "Cost"];
-      const body = data.items.map((r) => [r.itemName, String(r.qtyUsed), String(r.cost)]);
+      const body = data.items.map((r) => [r.itemName, String(r.qtyUsed), formatMoneyCsv(r.cost)]);
       downloadCsv(filename, [header, ...body]);
       return;
     }
     if (data?.scope === "vendors") {
       const header = ["Vendor", "Spend", "Order count"];
-      const body = data.vendors.map((r) => [r.vendor, String(r.spend), String(r.orderCount)]);
+      const body = data.vendors.map((r) => [r.vendor, formatMoneyCsv(r.spend), String(r.orderCount)]);
       downloadCsv(filename, [header, ...body]);
       return;
     }
@@ -1927,7 +2068,7 @@ function AnalyticsDashboard({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInventory, onTabChange }: AuditLogPageProps) {
+export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInventory, onOpenInOrders, onTabChange }: AuditLogPageProps) {
   const { isMobile } = useMobileDetect();
   const [tab, setTab] = useState<AuditTab>("feed");
 
@@ -2314,6 +2455,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
               <AuditMobileFeed
                 events={visibleEvents}
                 onViewItemHistory={viewItemHistory}
+                onOpenInOrders={onOpenInOrders}
                 onUndoEvent={undoCallback}
                 undoingEventId={undoingEventId}
               />
@@ -2321,6 +2463,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
               <FlatActivityFeed
                 events={visibleEvents}
                 onViewItemHistory={viewItemHistory}
+                onOpenInOrders={onOpenInOrders}
                 onUndoEvent={undoCallback}
                 undoingEventId={undoingEventId}
               />

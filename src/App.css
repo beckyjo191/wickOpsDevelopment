@@ -8260,6 +8260,18 @@ textarea.inventory-card-input {
 .order-card--partial { border-left: 3px solid var(--warning); }
 .order-card--closed { border-left: 3px solid var(--border); opacity: 0.85; }
 
+/* Brief highlight when the user lands here via a clicked activity row.
+   Box-shadow animates so it doesn't reflow neighboring cards. */
+.order-card--highlight {
+  animation: order-card-highlight 1.6s ease-out 1;
+}
+
+@keyframes order-card-highlight {
+  0% { box-shadow: 0 0 0 0 rgba(36, 114, 177, 0.55); }
+  35% { box-shadow: 0 0 0 6px rgba(36, 114, 177, 0.25); }
+  100% { box-shadow: 0 0 0 0 rgba(36, 114, 177, 0); }
+}
+
 .order-card-main {
   padding: 0.875rem 1rem;
   display: flex;

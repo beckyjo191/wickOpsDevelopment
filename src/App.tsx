@@ -72,6 +72,10 @@ function AppInner() {
   const [inventoryInitialSearch, setInventoryInitialSearch] = useState<string | undefined>(undefined);
   const [inventoryInitialEditCell, setInventoryInitialEditCell] = useState<{ rowId: string; columnKey: string } | undefined>(undefined);
   const [inventoryInitialAction, setInventoryInitialAction] = useState<import("./components/inventory/inventoryTypes").InventoryInitialAction | undefined>(undefined);
+  // OrdersPage focus target. When set, OrdersPage finds the matching order,
+  // expands it on mount, and scrolls it into view. Cleared on tab change so
+  // the focus only fires once per navigation.
+  const [ordersInitialFocusOrderId, setOrdersInitialFocusOrderId] = useState<string | undefined>(undefined);
   const [inventoryKey, setInventoryKey] = useState(0);
   const [dashboardKey, setDashboardKey] = useState(0);
   // Applies view-change side effects without touching browser history.
@@ -83,6 +87,7 @@ function AppInner() {
       setInventoryInitialEditCell(undefined);
       setInventoryInitialAction(undefined);
     }
+    if (v !== "orders") setOrdersInitialFocusOrderId(undefined);
     if (v === "dashboard") setDashboardKey((k) => k + 1);
     setViewRaw(v);
   };
@@ -547,6 +552,7 @@ function AppInner() {
       <OrdersPage
         selectedLocationId={selectedLocationId}
         onSelectedLocationIdChange={onSelectedLocationIdChange}
+        initialFocusOrderId={ordersInitialFocusOrderId}
       />
     ) : (
       <DashboardPage
@@ -567,6 +573,12 @@ function AppInner() {
           // works for single and multi-lot items since search matches on name.
           setInventoryInitialSearch(itemName);
           setView("inventory");
+        }}
+        onOpenInOrders={(orderId) => {
+          // Jump to the Orders tab with the matching order expanded + scrolled
+          // into view. Same affordance as items but for per-order rows.
+          setOrdersInitialFocusOrderId(orderId);
+          setView("orders");
         }}
         onTabChange={setActivityActiveTab}
       />

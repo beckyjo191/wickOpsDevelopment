@@ -640,7 +640,21 @@ function aggregatePeriodSlice(
       const qty = Number(details.qty ?? 0);
       if (!Number.isFinite(qty) || qty <= 0) continue;
       const reason = typeof details.reason === "string" ? details.reason : "unknown";
-      const unitCost = lastUnitCost.get(itemKey) ?? 0;
+      // Cost resolution, in order of preference:
+      //   1. Stamped on the event itself (forward stamping — accurate at
+      //      retire time even if pricing later changes).
+      //   2. Most recent in-period restock price for this item.
+      //   3. Item's current unit cost (the items-table fallback that
+      //      USAGE_APPROVE also uses). Without this, retiring an item that
+      //      wasn't restocked inside the analytics window valued to $0 —
+      //      hiding the financial impact of expired stock.
+      const stampedCost = Number(details.unitCost ?? 0);
+      const unitCost = Number.isFinite(stampedCost) && stampedCost > 0
+        ? stampedCost
+        : (lastUnitCost.get(itemKey)
+          ?? itemUnitCost.get(itemKey)
+          ?? itemUnitCost.get(itemId)
+          ?? 0);
       const value = qty * unitCost;
       totalLossQty += qty;
       totalLossValue += value;

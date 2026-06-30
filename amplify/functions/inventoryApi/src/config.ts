@@ -7,6 +7,14 @@ import type { ModuleKey } from "./types";
 export const USER_TABLE = process.env.USER_TABLE!;
 export const USER_POOL_ID = process.env.USER_POOL_ID ?? "";
 export const ORG_TABLE = process.env.ORG_TABLE!;
+/** Global table holding per-org WickOps platform-support consent grants. */
+export const SUPPORT_GRANT_TABLE = process.env.SUPPORT_GRANT_TABLE ?? "";
+/** Cognito group whose members may read any org that has a live support grant. */
+export const PLATFORM_SUPPORT_GROUP = "PLATFORM_SUPPORT";
+/** Synthetic role stamped on a support operator's AccessContext. Read-only. */
+export const PLATFORM_SUPPORT_ROLE = "PLATFORM_SUPPORT";
+/** Header the support console sends to target a specific customer org. */
+export const SUPPORT_ORG_HEADER = "x-wickops-support-org";
 export const INVENTORY_ORG_TABLE_PREFIX =
   String(process.env.INVENTORY_ORG_TABLE_PREFIX ?? "wickops-inventory").trim() ||
   "wickops-inventory";

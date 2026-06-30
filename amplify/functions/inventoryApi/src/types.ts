@@ -91,6 +91,17 @@ export type AccessContext = {
   canEditInventory: boolean;
   canManageColumns: boolean;
   columnVisibilityOverrides: Record<string, boolean>;
+  /** True when this request is a WickOps platform-support operator reading a
+   *  customer org under a live consent grant (see supportAccessGrant). The
+   *  operator's own userId/email stay on the context for the audit trail, but
+   *  organizationId is the target org's. Always read-only. */
+  isPlatformSupport?: boolean;
+  /** True when the caller belongs to the PLATFORM_SUPPORT Cognito group,
+   *  regardless of whether they're currently impersonating an org. Gates
+   *  operator-only meta endpoints like the org picker. */
+  platformSupportGroupMember?: boolean;
+  /** ISO expiry of the active support grant, when isPlatformSupport. */
+  supportGrantExpiresAt?: string;
 };
 
 export type InventoryStorage = {
@@ -219,7 +230,13 @@ export type AuditAction =
   /** One-shot record of a schema migration applying to the org (e.g. v0 → v1
    *  when location goes structural). Body shape: { fromVersion, toVersion,
    *  itemsMovedToDefault, locationsCreated }. */
-  | "MIGRATION_APPLY";
+  | "MIGRATION_APPLY"
+  /** Org OWNER opened a time-boxed WickOps support-access window. Body shape:
+   *  { expiresAt, durationHours, scope }. The consent event of record. */
+  | "SUPPORT_ACCESS_GRANTED"
+  /** Org OWNER (or expiry) closed the support-access window early. Body shape:
+   *  { reason: "owner_revoked" }. */
+  | "SUPPORT_ACCESS_REVOKED";
 
 /** Reason codes attached to ITEM_RETIRE events. Drives loss analytics.
  *

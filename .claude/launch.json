@@ -4,8 +4,8 @@
     {
       "name": "dev",
       "runtimeExecutable": "/Users/bekahwick/.nvm/versions/node/v20.20.0/bin/npx",
-      "runtimeArgs": ["vite", "--port", "5180", "--strictPort"],
-      "port": 5180,
+      "runtimeArgs": ["vite"],
+      "autoPort": true,
       "env": { "PATH": "/Users/bekahwick/.nvm/versions/node/v20.20.0/bin:/usr/bin:/bin" }
     }
   ]

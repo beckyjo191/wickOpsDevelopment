@@ -17,6 +17,7 @@ import {
   type ItemVendorPricingEntry,
 } from "../../../lib/inventoryApi";
 import { pickLoadingLine } from "../../../lib/loadingLines";
+import { clearPendingSave, readPendingSave, stashPendingSave } from "../../../lib/pendingInventorySave";
 import { formatCurrency, isCurrencyColumnKey, parseCurrency } from "../../../lib/currency";
 import type {
   ActiveTab,
@@ -289,6 +290,41 @@ export function useInventoryData({
       }
     } catch {
       // Silently fall back -- the approval itself already succeeded
+    }
+  };
+
+  /** Sync-on-reconnect: replay a save that didn't reach the server in a prior
+   *  session (offline tab-close, failed autosave). Called once after the initial
+   *  load so we diff against current server state first — if a keepalive request
+   *  actually landed, nothing genuinely differs and we just clear the stash. */
+  const replayPendingSave = async (loadedOrgId: string) => {
+    const stash = readPendingSave();
+    if (!stash) return;
+    // Belongs to a different org (account switch) — leave it for that session.
+    if (stash.organizationId && loadedOrgId && stash.organizationId !== loadedOrgId) return;
+
+    const loadedById = new Map(rowsRef.current.map((r) => [r.id, JSON.stringify(r.values)]));
+    const genuineRows = stash.rows.filter((r) => loadedById.get(r.id) !== JSON.stringify(r.values));
+    const genuineDeletes = stash.deletedRowIds.filter((id) => loadedById.has(id));
+    const pendingCount = genuineRows.length + genuineDeletes.length;
+
+    // Nothing actually unsaved — the keepalive request had landed. Drop it quietly.
+    if (pendingCount === 0) {
+      clearPendingSave();
+      return;
+    }
+
+    try {
+      await saveInventoryItems(stash.rows, stash.deletedRowIds);
+      clearPendingSave();
+      const fresh = await loadInventoryBootstrap();
+      applyBootstrap(fresh);
+      toast.success(
+        `Restored ${pendingCount} unsaved ${pendingCount === 1 ? "change" : "changes"} from your last session.`,
+      );
+    } catch {
+      // Still unreachable — keep the stash and try again next load.
+      toast.info("Couldn't sync your last session's changes yet — they're saved on this device and will retry.");
     }
   };
 
@@ -958,6 +994,8 @@ export function useInventoryData({
       setUndoStack([]);
       setRedoStack([]);
       pruningRef.current = false;
+      // Save reached the server — drop any durable stash from a prior failure.
+      clearPendingSave();
       setShowSaved(true);
       window.setTimeout(() => setShowSaved(false), 2000);
     } catch (err: any) {
@@ -982,8 +1020,16 @@ export function useInventoryData({
             "Some items still have stock — log usage or retire first, then delete.",
           );
         }
-      } else if (!silent) {
-        toast.error(err?.message ?? "Failed to save inventory");
+      } else {
+        // Network/server failure (incl. offline). Persist the full unsaved
+        // diff durably so it isn't lost if the user navigates away or the tab
+        // is closed before connectivity returns — replayed on next load.
+        stashPendingSave(
+          organizationId,
+          diffRowsAgainstSnapshot(rowsRef.current, lastSavedSnapshotRef.current),
+          Array.from(deletedRowIdsRef.current),
+        );
+        if (!silent) toast.error(err?.message ?? "Failed to save inventory");
       }
     } finally {
       savingRef.current = false;
@@ -1181,6 +1227,12 @@ export function useInventoryData({
       }
 
       if (!cancelled) setLoading(false);
+
+      // After load settles, replay any save stranded by a prior offline session.
+      // rowsRef now holds all pages, so the genuine-diff check is accurate.
+      if (!cancelled && bootstrap) {
+        await replayPendingSave(String(bootstrap.access?.organizationId ?? ""));
+      }
     };
 
     load();
@@ -1276,6 +1328,10 @@ export function useInventoryData({
       const changedRows = diffRowsAgainstSnapshot(rowsRef.current, lastSavedSnapshotRef.current);
       const pendingDeleted = Array.from(deletedRowIdsRef.current);
       if (changedRows.length === 0 && pendingDeleted.length === 0) return;
+      // Durable stash FIRST: localStorage writes complete synchronously during
+      // unload, whereas the keepalive fetch below silently fails when offline.
+      // Replayed on next load; cleared once a save reaches the server.
+      stashPendingSave(organizationId, changedRows, pendingDeleted);
       saveInventoryItemsSync(changedRows, pendingDeleted);
     };
 
@@ -1295,7 +1351,7 @@ export function useInventoryData({
       // SPA navigation unmount -- fire keepalive save
       flushSync();
     };
-  }, [canEditInventory]);
+  }, [canEditInventory, organizationId]);
 
   // Expose save fn to parent
   useEffect(() => {

@@ -174,6 +174,7 @@ inventoryApiLambda.addEnvironment("INVENTORY_ORG_TABLE_PREFIX", inventoryOrgTabl
 const userTable = (backend.data.resources as any)?.tables?.user;
 const organizationTable = (backend.data.resources as any)?.tables?.organization;
 const inviteTable = (backend.data.resources as any)?.tables?.invite;
+const supportAccessGrantTable = (backend.data.resources as any)?.tables?.supportAccessGrant;
 
 // defineData uses the AMPLIFY_TABLE strategy (Custom::AmplifyDynamoDBTable),
 // not a plain CfnTable, so PITR + deletion protection must be set via the
@@ -194,6 +195,10 @@ if (userTable) {
 }
 if (organizationTable) {
   inventoryApiLambda.addEnvironment("ORG_TABLE", organizationTable.tableName);
+}
+if (supportAccessGrantTable) {
+  inventoryApiLambda.addEnvironment("SUPPORT_GRANT_TABLE", supportAccessGrantTable.tableName);
+  supportAccessGrantTable.grantReadWriteData(inventoryApiLambda);
 }
 
 const inventoryApiStack = Stack.of(inventoryApiLambda);
@@ -266,6 +271,12 @@ userSubscriptionLambda.addEnvironment(
   "INVENTORY_ORG_TABLE_PREFIX",
   inventoryOrgTablePrefix,
 );
+// Support operators (PLATFORM_SUPPORT group) load the app as an impersonated
+// org through this Lambda — it needs to read the consent grant to authorize.
+if (supportAccessGrantTable) {
+  userSubscriptionLambda.addEnvironment("SUPPORT_GRANT_TABLE", supportAccessGrantTable.tableName);
+  supportAccessGrantTable.grantReadData(userSubscriptionLambda);
+}
 userSubscriptionLambda.addToRolePolicy(
   new PolicyStatement({
     actions: [

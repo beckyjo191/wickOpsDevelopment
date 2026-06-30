@@ -47,5 +47,27 @@ export const data = defineData({
   })
   .authorization((allow) => [allow.authenticated()]),
 
+    // Consent record for time-boxed WickOps platform-support read access.
+    // One row per org (PK = organizationId): re-granting overwrites. The org
+    // OWNER creates/revokes it; the inventoryApi Lambda checks for a live,
+    // unexpired grant before letting a PLATFORM_SUPPORT operator read the org's
+    // data. This row IS the consent + audit artifact (who authorized, when, for
+    // how long, last accessed) — keep it indefinitely (no TTL).
+    supportAccessGrant: a
+  .model({
+    id: a.id(),                         // PK = organizationId
+    organizationId: a.id().required(),
+    status: a.string().required(),      // active | revoked
+    scope: a.string().array(),          // e.g. ["inventory:read"]
+    grantedByUserId: a.id().required(),
+    grantedByEmail: a.string().required(),
+    grantedAt: a.datetime().required(),
+    expiresAt: a.datetime().required(), // time-box — read access dies at this instant
+    lastAccessedAt: a.datetime(),       // bumped when a support operator reads
+    revokedAt: a.datetime(),
+    revokedByUserId: a.id(),
+  })
+  .authorization((allow) => [allow.authenticated()]),
+
   }),
 });

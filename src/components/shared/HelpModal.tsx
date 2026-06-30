@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { HelpCircle, X } from "lucide-react";
 
 export type HelpModalProps = {
@@ -68,7 +69,11 @@ export function HelpModal({ title, children, triggerLabel }: HelpModalProps) {
       >
         <HelpCircle size={16} />
       </button>
-      {open && (
+      {/* Portal to <body> so the overlay escapes the subnav's stacking context.
+       *  On mobile .inventory-subnav is `position: sticky; z-index: 11`, which
+       *  traps a nested fixed overlay — page dropdowns (z-index 30–50) would
+       *  otherwise paint over the help modal. */}
+      {open && createPortal(
         <div
           className="help-modal-overlay"
           onClick={() => setOpen(false)}
@@ -95,7 +100,8 @@ export function HelpModal({ title, children, triggerLabel }: HelpModalProps) {
             </div>
             <div className="help-modal-body">{children}</div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

@@ -805,6 +805,99 @@ export const syncCurrentUserEmail = async (): Promise<{ email: string }> => {
   };
 };
 
+// ─── Platform Support Access ──────────────────────────────────────────────────
+
+/** Current state of the org's WickOps support-access consent window. */
+export type SupportAccessStatus = {
+  /** True when a live (non-expired, non-revoked) grant exists. */
+  active: boolean;
+  /** ISO expiry of the active window, or null when inactive. */
+  expiresAt: string | null;
+  grantedAt?: string | null;
+  grantedByEmail?: string | null;
+  /** ISO timestamp WickOps support last read the org's data, if ever. */
+  lastAccessedAt?: string | null;
+  scope: string[];
+};
+
+/** Allowed grant durations the owner can pick (hours). Keep in sync with the
+ *  backend ALLOWED_DURATION_HOURS in routes/support-access.ts. */
+export const SUPPORT_ACCESS_DURATIONS: Array<{ hours: number; label: string }> = [
+  { hours: 4, label: "4 hours" },
+  { hours: 24, label: "24 hours" },
+  { hours: 48, label: "48 hours" },
+  { hours: 72, label: "72 hours" },
+];
+
+export const getSupportAccessStatus = async (): Promise<SupportAccessStatus> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/support-access`);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load support access status."));
+  const data = await res.json();
+  return {
+    active: !!data.active,
+    expiresAt: data.expiresAt ?? null,
+    grantedAt: data.grantedAt ?? null,
+    grantedByEmail: data.grantedByEmail ?? null,
+    lastAccessedAt: data.lastAccessedAt ?? null,
+    scope: Array.isArray(data.scope) ? data.scope : ["inventory:read"],
+  };
+};
+
+export const grantSupportAccess = async (durationHours: number): Promise<SupportAccessStatus> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/support-access`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ durationHours }),
+  });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to grant support access."));
+  const data = await res.json();
+  return {
+    active: !!data.active,
+    expiresAt: data.expiresAt ?? null,
+    grantedAt: data.grantedAt ?? null,
+    scope: Array.isArray(data.scope) ? data.scope : ["inventory:read"],
+  };
+};
+
+/** One org in the operator picker, with whether it has granted live access. */
+export type SupportOrgEntry = {
+  organizationId: string;
+  name: string;
+  plan: string;
+  grantActive: boolean;
+  grantExpiresAt: string | null;
+};
+
+/** Operator-only directory of every org + its live-grant status. 403s for
+ *  anyone not in the PLATFORM_SUPPORT Cognito group. */
+export const listSupportOrgs = async (): Promise<SupportOrgEntry[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/support/orgs`);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load organizations."));
+  const data = await res.json();
+  return (Array.isArray(data.orgs) ? data.orgs : []).map((o: Record<string, unknown>) => ({
+    organizationId: String(o.organizationId ?? ""),
+    name: String(o.name ?? ""),
+    plan: String(o.plan ?? ""),
+    grantActive: !!o.grantActive,
+    grantExpiresAt: o.grantExpiresAt ? String(o.grantExpiresAt) : null,
+  }));
+};
+
+export const revokeSupportAccess = async (): Promise<SupportAccessStatus> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/support-access`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to revoke support access."));
+  const data = await res.json();
+  return {
+    active: !!data.active,
+    expiresAt: data.expiresAt ?? null,
+    scope: ["inventory:read"],
+  };
+};
+
 // ─── Org Module Management ────────────────────────────────────────────────────
 
 export type OrgModulesState = {

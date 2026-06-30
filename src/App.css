@@ -6969,11 +6969,28 @@ textarea.inventory-card-input {
 
 /* Popover menu — re-uses .audit-filter-menu chrome and lays the From / To
  *  fields side-by-side, with a separate row below for the Clear button. */
-.closed-orders-daterange-menu {
+/* Combine both classes to outrank .audit-filter-menu's `left: 0`, which is
+ *  defined later in this file and would otherwise win at equal specificity. */
+.audit-filter-menu.closed-orders-daterange-menu {
+  /* Anchor to the button's right edge and grow leftward — the toggle sits on
+   *  the right side of the toolbar, so left-anchoring overflows the viewport
+   *  on mobile. */
+  left: auto;
+  right: 0;
   min-width: 320px;
+  max-width: calc(100vw - 2rem);
   padding: 0.75rem;
   gap: 0.6rem;
   flex-direction: column;
+}
+
+@media (max-width: 600px) {
+  .audit-filter-menu.closed-orders-daterange-menu {
+    /* On narrow phones 320px can still exceed the viewport; let it shrink to
+     *  fit while staying pinned to the right edge. */
+    min-width: 0;
+    width: calc(100vw - 2rem);
+  }
 }
 
 .closed-orders-daterange-fields {
@@ -11166,4 +11183,142 @@ textarea.inventory-card-input {
   .order-receive-packinfo {
     font-size: var(--text-sm);
   }
+}
+
+/* ── Platform support console bar ─────────────────────────────────────────
+   Internal operator bar shown only to PLATFORM_SUPPORT staff (App.tsx). The
+   --active variant is high-contrast so an operator is never unaware they're
+   viewing a customer org. */
+.support-console-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.9rem;
+  font-size: var(--text-sm);
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.support-console-bar input {
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.support-console-bar--active {
+  background: var(--warning, #EA580C);
+  border-bottom-color: var(--warning-border, #FDBA74);
+  color: #fff;
+  font-weight: 600;
+}
+
+.support-console-bar--active .button {
+  margin-left: auto;
+}
+
+/* ── Support console org picker ──────────────────────────────────────────── */
+.support-console-picker {
+  position: relative;
+  flex: 1 1 18rem;
+  max-width: 28rem;
+}
+
+.support-console-picker input {
+  width: 100%;
+}
+
+.support-console-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  max-height: 22rem;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(0, 0, 0, 0.18));
+}
+
+.support-console-empty {
+  padding: 0.6rem 0.8rem;
+  font-size: var(--text-sm);
+  color: var(--text-muted, #6b7280);
+}
+
+.support-console-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.5rem 0.8rem;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.support-console-option:last-child {
+  border-bottom: none;
+}
+
+.support-console-option:hover:not(:disabled) {
+  background: var(--surface-alt);
+}
+
+.support-console-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.support-console-option__name {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.support-console-option__id {
+  font-size: var(--text-xs, 0.72rem);
+  font-weight: 400;
+  color: var(--text-muted, #6b7280);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.support-console-badge {
+  flex: 0 0 auto;
+  font-size: var(--text-xs, 0.72rem);
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-soft, #f3f4f6);
+  color: var(--text-muted, #6b7280);
+  white-space: nowrap;
+}
+
+.support-console-badge--live {
+  background: rgba(16, 185, 129, 0.15);
+  color: #047857;
+}
+
+/* ── Support operator landing (no org selected) ───────────────────────────── */
+.support-operator-landing {
+  max-width: 40rem;
+  margin: 3rem auto;
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--text-muted, #6b7280);
+}
+
+.support-operator-landing h2 {
+  margin: 0 0 0.5rem;
+  color: var(--text);
 }

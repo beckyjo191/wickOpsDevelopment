@@ -213,6 +213,11 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         ? Math.max(0, qtyBefore - qtyAfter)
         : Number(retire?.qty ?? 0);
       const notes = typeof retire?.notes === "string" && retire.notes.trim() ? String(retire.notes).trim() : undefined;
+      // Stamp the item's unit cost at retire time so loss analytics can
+      // value the event accurately even if pricing changes later. Without
+      // this, retire valuation has to fall back to the item's current
+      // cost — which drifts as prices update.
+      const retireUnitCost = Number(values.unitCost);
       auditEvents.push(buildAuditEvent(access, "ITEM_RETIRE", rowId, itemName, {
         reason: retireReason,
         qty: qtyDelta,
@@ -220,6 +225,7 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         qtyAfter,
         parentItemId: String(values.parentItemId ?? rowId),
         ...(notes ? { notes } : {}),
+        ...(Number.isFinite(retireUnitCost) && retireUnitCost > 0 ? { unitCost: retireUnitCost } : {}),
         snapshot,
       }));
     } else if (oldValues) {

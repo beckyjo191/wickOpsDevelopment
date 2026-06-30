@@ -64,6 +64,7 @@ import { useToast } from "./shared/Toast";
 import { ConfirmDialog } from "./shared/ConfirmDialog";
 import { LocationPickerDialog } from "./inventory/LocationPickerDialog";
 import { AddColumnDialog } from "./inventory/AddColumnDialog";
+import { SupportAccessCard } from "./SupportAccessCard";
 
 const SETTINGS_DISCLOSURES_STORAGE_KEY = "wickops.settings.disclosures";
 type DisclosureKey = "appearance" | "userModuleAccess" | "pendingInvites" | "locations" | "vendors" | "allowedUnits" | "inventoryColumns" | "importData" | "exportData" | "helpSupport";
@@ -94,7 +95,13 @@ interface SettingsPageProps {
   currentPeriodEnd: number | null;
   canManageInventoryColumns: boolean;
   canManageModuleAccess: boolean;
+  /** True only for the org OWNER. Gates the support-access consent card. */
+  isOrgOwner: boolean;
   currentUserId: string;
+  /** Org identity — embedded into support-contact emails so tickets
+   *  self-identify which org to look up in the support console. */
+  organizationId: string;
+  orgName: string;
   themePreference: ThemePreference;
   onThemePreferenceChange: (preference: ThemePreference) => void;
   onCurrentUserAllowedModulesChange: (allowedModules: AppModuleKey[]) => void;
@@ -120,7 +127,10 @@ export function SettingsPage({
   currentPeriodEnd,
   canManageInventoryColumns,
   canManageModuleAccess,
+  isOrgOwner,
   currentUserId,
+  organizationId,
+  orgName,
   themePreference,
   onThemePreferenceChange,
   onCurrentUserAllowedModulesChange,
@@ -920,8 +930,17 @@ export function SettingsPage({
     const senderLine = currentDisplayName
       ? `${currentDisplayName} <${currentUserEmail}>`
       : currentUserEmail;
+    // Embed org identity so the support console can look up the org directly —
+    // no asking the customer for their org id over email.
+    const orgLine = orgName ? `${orgName} (${organizationId})` : organizationId;
+    const footer = [
+      "---",
+      `From: ${senderLine}`,
+      `Organization: ${orgLine}`,
+      `User ID: ${currentUserId}`,
+    ].join("\n");
     const subject = encodeURIComponent(trimmedSubject || "WickOps support request");
-    const body = encodeURIComponent(`${trimmedMessage}\n\n---\nFrom: ${senderLine}`);
+    const body = encodeURIComponent(`${trimmedMessage}\n\n${footer}`);
     window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
   };
 
@@ -1300,6 +1319,8 @@ export function SettingsPage({
             </p>
           )}
         </details>
+
+        {isOrgOwner && <SupportAccessCard open={false} />}
 
         {canManageModuleAccess ? (
           <details

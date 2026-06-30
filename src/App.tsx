@@ -17,7 +17,9 @@ import { DashboardHelp } from "./components/DashboardHelp";
 import { ActivityHelp } from "./components/ActivityHelp";
 import { ToastProvider } from "./components/shared/Toast";
 import { LoadingState } from "./components/shared/LoadingState";
-import { authFetch } from "./lib/authFetch";
+import { SupportConsoleBar } from "./components/SupportConsoleBar";
+import { authFetch, setSupportOrgOverride, getSupportOrgOverride } from "./lib/authFetch";
+import { fetchAuthSession } from "aws-amplify/auth";
 import {
   applyThemePreference,
   loadThemePreference,
@@ -67,6 +69,9 @@ function AppInner() {
     rawSignOut();
   };
   const [currentUserEmail, setCurrentUserEmail] = useState("");
+  // True for WickOps staff in the PLATFORM_SUPPORT Cognito group. Drives the
+  // operator console bar; the backend independently re-checks the signed claim.
+  const [isPlatformSupport, setIsPlatformSupport] = useState(false);
   const [view, setViewRaw] = useState<AppView>("dashboard");
   const [inventoryInitialFilter, setInventoryInitialFilter] = useState<ActiveTab | undefined>(undefined);
   const [inventoryInitialSearch, setInventoryInitialSearch] = useState<string | undefined>(undefined);
@@ -175,6 +180,15 @@ function AppInner() {
     cancelAtPeriodEnd: boolean;
     currentPeriodEnd: number | null;
     loadError: boolean;
+    /** True when this session is a PLATFORM_SUPPORT operator (impersonating an
+     *  org or on the bare operator shell). */
+    platformSupport?: boolean;
+    /** True for the bare operator shell — group member with no org, not yet
+     *  viewing any customer. Frontend shows the org picker landing. */
+    supportOperator?: boolean;
+    /** Set when impersonation failed (e.g. grant expired); frontend exits
+     *  support mode. */
+    supportError?: string;
   }>({
     status: "loading",
     displayName: "",
@@ -194,6 +208,36 @@ function AppInner() {
     loadError: false,
   });
 
+
+  // If impersonation failed server-side (grant expired/revoked mid-session),
+  // drop the stale override and reload back to the operator picker.
+  useEffect(() => {
+    if (subState.supportError && getSupportOrgOverride()) {
+      setSupportOrgOverride(null);
+      window.location.reload();
+    }
+  }, [subState.supportError]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") {
+      setIsPlatformSupport(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await fetchAuthSession();
+        const groups = session.tokens?.idToken?.payload?.["cognito:groups"];
+        const list = Array.isArray(groups) ? groups.map((g) => String(g)) : [];
+        if (!cancelled) setIsPlatformSupport(list.includes("PLATFORM_SUPPORT"));
+      } catch {
+        if (!cancelled) setIsPlatformSupport(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authStatus]);
 
   useEffect(() => {
     if (authStatus !== "authenticated") return;
@@ -247,6 +291,9 @@ function AppInner() {
           cancelAtPeriodEnd: !!data.cancelAtPeriodEnd,
           currentPeriodEnd: typeof data.currentPeriodEnd === "number" ? data.currentPeriodEnd : null,
           loadError: false,
+          platformSupport: !!data.platformSupport,
+          supportOperator: !!data.supportOperator,
+          supportError: typeof data.supportError === "string" ? data.supportError : undefined,
         });
 
         if (status === "subscribed" && pollInterval) {
@@ -442,6 +489,24 @@ function AppInner() {
 
   const derivedUserEmail = String(user?.attributes?.email ?? user?.signInDetails?.loginId ?? "");
 
+  // PLATFORM_SUPPORT operator with no org selected: render the operator landing
+  // (app shell + console picker), not the customer subscription/dashboard flow.
+  if (subState.supportOperator) {
+    return (
+      <section className="app-shell">
+        <SupportConsoleBar />
+        <div className="support-operator-landing">
+          <h2>WickOps Support Console</h2>
+          <p>
+            Search for an organization above to view its data (read-only). You can only
+            open organizations that have granted you a live support window — they appear
+            at the top of the list with a green badge.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   if (subState.status === "unsubscribed" || subState.accessSuspended) {
     return <SubscriptionPage />;
   }
@@ -496,7 +561,10 @@ function AppInner() {
           setSubState((prev) => ({ ...prev, seatsUsed: newSeatsUsed }))
         }
         canManageModuleAccess={canManageModuleAccess}
+        isOrgOwner={isOrgOwner}
         currentUserId={String(user?.attributes?.sub ?? "")}
+        organizationId={subState.organizationId}
+        orgName={subState.orgName}
         onInviteUsers={() => {
           if (!canInviteMore) return;
           setView("invite");
@@ -650,6 +718,7 @@ function AppInner() {
 
   return (
     <section className="app-shell">
+      {isPlatformSupport && <SupportConsoleBar />}
       <AppToolbar
         view={view}
         onNavigate={(v) => void navigateTo(v as AppView)}

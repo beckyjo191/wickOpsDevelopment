@@ -27,7 +27,11 @@ export const handler = async (event: any) => {
     if (message === "Unauthorized") {
       return json(401, { error: "Unauthorized" });
     }
-    if (message === "Identity mismatch" || message === "Access suspended") {
+    if (
+      message === "Identity mismatch" ||
+      message === "Access suspended" ||
+      message === "Support access not granted"
+    ) {
       return json(403, { error: message });
     }
     if (err instanceof InventoryStorageProvisioningError || isResourceInUse(err)) {

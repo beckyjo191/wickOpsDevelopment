@@ -7,6 +7,7 @@ import { ensureStorageForOrganization } from "./storage";
 // Route handlers
 import { handleGetOrgModules, handleUpdateOrgModules, handleListModuleAccessUsers, handleUpdateUserModuleAccess, handleRevokeUserAccess } from "./routes/modules";
 import { handleUpdateCurrentUserDisplayName, handleSyncCurrentUserEmail, handleSaveUserColumnVisibility } from "./routes/profile";
+import { handleGetSupportAccess, handleGrantSupportAccess, handleRevokeSupportAccess, handleListSupportOrgs } from "./routes/support-access";
 import { handleListOnboardingTemplates, handleApplyOnboardingTemplate } from "./routes/onboarding";
 import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics, handleVendorBreakdown, handleAnalyticsBreakdown } from "./routes/audit";
 import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestockOrder, handleCloseRestockOrder } from "./routes/restock";
@@ -44,6 +45,12 @@ const routes: Route[] = [
   { method: "POST",   pattern: "/inventory/profile/email/sync",         needsStorage: false, handler: handleSyncCurrentUserEmail },
   { method: "POST",   pattern: "/inventory/column-visibility",          needsStorage: false, handler: handleSaveUserColumnVisibility },
   { method: "GET",    pattern: "/inventory/onboarding/templates",       needsStorage: false, handler: handleListOnboardingTemplates },
+
+  // Platform support access (owner-only; consent window for WickOps staff)
+  { method: "GET",    pattern: "/inventory/support/orgs",               needsStorage: false, handler: handleListSupportOrgs },
+  { method: "GET",    pattern: "/inventory/support-access",             needsStorage: false, handler: handleGetSupportAccess },
+  { method: "POST",   pattern: "/inventory/support-access",             needsStorage: true,  handler: handleGrantSupportAccess },
+  { method: "DELETE", pattern: "/inventory/support-access",             needsStorage: true,  handler: handleRevokeSupportAccess },
 
   // ── Post-storage routes (org tables required) ─────────────────────────────
   { method: "POST",   pattern: "/inventory/onboarding/apply-template",  needsStorage: true, handler: handleApplyOnboardingTemplate },
@@ -145,6 +152,13 @@ export async function dispatch(
   body: any,
   query: Record<string, string | undefined>,
 ): Promise<ReturnType<typeof json> | null> {
+  // Platform-support operators are strictly read-only — reject any mutating
+  // method across every route, before a handler can run. access.ts already
+  // sets canEditInventory/canManageColumns false; this is the hard backstop.
+  if (access.isPlatformSupport && method !== "GET") {
+    return json(403, { error: "Support access is read-only." });
+  }
+
   let storage: InventoryStorage | null = null;
 
   for (const route of routes) {

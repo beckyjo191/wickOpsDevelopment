@@ -53,6 +53,74 @@ const INVENTORY_COLUMN_BY_MODULE_INDEX = "ByModuleSortOrder";
 const INVENTORY_ITEM_BY_MODULE_INDEX = "ByModulePosition";
 const PROVISIONING_RETRY_AFTER_MS = 2000;
 const INVITE_ALLOWED_ROLES = new Set(["ADMIN", "OWNER", "ACCOUNT_OWNER"]);
+
+// ── Platform support (see inventoryApi: supportAccessGrant) ──────────────────
+const SUPPORT_GRANT_TABLE = process.env.SUPPORT_GRANT_TABLE ?? "";
+const PLATFORM_SUPPORT_GROUP = "PLATFORM_SUPPORT";
+const PLATFORM_SUPPORT_ROLE = "PLATFORM_SUPPORT";
+const SUPPORT_ORG_HEADER = "x-wickops-support-org";
+
+/** Parse cognito:groups (array or bracketed string) into clean group names. */
+const parseCognitoGroups = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) return raw.map((g) => String(g).trim()).filter(Boolean);
+  const s = String(raw ?? "").trim();
+  if (!s) return [];
+  return s.replace(/^\[|\]$/g, "").split(/[\s,]+/).map((g) => g.trim()).filter(Boolean);
+};
+
+/** Read the (case-insensitive) target-org support header off the event. */
+const readSupportOrgHeader = (event: any): string => {
+  const headers = event?.headers ?? {};
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === SUPPORT_ORG_HEADER) return String(headers[key] ?? "").trim();
+  }
+  return "";
+};
+
+/** Return the grant's ISO expiry if the org has a live support grant, else null. */
+const readLiveSupportGrant = async (orgId: string): Promise<string | null> => {
+  if (!SUPPORT_GRANT_TABLE || !orgId) return null;
+  try {
+    const res = await ddb.send(
+      new GetCommand({ TableName: SUPPORT_GRANT_TABLE, Key: { id: orgId } }),
+    );
+    const grant = res.Item;
+    const expiresAt = String(grant?.expiresAt ?? "");
+    const live =
+      grant && String(grant.status ?? "") === "active" && !!expiresAt && Date.parse(expiresAt) > Date.now();
+    return live ? expiresAt : null;
+  } catch (err) {
+    console.warn("readLiveSupportGrant failed", err);
+    return null;
+  }
+};
+
+/** Subscription-shaped response for a support operator who is NOT impersonating
+ *  (no org of their own). Subscribed so the app shell loads, but org-less and
+ *  module-less — the frontend renders the operator landing + org picker. */
+const buildOperatorShellResponse = (extra: Record<string, unknown> = {}) =>
+  json(200, {
+    displayName: "WickOps Support",
+    organizationId: "",
+    orgName: "WickOps Support",
+    subscribed: true,
+    accessSuspended: false,
+    plan: "",
+    seatLimit: 0,
+    seatsUsed: 0,
+    paymentStatus: "Free",
+    role: PLATFORM_SUPPORT_ROLE,
+    canInviteUsers: false,
+    orgAvailableModules: [],
+    orgEnabledModules: [],
+    allowedModules: [],
+    onboardingCompleted: true,
+    cancelAtPeriodEnd: false,
+    currentPeriodEnd: null,
+    platformSupport: true,
+    supportOperator: true,
+    ...extra,
+  });
 // ── MODULE SYNC NOTE ────────────────────────────────────────────────────────
 // This list must be kept in sync with AppModuleKey in src/lib/moduleRegistry.ts.
 // When a new module goes stable:
@@ -457,6 +525,60 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
       return json(401, { error: "Unauthorized" });
     }
 
+    // 0️⃣ Platform-support operator paths (before the normal user lookup, since a
+    // dedicated support account has no org of its own).
+    const isPlatformSupportGroupMember =
+      parseCognitoGroups(claims?.["cognito:groups"]).includes(PLATFORM_SUPPORT_GROUP);
+    const supportOrgId = readSupportOrgHeader(event);
+
+    if (isPlatformSupportGroupMember && supportOrgId) {
+      // Impersonating a customer org: load the whole shell as that org, read-only,
+      // but only while a live consent grant exists.
+      const grantExpiresAt = await readLiveSupportGrant(supportOrgId);
+      if (!grantExpiresAt) {
+        return buildOperatorShellResponse({ supportError: "no_grant", supportViewingOrgId: supportOrgId });
+      }
+      const targetRes = await ddb.send(
+        new GetCommand({ TableName: ORG_TABLE, Key: { id: supportOrgId } }),
+      );
+      const targetOrg = targetRes.Item;
+      if (!targetOrg) {
+        return buildOperatorShellResponse({ supportError: "org_not_found", supportViewingOrgId: supportOrgId });
+      }
+      const targetPlan = String(targetOrg.plan ?? "");
+      const targetAvailable = getAvailableModulesForPlan(targetPlan);
+      const targetEnabled = normalizeModuleSubset(targetOrg.enabledModules, targetAvailable);
+      try {
+        await ensureInventoryTablesForOrganization(supportOrgId);
+      } catch (err) {
+        if (err instanceof InventoryStorageProvisioningError || isResourceInUse(err)) throw err;
+        console.warn("support impersonation: ensure tables failed", err);
+      }
+      return json(200, {
+        displayName: "WickOps Support",
+        organizationId: supportOrgId,
+        orgName: String(targetOrg.name ?? ""),
+        subscribed: true,
+        accessSuspended: false,
+        plan: targetPlan,
+        seatLimit: Number(targetOrg.seatLimit ?? 0),
+        seatsUsed: Number(targetOrg.seatsUsed ?? 0),
+        paymentStatus: String(targetOrg.paymentStatus ?? "Free"),
+        role: PLATFORM_SUPPORT_ROLE,
+        canInviteUsers: false,
+        orgAvailableModules: targetAvailable,
+        orgEnabledModules: targetEnabled,
+        // Support reads whatever the org has enabled, read-only.
+        allowedModules: targetEnabled,
+        onboardingCompleted: true,
+        cancelAtPeriodEnd: false,
+        currentPeriodEnd: null,
+        platformSupport: true,
+        supportViewingOrgId: supportOrgId,
+        supportGrantExpiresAt: grantExpiresAt,
+      });
+    }
+
     // 1️⃣ Load user
     const userRes = await ddb.send(
       new GetCommand({
@@ -484,6 +606,11 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
     }
 
     if (!user) {
+      // Dedicated support account (support@wickops): no org membership, not
+      // currently impersonating → land on the operator shell + org picker.
+      if (isPlatformSupportGroupMember) {
+        return buildOperatorShellResponse();
+      }
       if (!email) {
         return json(404, { error: "User not found" });
       }

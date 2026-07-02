@@ -23,10 +23,13 @@ import { LoadingState } from "./shared/LoadingState";
 import { EmptyState } from "./shared/EmptyState";
 import {
   loadPriceHistory,
+  type InventoryLocation,
   type InventoryRow,
   type ItemVendorPricingEntry,
   type PriceHistoryEntry,
 } from "../lib/inventoryApi";
+import { buildLocationPickerEntries, locationsInScope, locationPath, isStation } from "../lib/locationTree";
+import { CustomDropdown } from "./shared/CustomDropdown";
 import type { OrderItem } from "./ReorderTab";
 import { formatCurrency, parseCurrency } from "../lib/currency";
 import {
@@ -36,6 +39,12 @@ import {
 
 interface ShoppingListTabProps {
   rows: InventoryRow[];
+  /** Structural locations — drives the (grouped) scope picker. */
+  locations: InventoryLocation[];
+  /** Currently-scoped location id (or null/"" for All Locations). Shared with
+   *  the rest of the app so the Reorder list scopes to the same place. */
+  selectedLocationId: string | null;
+  onSelectedLocationIdChange: (locationId: string | null) => void;
   availableVendors: string[];
   /** 1g.6/1h.0: per-(item, vendor) pricing rows. Drives the vendor-aware
    *  URL render — vendor mode pulls the active vendor's URL only.
@@ -59,9 +68,51 @@ const URL_REGEX = /^https?:\/\//i;
 const normalizeLink = (link: string): string =>
   link && !URL_REGEX.test(link) ? `https://${link}` : link;
 
+/** Derive a comparable {pricePerCanonical, canonicalUnit} from a user-entered
+ *  vendor pricing row, for vendors that have a price set but no receipt
+ *  history yet. Without this, a freshly-priced vendor reads as "No history" on
+ *  the Reorder list, contributes nothing to the estimate, and stamps no price
+ *  onto the order line — so the receive form falls back to whatever the item
+ *  last cost at a DIFFERENT vendor. Prefers the bulk weight/volume axis for
+ *  weight/volume items and the count axis otherwise; falls back to the legacy
+ *  flat unitCost. Returns null when the row carries no usable cost. */
+const derivedEntryFromPricing = (
+  unit: string,
+  vp: ItemVendorPricingEntry | undefined,
+): { pricePerCanonical: number; canonicalUnit: string } | null => {
+  if (!vp) return null;
+  const dim = dimensionForUnit(unit);
+  if (
+    (dim === "weight" || dim === "volume")
+    && vp.packCost !== undefined
+    && vp.packAmount !== undefined && vp.packAmount > 0
+    && vp.packAmountUnit
+  ) {
+    return pricePerCanonical(vp.packCost, vp.packAmount, vp.packAmountUnit);
+  }
+  if (vp.packCost !== undefined) {
+    const per = vp.packCount !== undefined && vp.packCount > 0
+      ? vp.packCount
+      : (vp.packSize !== undefined && vp.packSize > 0 ? vp.packSize : 1);
+    return pricePerCanonical(vp.packCost, per, unit);
+  }
+  if (vp.unitCost !== undefined) {
+    return pricePerCanonical(vp.unitCost, 1, unit);
+  }
+  return null;
+};
+
 type ShopItem = {
-  /** Lowercased itemName — joins inventory + price-history. */
+  /** Unique per-leaf row key: `${locationId}#${nameKey}`. Drives selection,
+   *  qty drafts, and the render key — so the same item low in two cabinets is
+   *  two independently-orderable rows, each receiving back to its own leaf. */
   itemKey: string;
+  /** Lowercased itemName — joins inventory + price-history (which is keyed by
+   *  name, not leaf). Separate from itemKey so the history join still hits. */
+  nameKey: string;
+  /** The leaf this shortfall belongs to. Tags the order line so receive routes
+   *  stock back to the right cabinet, even in a mixed multi-leaf order. */
+  locationId: string;
   itemName: string;
   /** Every inventory row that matches this itemKey. Mark-as-ordered stamps
    *  orderedAt on every one so a multi-lot item leaves the list as a unit. */
@@ -85,7 +136,7 @@ type ShopItem = {
   byVendor: Map<string, PriceHistoryEntry>;
 };
 
-export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkOrdered, onOpenItemDetails }: ShoppingListTabProps) {
+export function ShoppingListTab({ rows, locations, selectedLocationId, onSelectedLocationIdChange, availableVendors, vendorPricing, onMarkOrdered, onOpenItemDetails }: ShoppingListTabProps) {
   const [vendorMode, setVendorMode] = useState<string>("");
   const [history, setHistory] = useState<PriceHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -144,10 +195,17 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
     type Agg = ShopItem & { repPriority: number };
     const aggMap = new Map<string, Agg>();
 
+    // Location scope: when a specific location/station is picked, only its
+    // subtree's rows count — so the list shows (and orders against) that
+    // cabinet's shortfall. "All Locations" (empty) includes everything.
+    const scopeId = (selectedLocationId ?? "").trim();
+    const scopeIds = scopeId ? locationsInScope(locations, scopeId) : null;
+
     // Group by itemKey.
     for (const row of rows) {
       const name = String(row.values.itemName ?? "").trim();
       if (!name) continue;
+      if (scopeIds && !scopeIds.has(String(row.locationId ?? ""))) continue;
       // Skip retired lots — they're removed stock (qty zeroed) and shouldn't
       // carry a min or rowId into the aggregate. Retiring an expired lot is
       // what drops an item's on-hand below par and surfaces it here.
@@ -156,7 +214,12 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
       // received or canceled. Mirrors the legacy Reorder filter.
       const orderedAt = String(row.values.orderedAt ?? "").trim();
       if (orderedAt) continue;
-      const key = name.toLowerCase();
+      // Key on (leaf locationId + name): the same item low in two cabinets
+      // becomes two rows so each orders + receives against its own leaf. The
+      // bare name still drives the price-history join (nameKey).
+      const nameKey = name.toLowerCase();
+      const locationId = String(row.locationId ?? "");
+      const key = `${locationId}#${nameKey}`;
 
       const qty = Number(row.values.quantity);
       const min = Number(row.values.minQuantity);
@@ -179,6 +242,8 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
       if (!existing) {
         aggMap.set(key, {
           itemKey: key,
+          nameKey,
+          locationId,
           itemName: name,
           rowIds: [row.id],
           representativeRowId: row.id,
@@ -219,7 +284,7 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
     }
     out.sort((a, b) => a.itemName.localeCompare(b.itemName, undefined, { sensitivity: "base" }));
     return out;
-  }, [rows]);
+  }, [rows, locations, selectedLocationId]);
 
   // Attach per-vendor history once both inputs are ready. Done in a separate
   // memo so the (history) update doesn't recompute the row aggregation.
@@ -233,18 +298,76 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
     }
     return lowItems.map((item) => ({
       ...item,
-      byVendor: byKey.get(item.itemKey) ?? new Map(),
+      byVendor: byKey.get(item.nameKey) ?? new Map(),
     }));
   }, [lowItems, history]);
 
-  /** Cheapest known vendor for an item across all observations in the
-   *  recency window. Returns null when there's no priced history. */
-  const bestEntryFor = (item: ShopItem): PriceHistoryEntry | null => {
-    let best: PriceHistoryEntry | null = null;
-    for (const entry of item.byVendor.values()) {
-      if (!best || entry.pricePerCanonical < best.pricePerCanonical) {
-        best = entry;
+  /** Normalized price for an (item, vendor): the price that should DRIVE the
+   *  live list. The current vendor price the user maintains in the pricing
+   *  modal (and that receive keeps in sync) wins; receipt history is only a
+   *  fallback when no current price is set — otherwise it's a historical
+   *  signal surfaced separately as a "last paid" note. */
+  type PriceReadout = {
+    pricePerCanonical: number;
+    canonicalUnit: string;
+    vendor: string;
+    /** Where the driving price came from. */
+    source: "current" | "receipt";
+    /** Receipt-history entry for this vendor when one exists — drives the
+     *  "last paid" drift note even when a current price is the driver. */
+    receipt: PriceHistoryEntry | null;
+  };
+  const priceReadoutFor = (item: ShopItem, vendor: string): PriceReadout | null => {
+    const vlow = normVendor(vendor);
+    const receipt = item.byVendor.get(vlow) ?? null;
+    const current = derivedEntryFromPricing(
+      item.unit,
+      vendorPricing.get(item.representativeRowId)?.get(vlow),
+    );
+    if (current) {
+      return { ...current, vendor, source: "current", receipt };
+    }
+    if (receipt) {
+      return {
+        pricePerCanonical: receipt.pricePerCanonical,
+        canonicalUnit: receipt.canonicalUnit,
+        vendor: receipt.vendor,
+        source: "receipt",
+        receipt,
+      };
+    }
+    return null;
+  };
+
+  /** Cheapest vendor for an item, comparing the CURRENT vendor prices the
+   *  user maintains. Vendors with no current price fall back to their receipt
+   *  history. Returns null when nothing is priced. Used by All-Vendors mode
+   *  and the vendor-mode "vs. best" comparison. */
+  const bestEntryFor = (item: ShopItem): PriceReadout | null => {
+    let best: PriceReadout | null = null;
+    const consider = (r: PriceReadout | null) => {
+      if (r && (!best || r.pricePerCanonical < best.pricePerCanonical)) best = r;
+    };
+    const pricing = vendorPricing.get(item.representativeRowId);
+    // Current prices first — one per vendor that has a pricing row.
+    if (pricing) {
+      for (const vp of pricing.values()) {
+        const d = derivedEntryFromPricing(item.unit, vp);
+        if (d) {
+          consider({ ...d, vendor: vp.vendor, source: "current", receipt: item.byVendor.get(vp.vendorLower) ?? null });
+        }
       }
+    }
+    // Receipt-only vendors (no current price on file) as fallback options.
+    for (const entry of item.byVendor.values()) {
+      if (derivedEntryFromPricing(item.unit, pricing?.get(normVendor(entry.vendor)))) continue;
+      consider({
+        pricePerCanonical: entry.pricePerCanonical,
+        canonicalUnit: entry.canonicalUnit,
+        vendor: entry.vendor,
+        source: "receipt",
+        receipt: entry,
+      });
     }
     return best;
   };
@@ -323,9 +446,10 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
     let priced = 0;
     let unpriced = 0;
     for (const item of filteredLowItems) {
-      // Pick the price entry: vendor mode → that vendor's; All Vendors → best.
+      // Pick the price entry: vendor mode → that vendor's current price
+      // (receipt history only as fallback); All Vendors → best current price.
       const entry = vendorMode
-        ? item.byVendor.get(normVendor(vendorMode))
+        ? priceReadoutFor(item, vendorMode)
         : bestEntryFor(item);
       if (!entry) {
         unpriced += 1;
@@ -336,7 +460,7 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
       // the source of `packCount` for the pack-rounding calc. In vendor
       // mode the vendor matches the user's selection; in All Vendors
       // mode we follow the best entry's vendor.
-      const targetVendorLower = normVendor(entry.vendor);
+      const targetVendorLower = vendorMode ? normVendor(vendorMode) : normVendor(entry.vendor);
       const vp = vendorPricing.get(item.representativeRowId)?.get(targetVendorLower);
       const submitPackSize = Number(vp?.packCount ?? vp?.packSize ?? 0);
       // 1h.8: mode derives from the vendor row's shape — Pack iff
@@ -395,7 +519,7 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
           continue;
         }
       }
-      const vendorEntry = item.byVendor.get(normVendor(vendorMode));
+      const vendorEntry = priceReadoutFor(item, vendorMode);
       if (vendorEntry) {
         // Subtotal is in primary units → multiply qty × packCount in
         // Pack mode to get the actual count contributed.
@@ -449,7 +573,7 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
         //   2. computed default from vendor entry (qty × $/canonical)
         //   3. nothing → no inline price (qty-only line; receive enters
         //      the price)
-        const submitVendorEntry = item.byVendor.get(normVendor(vendorMode));
+        const submitVendorEntry = priceReadoutFor(item, vendorMode);
         const typed = priceDrafts[item.itemKey]?.trim();
         let purchasePrice = typed ? parseCurrency(typed) : NaN;
         if (!Number.isFinite(purchasePrice) && submitVendorEntry) {
@@ -467,6 +591,9 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
           rowId: item.representativeRowId,
           name: item.itemName,
           qty: qtyInPrimaryUnits,
+          // Tag the line with its leaf so receive routes stock back to the
+          // right cabinet — the whole point of per-leaf reorder lines.
+          ...(item.locationId ? { locationId: item.locationId } : {}),
           ...(hasInlinePrice
             ? {
                 // Pack-mode shape collapse: the user typed "2 boxes for $X"
@@ -501,33 +628,60 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
   };
 
   const isAnywhere = !vendorMode;
+  // When the scope spans more than one leaf (All Locations or a station bucket),
+  // each row shows which leaf its shortfall belongs to — so a mixed order is
+  // legible. A single-leaf scope makes the chip redundant, so we hide it.
+  const scopeIsAggregate = !selectedLocationId || isStation(locations, selectedLocationId);
   const checkedCount = lowItemsWithHistory.filter((i) => selectedKeys.has(i.itemKey)).length;
+  // Location picker only when there's more than one location. The vendor
+  // picker appears once a location is chosen (or always, for single-location
+  // orgs that have no location picker).
+  const showLocationPicker = locations.length > 1;
+  const showVendorPicker = !showLocationPicker || !!selectedLocationId;
 
   return (
     <section className="app-card shop-tab" aria-label="Reorder">
-      <header className="app-header shop-tab-header">
-        <div>
-          <h2 className="app-title">Reorder</h2>
-          <p className="app-subtitle">Reorder low stock items.</p>
-        </div>
+      <header className="shop-tab-header">
         <div className="shop-tab-controls">
-          <label className="field-label" htmlFor="shop-vendor-select">Shop at</label>
-          <select
-            id="shop-vendor-select"
-            className="field shop-vendor-select"
-            value={vendorMode}
-            onChange={(e) => {
-              setVendorMode(e.target.value);
-              setSelectedKeys(new Set());
-              setMarkError(null);
-            }}
-            disabled={historyLoading || marking}
-          >
-            <option value="">All Vendors</option>
-            {availableVendors.map((v) => (
-              <option key={v} value={v}>{v}</option>
-            ))}
-          </select>
+          {showLocationPicker ? (
+            <CustomDropdown
+              ariaLabel="Reorder for location"
+              disabled={historyLoading || marking}
+              value={selectedLocationId ?? ""}
+              onChange={(next) => {
+                onSelectedLocationIdChange(next || null);
+                // Back to browse mode when cleared to All Locations.
+                if (!next) setVendorMode("");
+                setSelectedKeys(new Set());
+                setMarkError(null);
+              }}
+              options={[
+                { value: "", label: "All Locations" },
+                ...buildLocationPickerEntries(locations).map((entry) => ({
+                  value: entry.id,
+                  label: entry.label,
+                  depth: entry.depth,
+                  ...(entry.isStation ? { hint: "· all" } : {}),
+                })),
+              ]}
+            />
+          ) : null}
+          {showVendorPicker ? (
+            <CustomDropdown
+              ariaLabel="Shop at vendor"
+              disabled={historyLoading || marking}
+              value={vendorMode}
+              onChange={(next) => {
+                setVendorMode(next);
+                setSelectedKeys(new Set());
+                setMarkError(null);
+              }}
+              options={[
+                { value: "", label: "All Vendors" },
+                ...availableVendors.map((v) => ({ value: v, label: v })),
+              ]}
+            />
+          ) : null}
         </div>
       </header>
 
@@ -609,9 +763,11 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
             <p className="shop-rows-empty">No items match your search.</p>
           ) : null}
           {filteredLowItems.map((item) => {
-            const vendorEntry = vendorMode
-              ? item.byVendor.get(normVendor(vendorMode))
-              : null;
+            // Vendor mode: the price that DRIVES the row — current vendor
+            // price first, receipt history only as a fallback. When a current
+            // price drives it, `vendorEntry.receipt` still carries the last
+            // paid price so we can show drift ("was $1.69").
+            const vendorEntry = vendorMode ? priceReadoutFor(item, vendorMode) : null;
             const best = bestEntryFor(item);
             const checked = selectedKeys.has(item.itemKey);
 
@@ -704,24 +860,37 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
                     )}
                     <span className="shop-row-stock">
                       {item.activeQty}/{item.minQty} {item.unit} on hand
+                      {scopeIsAggregate && item.locationId ? (
+                        <span className="shop-row-location">
+                          {" · "}{locationPath(locations, item.locationId)}
+                        </span>
+                      ) : null}
                     </span>
                   </div>
                 </div>
 
                 <div className="shop-row-pricing">
                   {isAnywhere ? (
-                    best ? (
+                    best && best.pricePerCanonical > 0 ? (
                       <span className="shop-row-best">
                         {`Best: ${formatCurrency(best.pricePerCanonical)}/${best.canonicalUnit} at ${best.vendor}`}
-                        <span className="shop-row-samples"> · {best.sampleCount} {best.sampleCount === 1 ? "receipt" : "receipts"}</span>
                       </span>
                     ) : (
-                      <span className="shop-row-best shop-row-best--empty">No price history yet</span>
+                      <span className="shop-row-best shop-row-best--empty">No price yet</span>
                     )
-                  ) : vendorEntry ? (
+                  ) : vendorEntry && vendorEntry.pricePerCanonical > 0 ? (
                     <span className="shop-row-best">
                       {`${formatCurrency(vendorEntry.pricePerCanonical)}/${vendorEntry.canonicalUnit}`}
-                      <span className="shop-row-samples"> · {vendorEntry.sampleCount} {vendorEntry.sampleCount === 1 ? "receipt" : "receipts"}</span>
+                      {/* When a current vendor price drives the row AND we've
+                          received from this vendor, show the last paid price so
+                          drift (up/down) is visible. */}
+                      {vendorEntry.source === "current"
+                        && vendorEntry.receipt
+                        && Math.abs(vendorEntry.pricePerCanonical - vendorEntry.receipt.pricePerCanonical) >= 0.005 ? (
+                          <span className="shop-row-samples">
+                            {` · last paid ${formatCurrency(vendorEntry.receipt.pricePerCanonical)}/${vendorEntry.receipt.canonicalUnit} ${vendorEntry.pricePerCanonical > vendorEntry.receipt.pricePerCanonical ? "↑" : "↓"}`}
+                          </span>
+                        ) : null}
                       {best && best.vendor.toLowerCase() !== vendorEntry.vendor.toLowerCase() &&
                         best.pricePerCanonical < vendorEntry.pricePerCanonical && (
                           <span className="shop-row-vs-best">
@@ -732,8 +901,8 @@ export function ShoppingListTab({ rows, availableVendors, vendorPricing, onMarkO
                   ) : (
                     // 1h.7: "+ URL" affordance moved to the i modal
                     // (the edit-pricing button on the row opens it).
-                    // Keeps the empty-history state minimal here.
-                    <span className="shop-row-best shop-row-best--empty">No history</span>
+                    // Keeps the empty-state minimal here.
+                    <span className="shop-row-best shop-row-best--empty">No price set</span>
                   )}
                 </div>
 

@@ -1,48 +1,64 @@
 // ── Audit log handlers ──────────────────────────────────────────────────────
 
 import { QueryCommand } from "@aws-sdk/lib-dynamodb";
-import type { RouteContext } from "../types";
+import type { AdjustReason, RouteContext } from "../types";
+import { ADJUST_REASON_LOSS_KIND } from "../types";
 import { ddb } from "../clients";
 import { json, parseNextToken, encodeNextToken } from "../http";
 import { AUDIT_BY_TIMESTAMP_INDEX, AUDIT_BY_USER_INDEX } from "../config";
 import { listAllItems } from "../items";
 import { listLocations } from "../locations";
 
-/** Build a predicate that returns true when an audit event was logged at the
- *  given location.
- *
- *  Resolution order per event:
- *    1. `details.locationId` (preferred — stamped at event-emit time)
- *    2. `details.location` name (legacy USAGE_APPROVE / ITEM_RETIRE stamping)
- *    3. Fall back to the item's CURRENT structural locationId via
- *       `itemLocationMap`. This heals historical events that pre-date the
- *       per-event location stamping — without it, every USAGE_APPROVE from
- *       before the stamping work would silently drop under any filter.
- *
- *  Events with no resolvable location are excluded under a filter so we
- *  never lie about per-station totals. */
+/** The set of location ids (and their names, for the legacy name fallback)
+ *  whose events count toward a requested scope. A leaf resolves to just itself;
+ *  a station ("bucket") resolves to itself plus every descendant leaf, so
+ *  Analytics can roll a whole station up the way the Reorder scope does. */
+type LocationScope = { ids: Set<string>; names: Set<string> };
+
+const resolveLocationScope = async (
+  storage: Parameters<typeof listLocations>[0],
+  requestedLocationId: string,
+): Promise<LocationScope> => {
+  const ids = new Set<string>([requestedLocationId]);
+  const names = new Set<string>();
+  try {
+    const locations = await listLocations(storage);
+    // 2-level tree (station > cabinet): a station's descendants are its direct
+    // children. Include them so a station scope covers all its leaves.
+    for (const l of locations) {
+      if (String((l as { parentLocationId?: string }).parentLocationId ?? "").trim() === requestedLocationId) {
+        ids.add(l.id);
+      }
+    }
+    for (const l of locations) {
+      if (ids.has(l.id) && l.name) names.add(l.name.trim());
+    }
+  } catch { /* locations read failed — fall back to the bare id (leaf exact-match still works) */ }
+  return { ids, names };
+};
+
 const buildLocationFilter = (
-  locationId: string | undefined,
-  locationName: string | undefined,
+  scope: LocationScope | undefined,
   itemLocationMap?: Map<string, string>,
 ) => {
-  if (!locationId) return (_action: string, _details: Record<string, unknown>, _itemId?: string) => true;
+  if (!scope) return (_action: string, _details: Record<string, unknown>, _itemId?: string) => true;
+  const { ids, names } = scope;
   return (action: string, details: Record<string, unknown>, itemId?: string): boolean => {
     // 1. Explicit locationId on the event wins for any action.
     const evtLocationId = typeof details.locationId === "string" ? details.locationId.trim() : "";
-    if (evtLocationId) return evtLocationId === locationId;
+    if (evtLocationId) return ids.has(evtLocationId);
 
     // 2. Legacy name match for USAGE/RETIRE events that stamped only the name.
     if (action === "USAGE_APPROVE" || action === "ITEM_RETIRE") {
       const evtLocation = typeof details.location === "string" ? details.location.trim() : "";
-      if (evtLocation && locationName && evtLocation === locationName) return true;
+      if (evtLocation && names.has(evtLocation)) return true;
     }
 
     // 3. Fall back to the item's current location — heals events that
     //    never stamped any location info.
     if (itemId && itemLocationMap) {
       const itemLoc = itemLocationMap.get(itemId);
-      if (itemLoc) return itemLoc === locationId;
+      if (itemLoc) return ids.has(itemLoc);
     }
 
     return false;
@@ -307,6 +323,73 @@ export const handleAuditItemHistory = async (ctx: RouteContext) => {
   return json(200, { events, nextCursor });
 };
 
+/** Item history for a LOGICAL item (by name) rather than a single row. A
+ *  logical item — e.g. "250 mL 5% Dextrose" — spans multiple inventory rows
+ *  (one lot per expiration date, and per location). Each row's events live
+ *  under their own `ITEM#{rowId}` partition, so a single-partition query (see
+ *  handleAuditItemHistory) only shows one lot's slice. This resolves every
+ *  current row sharing the name (retired lots still resolve — they remain rows;
+ *  only hard-deleted rows orphan their events) and merges their histories.
+ *
+ *  Returns a bounded merged list newest-first with no cursor — a single item's
+ *  365-day history (TTL-capped) is small, so incremental paging isn't needed. */
+const NAME_HISTORY_CAP = 500;
+
+export const handleAuditItemNameHistory = async (ctx: RouteContext) => {
+  const { access, storage, query } = ctx;
+  const rawName = String(query.itemName ?? "").trim();
+  if (!rawName) return json(400, { error: "Missing itemName." });
+  const target = rawName.toLowerCase();
+
+  // Resolve every current row id whose name matches (case-insensitive).
+  const allItems = await listAllItems(storage, access.organizationId);
+  const rowIds: string[] = [];
+  for (const item of allItems) {
+    let values: Record<string, unknown> = {};
+    try { values = JSON.parse(String(item.valuesJson ?? "{}")); } catch { continue; }
+    if (String(values.itemName ?? "").trim().toLowerCase() === target) {
+      rowIds.push(String(item.id));
+    }
+  }
+  if (rowIds.length === 0) return json(200, { events: [], nextCursor: null });
+
+  // Fetch each lot's partition in parallel, newest-first. Bounded per row so a
+  // pathological single lot can't dominate the merged cap.
+  const perRow = await Promise.all(
+    rowIds.map((rowId) =>
+      ddb.send(
+        new QueryCommand({
+          TableName: storage.auditTable,
+          KeyConditionExpression: "pk = :pk",
+          ExpressionAttributeValues: { ":pk": `ITEM#${rowId}` },
+          ScanIndexForward: false,
+          Limit: NAME_HISTORY_CAP,
+        }),
+      ).then((page) => (page.Items ?? []) as Array<Record<string, unknown>>),
+    ),
+  );
+
+  const merged = perRow
+    .flat()
+    .filter((it) => !isNoiseAuditItem(it))
+    .sort((a, b) => String(b.timestamp ?? "").localeCompare(String(a.timestamp ?? "")))
+    .slice(0, NAME_HISTORY_CAP);
+
+  const events = merged.map((item) => ({
+    eventId: item.eventId,
+    action: item.action,
+    timestamp: item.timestamp,
+    userId: item.userId,
+    userEmail: item.userEmail,
+    userName: item.userName,
+    itemId: item.itemId,
+    itemName: item.itemName,
+    details: JSON.parse(String(item.detailsJson ?? "{}")),
+  }));
+
+  return json(200, { events, nextCursor: null });
+};
+
 /** ms-per-year approximation used for YoY shifting. 365 days is fine for the
  *  comparisons we care about (year-over-year of a sliding window); leap-year
  *  off-by-one days don't materially change a 30-day-vs-30-day comparison. */
@@ -354,14 +437,11 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
   // it can carry an itemId → locationId map for events that never stamped
   // location info (the fallback path heals historical data).
   const requestedLocationId = String(query.locationId ?? "").trim() || undefined;
-  let requestedLocationName: string | undefined;
-  if (requestedLocationId) {
-    try {
-      const locations = await listLocations(storage);
-      const match = locations.find((l) => l.id === requestedLocationId);
-      requestedLocationName = match?.name;
-    } catch { /* if locations read fails, name stays undefined; legacy events without locationId won't match by name */ }
-  }
+  // Resolve to a scope set — a station expands to its subtree so its cabinets
+  // roll up; a leaf stays itself.
+  const locationScope = requestedLocationId
+    ? await resolveLocationScope(storage, requestedLocationId)
+    : undefined;
 
   // Scan window has to reach the oldest of (period start, year start, prev
   // year period start when compareYoY is on) so every aggregation has the
@@ -478,7 +558,7 @@ export const handleAuditAnalytics = async (ctx: RouteContext) => {
 
   // Build the filter now that the itemLocationMap is populated. The map
   // lets the filter heal events that never stamped a location.
-  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName, itemLocationMap);
+  const locationFilter = buildLocationFilter(locationScope, itemLocationMap);
 
   // Run the period-bound aggregation for the current window.
   const currentSlice = aggregatePeriodSlice(allEvents, periodSinceMs, Number.POSITIVE_INFINITY, itemUnitCost, locationFilter);
@@ -554,6 +634,9 @@ function aggregatePeriodSlice(
   const vendorSpend = new Map<string, { spend: number; orderIds: Set<string>; restockCount: number }>();
   const itemSpend = new Map<string, { itemName: string; itemId: string; spend: number; qtyReceived: number }>();
   const lossByReason = new Map<string, { qty: number; value: number }>();
+  /** Per-item retire totals. Lets the dashboard surface WHICH items are
+   *  costing the most when retired, not just total qty by reason. */
+  const retireByItem = new Map<string, { itemName: string; itemId: string; qtyRetired: number; value: number }>();
   /** itemKey → most recent unitCost seen within this slice. Drives loss valuation. */
   const lastUnitCost = new Map<string, number>();
 
@@ -662,6 +745,49 @@ function aggregatePeriodSlice(
       bucket.qty += qty;
       bucket.value += value;
       lossByReason.set(reason, bucket);
+      const itemBucket = retireByItem.get(itemKey)
+        ?? { itemName, itemId: itemId || itemKey, qtyRetired: 0, value: 0 };
+      itemBucket.qtyRetired += qty;
+      itemBucket.value += value;
+      if (!itemBucket.itemName && itemName) itemBucket.itemName = itemName;
+      if (!itemBucket.itemId && itemId) itemBucket.itemId = itemId;
+      retireByItem.set(itemKey, itemBucket);
+    }
+
+    if (action === "ITEM_QTY_ADJUST") {
+      // Manual reconciliation. Only loss-kind downward adjustments (shrinkage,
+      // damaged) are real losses; recount/data-entry/found are bookkeeping
+      // corrections and feed neither loss nor spend. Reasons share the loss-by
+      // -reason buckets with ITEM_RETIRE — "damaged" is the same economic
+      // category however it was recorded.
+      const reason = typeof details.reason === "string" ? details.reason : "";
+      if (ADJUST_REASON_LOSS_KIND[reason as AdjustReason] !== "loss") continue;
+      const delta = Number(details.delta ?? 0);
+      if (!Number.isFinite(delta) || delta >= 0) continue;
+      const qty = -delta;
+      // Same cost-resolution order as ITEM_RETIRE: stamped → last in-period
+      // restock price → item's current unit cost.
+      const stampedCost = Number(details.unitCost ?? 0);
+      const unitCost = Number.isFinite(stampedCost) && stampedCost > 0
+        ? stampedCost
+        : (lastUnitCost.get(itemKey)
+          ?? itemUnitCost.get(itemKey)
+          ?? itemUnitCost.get(itemId)
+          ?? 0);
+      const value = qty * unitCost;
+      totalLossQty += qty;
+      totalLossValue += value;
+      const bucket = lossByReason.get(reason) ?? { qty: 0, value: 0 };
+      bucket.qty += qty;
+      bucket.value += value;
+      lossByReason.set(reason, bucket);
+      const itemBucket = retireByItem.get(itemKey)
+        ?? { itemName, itemId: itemId || itemKey, qtyRetired: 0, value: 0 };
+      itemBucket.qtyRetired += qty;
+      itemBucket.value += value;
+      if (!itemBucket.itemName && itemName) itemBucket.itemName = itemName;
+      if (!itemBucket.itemId && itemId) itemBucket.itemId = itemId;
+      retireByItem.set(itemKey, itemBucket);
     }
   }
 
@@ -722,6 +848,31 @@ function aggregatePeriodSlice(
     .map(([reason, v]) => ({ reason, qty: v.qty, value: v.value }))
     .sort((a, b) => b.qty - a.qty);
 
+  // Per-item retire roll-up. Same union-of-top-by-qty-and-cost shape as
+  // byUsageItem so the client toggle between $/qty always has data on both
+  // axes. Full view (cap=Infinity): return everything sorted by value.
+  const retireMapped = [...retireByItem.values()].map((v) => ({
+    itemId: v.itemId,
+    itemName: v.itemName || "Unnamed item",
+    qtyRetired: v.qtyRetired,
+    value: v.value,
+  }));
+  let byRetiredItem: typeof retireMapped;
+  if (Number.isFinite(cap)) {
+    const topByQty = [...retireMapped].sort((a, b) => b.qtyRetired - a.qtyRetired).slice(0, cap);
+    const topByCost = [...retireMapped].sort((a, b) => b.value - a.value).slice(0, cap);
+    const seen = new Set<string>();
+    byRetiredItem = [];
+    for (const row of [...topByCost, ...topByQty]) {
+      const key = row.itemId || row.itemName;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      byRetiredItem.push(row);
+    }
+  } else {
+    byRetiredItem = [...retireMapped].sort((a, b) => b.value - a.value);
+  }
+
   return {
     totals: {
       qtyUsed: totalQtyUsed,
@@ -733,9 +884,11 @@ function aggregatePeriodSlice(
     byVendor,
     bySpendItem,
     byUsageItem,
+    byRetiredItem,
     lossByReason: lossByReasonArr,
     /** Pre-cap sizes for the "View all (N)" CTAs on the dashboard. */
     totalCounts: {
+      byRetiredItem: retireMapped.length,
       byVendor: byVendorFull.length,
       bySpendItem: bySpendItemFull.length,
       byUsageItem: usageMapped.length,
@@ -759,16 +912,11 @@ export const handleVendorBreakdown = async (ctx: RouteContext) => {
   const periodSinceMs = Date.now() - days * 86400000;
   const since = new Date(periodSinceMs).toISOString();
 
-  // Per-location scoping mirrors the main analytics endpoint.
+  // Per-location scoping mirrors the main analytics endpoint (station → subtree).
   const requestedLocationId = String(query.locationId ?? "").trim() || undefined;
-  let requestedLocationName: string | undefined;
-  if (requestedLocationId) {
-    try {
-      const locations = await listLocations(storage);
-      const match = locations.find((l) => l.id === requestedLocationId);
-      requestedLocationName = match?.name;
-    } catch { /* ignore */ }
-  }
+  const locationScope = requestedLocationId
+    ? await resolveLocationScope(storage, requestedLocationId)
+    : undefined;
   // Build itemId → current locationId so the filter can fall back to the
   // item's structural location for events that didn't stamp location info.
   const itemLocationMap = new Map<string, string>();
@@ -790,7 +938,7 @@ export const handleVendorBreakdown = async (ctx: RouteContext) => {
       }
     } catch { /* items read failure → no fallback, events without locationId won't match */ }
   }
-  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName, itemLocationMap);
+  const locationFilter = buildLocationFilter(locationScope, itemLocationMap);
 
   // Single pass over the period — query orgId index filtered by timestamp.
   let allEvents: Record<string, unknown>[] = [];
@@ -912,29 +1060,25 @@ export const handleAnalyticsBreakdown = async (ctx: RouteContext) => {
     return json(403, { error: "Only admins can view analytics." });
   }
   const scope = String(query.scope ?? "").trim();
-  if (scope !== "purchased" && scope !== "used" && scope !== "vendors") {
-    return json(400, { error: "Invalid scope. Use purchased, used, or vendors." });
+  if (scope !== "purchased" && scope !== "used" && scope !== "vendors" && scope !== "retired") {
+    return json(400, { error: "Invalid scope. Use purchased, used, vendors, or retired." });
   }
 
   const period = query.period ?? "30d";
   const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
   const periodSinceMs = Date.now() - days * 86400000;
 
-  // Per-location scope mirrors the main analytics endpoint.
+  // Per-location scope mirrors the main analytics endpoint (station → subtree).
   const requestedLocationId = String(query.locationId ?? "").trim() || undefined;
-  let requestedLocationName: string | undefined;
-  if (requestedLocationId) {
-    try {
-      const locations = await listLocations(storage);
-      const match = locations.find((l) => l.id === requestedLocationId);
-      requestedLocationName = match?.name;
-    } catch { /* ignore */ }
-  }
-  // Item cost map (only built for "used" scope) + item location map (built
+  const locationScope = requestedLocationId
+    ? await resolveLocationScope(storage, requestedLocationId)
+    : undefined;
+  // Item cost map (built for "used" and "retired" scopes — both need to
+  // value events that didn't stamp a cost). Item location map (built
   // whenever a location filter is active). One items table scan covers both.
   const itemUnitCost = new Map<string, number>();
   const itemLocationMap = new Map<string, string>();
-  if (scope === "used" || requestedLocationId) {
+  if (scope === "used" || scope === "retired" || requestedLocationId) {
     try {
       const allItems = await listAllItems(storage, access.organizationId);
       for (const item of allItems) {
@@ -944,7 +1088,7 @@ export const handleAnalyticsBreakdown = async (ctx: RouteContext) => {
           ? String(values.parentItemId).trim()
           : item.id;
 
-        if (scope === "used") {
+        if (scope === "used" || scope === "retired") {
           const cost = Number(values.unitCost ?? 0);
           if (Number.isFinite(cost) && cost > 0) {
             const existing = itemUnitCost.get(parentId) ?? 0;
@@ -966,7 +1110,7 @@ export const handleAnalyticsBreakdown = async (ctx: RouteContext) => {
       }
     } catch { /* ignore — unstamped events just drop to 0 / fall through filter */ }
   }
-  const locationFilter = buildLocationFilter(requestedLocationId, requestedLocationName, itemLocationMap);
+  const locationFilter = buildLocationFilter(locationScope, itemLocationMap);
 
   // Pull events in the period.
   const since = new Date(periodSinceMs).toISOString();
@@ -1002,5 +1146,6 @@ export const handleAnalyticsBreakdown = async (ctx: RouteContext) => {
 
   if (scope === "purchased") return json(200, { scope, period, items: slice.bySpendItem });
   if (scope === "used") return json(200, { scope, period, items: slice.byUsageItem });
+  if (scope === "retired") return json(200, { scope, period, items: slice.byRetiredItem });
   return json(200, { scope, period, vendors: slice.byVendor });
 };

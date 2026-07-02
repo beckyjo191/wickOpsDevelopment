@@ -142,29 +142,28 @@ export const getAccessContext = async (event: any): Promise<AccessContext> => {
   if (!userId) throw new Error("Unauthorized");
   const claimEmail = claims?.email ? normalizeEmail(claims.email) : "";
 
-  // Compute support-operator signals up front: the target-org header and whether
-  // the signed cognito:groups claim includes PLATFORM_SUPPORT. A dedicated
-  // support account (support@wickops) has no org membership of its own, so these
-  // must be resolved before the "user not found" path below.
+  // ── Platform-support operator routing (takes precedence) ──────────────────
+  // A PLATFORM_SUPPORT member is ALWAYS a support operator — never a regular
+  // tenant — even if an org row happens to exist for them (e.g. the support
+  // account once self-signed-up). Resolve this before the normal user lookup so
+  // any own-org is ignored: impersonate the target org when the header names one
+  // and a live grant exists, otherwise the bare operator context (picker only).
   const isPlatformSupportGroupMember =
     parseCognitoGroups(claims?.["cognito:groups"]).includes(PLATFORM_SUPPORT_GROUP);
   const supportOrgId = readSupportOrgHeader(event);
+  if (isPlatformSupportGroupMember) {
+    const operator = { userId, email: claimEmail, displayName: claimEmail || "WickOps Support" };
+    if (supportOrgId) {
+      const supportContext = await buildSupportContext(operator, supportOrgId);
+      if (!supportContext) throw new Error("Support access not granted");
+      return supportContext;
+    }
+    return buildBareOperatorContext(operator);
+  }
 
   const userRes = await ddb.send(new GetCommand({ TableName: USER_TABLE, Key: { id: userId } }));
   const user = userRes.Item as UserRecord | undefined;
   if (!user || !user.organizationId) {
-    // A support operator with no org of their own: impersonate the target org
-    // (when the header names one and a live grant exists) or fall back to the
-    // bare operator context that only the org picker resolves against.
-    if (isPlatformSupportGroupMember) {
-      const operator = { userId, email: claimEmail, displayName: claimEmail || "WickOps Support" };
-      if (supportOrgId) {
-        const supportContext = await buildSupportContext(operator, supportOrgId);
-        if (!supportContext) throw new Error("Support access not granted");
-        return supportContext;
-      }
-      return buildBareOperatorContext(operator);
-    }
     throw new Error("User or organization not found");
   }
   if (claimEmail) {
@@ -191,20 +190,6 @@ export const getAccessContext = async (event: any): Promise<AccessContext> => {
 
   const role = normalizeRole(user.role);
   const organizationId = normalizeOrgId(user.organizationId);
-
-  // ── Platform-support cross-org read ───────────────────────────────────────
-  // A member-operator (a support-group account that also owns its own org, e.g.
-  // a founder) can still impersonate another org via the header. Same gate: a
-  // live consent grant is required. Absent the header/group this block is
-  // skipped and adds zero latency to ordinary requests.
-  if (isPlatformSupportGroupMember && supportOrgId && supportOrgId !== organizationId) {
-    const supportContext = await buildSupportContext(
-      { userId, email: claimEmail, displayName: String(user.displayName ?? "").trim() },
-      supportOrgId,
-    );
-    if (!supportContext) throw new Error("Support access not granted");
-    return supportContext;
-  }
 
   // Load org to compute the two-layer module access:
   //   plan → available pool → org owner's enabled subset → user's personal subset

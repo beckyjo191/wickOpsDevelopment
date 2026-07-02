@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import type { InventoryLocation } from "./inventoryTypes";
+import { buildLocationPickerEntries } from "../../lib/locationTree";
 
 export type LocationPickerDialogProps = {
   title: string;
@@ -146,15 +147,19 @@ export function LocationPickerDialog({
               </span>
             </div>
             <div className="inventory-import-list">
-              {sortedLocations.map((loc) => (
-                <label key={loc.id} className="inventory-import-item">
+              {buildLocationPickerEntries(sortedLocations).map((entry) => (
+                <label
+                  key={entry.id}
+                  className="inventory-import-item"
+                  style={entry.depth === 1 ? { paddingLeft: "1.75rem" } : undefined}
+                >
                   <input
                     type="checkbox"
-                    checked={selected.has(loc.id)}
-                    onChange={() => toggle(loc.id)}
+                    checked={selected.has(entry.id)}
+                    onChange={() => toggle(entry.id)}
                     disabled={saving}
                   />
-                  <span>{loc.name}</span>
+                  <span>{entry.name}</span>
                 </label>
               ))}
             </div>

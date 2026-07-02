@@ -12,7 +12,7 @@
 // On success we update the in-memory map directly — no bootstrap roundtrip.
 
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { History, Plus, Trash2, X } from "lucide-react";
 import {
   upsertItemVendorPricing,
   deleteItemVendorPricing,
@@ -44,6 +44,10 @@ interface ItemDetailModalProps {
   onPricingUpserted: (entry: ItemVendorPricingEntry) => void;
   /** Remove a pricing row from the parent's in-memory map. */
   onPricingDeleted: (id: string) => void;
+  /** Open the full item history in the Activity tab (deep-link from the
+   *  embedded History view). When omitted, the "See full activity" link is
+   *  hidden — the embedded cost-over-time view still works on its own. */
+  onOpenActivityHistory?: (itemId: string, itemName: string) => void;
   /** Adds a new vendor to the org's registered list. Wired to VendorSelect's
    *  inline "+ Add" affordance so users can record a new vendor without
    *  bouncing to Settings first. */
@@ -77,6 +81,12 @@ type Draft = {
   reorderUrl: string;
   /** Optimistic-lock token. Empty string for new (not-yet-persisted) rows. */
   expectedLastUpdatedAt: string;
+  /** The inventory ROW this entry is stored on. Because pricing is aggregated
+   *  across lots for display, the edited entry may live on a different lot than
+   *  the one the modal opened — edits must target its own row so the optimistic
+   *  lock matches and we update in place instead of forking a new entry.
+   *  Empty for new entries (they're created on the opened row). */
+  sourceItemId: string;
 };
 
 const blankDraft = (): Draft => ({
@@ -91,6 +101,7 @@ const blankDraft = (): Draft => ({
   packCost: "",
   reorderUrl: "",
   expectedLastUpdatedAt: "",
+  sourceItemId: "",
 });
 
 const draftFromEntry = (entry: ItemVendorPricingEntry): Draft => {
@@ -111,6 +122,7 @@ const draftFromEntry = (entry: ItemVendorPricingEntry): Draft => {
     packCost: entry.packCost !== undefined ? formatCurrency(entry.packCost) : "",
     reorderUrl: entry.reorderUrl ?? "",
     expectedLastUpdatedAt: entry.lastUpdatedAt,
+    sourceItemId: entry.itemId,
   };
 };
 
@@ -182,6 +194,7 @@ export function ItemDetailModal({
   onPricingUpserted,
   onPricingDeleted,
   onAddVendor,
+  onOpenActivityHistory,
 }: ItemDetailModalProps) {
   const toast = useToast();
   /** Either the id of the row currently being edited, or "new" for the
@@ -299,8 +312,11 @@ export function ItemDetailModal({
 
     setSaving(true);
     try {
+      // Edits target the entry's own lot row (draft.sourceItemId); new entries
+      // are created on the row the modal opened (itemId).
+      const targetItemId = draft.sourceItemId || itemId;
       const entry = await upsertItemVendorPricing({
-        itemId,
+        itemId: targetItemId,
         vendor,
         ...(packCount !== undefined ? { packCount } : {}),
         ...(packAmount !== undefined ? { packAmount } : {}),
@@ -333,8 +349,14 @@ export function ItemDetailModal({
     if (!confirm(`Delete ${entry.vendor} pricing for ${itemName}?`)) return;
     setSaving(true);
     try {
-      await deleteItemVendorPricing(entry.id);
-      onPricingDeleted(entry.id);
+      // `pricing` holds every lot's raw entries; a vendor may have one per lot.
+      // Delete them all so removing a vendor sticks across the logical item
+      // (otherwise a sibling lot's entry would resurface on the next render).
+      const targets = pricing.filter((p) => p.vendorLower === entry.vendorLower);
+      for (const t of (targets.length > 0 ? targets : [entry])) {
+        await deleteItemVendorPricing(t.id);
+        onPricingDeleted(t.id);
+      }
       if (editing === entry.id) cancelEdit();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete pricing.");
@@ -343,10 +365,17 @@ export function ItemDetailModal({
     }
   };
 
-  const sortedPricing = useMemo(
-    () => [...pricing].sort((a, b) => a.vendor.localeCompare(b.vendor, undefined, { sensitivity: "base" })),
-    [pricing],
-  );
+  // `pricing` is the raw union across all lots of this logical item, so a
+  // vendor can appear more than once. Collapse to the freshest entry per vendor
+  // for display (mirrors the read-time aggregation used everywhere else).
+  const sortedPricing = useMemo(() => {
+    const freshest = new Map<string, ItemVendorPricingEntry>();
+    for (const p of pricing) {
+      const cur = freshest.get(p.vendorLower);
+      if (!cur || String(p.lastUpdatedAt) > String(cur.lastUpdatedAt)) freshest.set(p.vendorLower, p);
+    }
+    return [...freshest.values()].sort((a, b) => a.vendor.localeCompare(b.vendor, undefined, { sensitivity: "base" }));
+  }, [pricing]);
 
   // 1h.7: detect mixed-unit pricing across vendors. If two vendors sell
   // this item in non-comparable units — Costco in `lb` and the corner
@@ -356,11 +385,13 @@ export function ItemDetailModal({
   // record packCount) IS comparable on $/ct even if their bulk units
   // differ, so we treat that as fine.
   const mixedUnitWarning = useMemo(() => {
-    if (pricing.length < 2) return null;
+    // Compare the one-per-vendor display rows (sortedPricing), not the raw lot
+    // union — otherwise two lots of the same vendor could read as "mixed."
+    if (sortedPricing.length < 2) return null;
     const amountUnits = new Set(
-      pricing.map((p) => (p.packAmountUnit ?? "").trim()).filter((u) => u.length > 0),
+      sortedPricing.map((p) => (p.packAmountUnit ?? "").trim()).filter((u) => u.length > 0),
     );
-    const allHaveCount = pricing.every((p) => p.packCount !== undefined || p.packSize !== undefined);
+    const allHaveCount = sortedPricing.every((p) => p.packCount !== undefined || p.packSize !== undefined);
     // If every vendor has a count axis, $/ct is comparable across them
     // → no warning needed (different bulk units don't matter).
     if (allHaveCount) return null;
@@ -369,13 +400,13 @@ export function ItemDetailModal({
     if (amountUnits.size > 1) {
       return `This item is priced in different units across vendors (${Array.from(amountUnits).join(", ")}). Best-price comparison won't pick a winner.`;
     }
-    const someCount = pricing.some((p) => p.packCount !== undefined || p.packSize !== undefined);
-    const someAmount = pricing.some((p) => p.packAmount !== undefined);
+    const someCount = sortedPricing.some((p) => p.packCount !== undefined || p.packSize !== undefined);
+    const someAmount = sortedPricing.some((p) => p.packAmount !== undefined);
     if (someCount && someAmount) {
       return "This item has count-based and bulk-based vendors. Each price is shown per its own unit; they're not directly comparable.";
     }
     return null;
-  }, [pricing]);
+  }, [sortedPricing]);
 
   return (
     <div
@@ -391,14 +422,30 @@ export function ItemDetailModal({
             <h2 className="item-detail-modal-title">{itemName}</h2>
             <p className="item-detail-modal-subtitle">Vendor pricing</p>
           </div>
-          <button
-            type="button"
-            className="item-detail-modal-close"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
+          <div className="item-detail-modal-header-actions">
+            {/* History opens the full item history (Activity → Cost over time)
+             *  rather than an embedded popover — one canonical history surface,
+             *  and this is the easy way into it. */}
+            {onOpenActivityHistory ? (
+              <button
+                type="button"
+                className="button button-sm button-ghost item-detail-modal-history-btn"
+                onClick={() => onOpenActivityHistory(itemId, itemName)}
+                disabled={!!editing}
+                title="View this item's full history"
+              >
+                <History size={14} /> History
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="item-detail-modal-close"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
 
         <div className="item-detail-modal-body">

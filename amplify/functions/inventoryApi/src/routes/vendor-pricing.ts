@@ -31,6 +31,7 @@ import {
 import { ddb } from "../clients";
 import { json } from "../http";
 import { dimensionForUnit } from "../uom";
+import { buildAuditEvent, writeAuditEvents } from "../audit";
 import type {
   AccessContext,
   InventoryItemVendorPricing,
@@ -90,6 +91,11 @@ export const upsertVendorPricingFromReceive = async (
     /** 1h.7: unit for `packAmount` (must be a weight or volume unit). */
     packAmountUnit?: string;
     packCost?: number;
+    /** Per primary-unit cost from the receipt (e.g. $5.00/ct). When a direct
+     *  `packCost` isn't supplied, this is converted into one using the vendor's
+     *  known pack shape (× packCount or packAmount) so a price change entered at
+     *  receive time flows back onto the vendor's current price. */
+    unitCost?: number;
     reorderUrl?: string;
   },
 ): Promise<void> => {
@@ -99,6 +105,7 @@ export const upsertVendorPricingFromReceive = async (
     input.packCount === undefined &&
     input.packAmount === undefined &&
     input.packCost === undefined &&
+    input.unitCost === undefined &&
     !input.reorderUrl
   ) {
     return;
@@ -122,6 +129,29 @@ export const upsertVendorPricingFromReceive = async (
     /* best-effort — fall through to insert */
   }
 
+  // Resolve the pack cost to store. A receipt carries a per-primary-unit cost
+  // (`unitCost`); convert it to the pack cost using the vendor's known pack
+  // shape (preferring an incoming axis, else the existing row's) so a price
+  // changed at receive time updates the vendor's current price while leaving
+  // the pack shape alone. A directly-supplied `packCost` always wins.
+  let resolvedPackCost = input.packCost;
+  if (
+    resolvedPackCost === undefined
+    && input.unitCost !== undefined
+    && Number.isFinite(input.unitCost)
+    && input.unitCost >= 0
+  ) {
+    const effPackCount = input.packCount ?? existing.packCount ?? existing.packSize;
+    const effPackAmount = input.packAmount ?? existing.packAmount;
+    if (effPackCount !== undefined && effPackCount > 0) {
+      resolvedPackCost = input.unitCost * effPackCount;
+    } else if (effPackAmount !== undefined && effPackAmount > 0) {
+      resolvedPackCost = input.unitCost * effPackAmount;
+    } else {
+      resolvedPackCost = input.unitCost; // single / pack-of-one
+    }
+  }
+
   const merged: InventoryItemVendorPricing = {
     id,
     orgId: access.organizationId,
@@ -141,8 +171,8 @@ export const upsertVendorPricingFromReceive = async (
     ...(input.packAmountUnit !== undefined
       ? { packAmountUnit: input.packAmountUnit }
       : existing.packAmountUnit !== undefined ? { packAmountUnit: existing.packAmountUnit } : {}),
-    ...(input.packCost !== undefined
-      ? { packCost: input.packCost }
+    ...(resolvedPackCost !== undefined
+      ? { packCost: resolvedPackCost }
       : existing.packCost !== undefined ? { packCost: existing.packCost } : {}),
     // packLabel + reorderUrl: receive carries url (from order line) but not
     // label. Preserve label from existing row.
@@ -150,9 +180,12 @@ export const upsertVendorPricingFromReceive = async (
     ...(input.reorderUrl
       ? { reorderUrl: input.reorderUrl }
       : existing.reorderUrl ? { reorderUrl: existing.reorderUrl } : {}),
-    // Carry forward legacy fields (unitCost, packSize) so old rows that
-    // haven't been touched in the i modal don't lose data on receive.
-    ...(existing.unitCost !== undefined ? { unitCost: existing.unitCost } : {}),
+    // Legacy per-unit field: refresh it from the receipt's unit cost when
+    // present so readers that still prefer `unitCost` (e.g. the receive
+    // prefill) don't serve a stale price alongside the fresh packCost.
+    ...(input.unitCost !== undefined
+      ? { unitCost: input.unitCost }
+      : existing.unitCost !== undefined ? { unitCost: existing.unitCost } : {}),
     ...(existing.packSize !== undefined ? { packSize: existing.packSize } : {}),
     lastUpdatedAt: now,
     lastUpdatedByUserId: access.userId,
@@ -278,6 +311,19 @@ export const handleUpsertVendorPricing = async (ctx: RouteContext) => {
     lastUpdatedByUserId: access.userId,
   };
 
+  // Read the prior row before writing so we can tell whether the PRICE actually
+  // changed (a URL-only edit shouldn't log a price point) and derive the old
+  // $/unit for comparison. Best-effort — absence just means "treat as new".
+  let priorEntry: InventoryItemVendorPricing | undefined;
+  try {
+    const got = await ddb.send(
+      new GetCommand({ TableName: storage.vendorPricingTable, Key: { id } }),
+    );
+    if (got.Item && String(got.Item.orgId) === access.organizationId) {
+      priorEntry = got.Item as InventoryItemVendorPricing;
+    }
+  } catch { /* best-effort */ }
+
   const putCmd = expectAnyVersion
     ? new PutCommand({ TableName: storage.vendorPricingTable, Item: row })
     : new PutCommand({
@@ -309,6 +355,51 @@ export const handleUpsertVendorPricing = async (ctx: RouteContext) => {
       });
     }
     throw err;
+  }
+
+  // Record the price change on the item's audit history so cost-over-time and
+  // the activity feed reflect vendor-price edits — not just receipts. Derive
+  // $/unit the same way the receive path + UI do (count axis first, then bulk
+  // amount, else the pack cost stands as the unit cost). Best-effort: the save
+  // itself already succeeded, so a failed audit write must not fail the request.
+  const deriveUnit = (pc?: number, cnt?: number, amt?: number): number | undefined => {
+    if (pc === undefined || !Number.isFinite(pc)) return undefined;
+    if (cnt !== undefined && cnt > 0) return pc / cnt;
+    if (amt !== undefined && amt > 0) return pc / amt;
+    return pc;
+  };
+  const newUnit = deriveUnit(packCost, packCount, packAmount);
+  const priorPackCount = typeof priorEntry?.packCount === "number"
+    ? priorEntry.packCount
+    : (typeof priorEntry?.packSize === "number" ? priorEntry.packSize : undefined);
+  const oldUnit = deriveUnit(
+    typeof priorEntry?.packCost === "number" ? priorEntry.packCost : undefined,
+    priorPackCount,
+    typeof priorEntry?.packAmount === "number" ? priorEntry.packAmount : undefined,
+  );
+  if (
+    newUnit !== undefined && Number.isFinite(newUnit) && newUnit >= 0
+    && (oldUnit === undefined || Math.abs(newUnit - oldUnit) >= 0.005)
+  ) {
+    let itemName = "";
+    try {
+      const it = await ddb.send(new GetCommand({ TableName: storage.itemTable, Key: { id: itemId } }));
+      if (it.Item) {
+        try { itemName = String(JSON.parse(String(it.Item.valuesJson ?? "{}")).itemName ?? ""); } catch { /* ignore */ }
+      }
+    } catch { /* best-effort */ }
+    try {
+      await writeAuditEvents(storage.auditTable, [
+        buildAuditEvent(access, "VENDOR_PRICE_EDIT", itemId, itemName, {
+          vendor,
+          unitCost: newUnit,
+          ...(packCost !== undefined ? { packCost } : {}),
+          ...(packCount !== undefined ? { packCount } : {}),
+        }),
+      ]);
+    } catch (err) {
+      console.error("vendor price audit write failed", err);
+    }
   }
 
   return json(200, { entry: row });

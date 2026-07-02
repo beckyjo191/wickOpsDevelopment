@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchAuditFeed,
   fetchItemHistory,
+  fetchItemHistoryByName,
   fetchAuditAnalytics,
   fetchVendorBreakdown,
   fetchAnalyticsBreakdown,
@@ -12,9 +13,14 @@ import {
   undoColumnDeleteEvent,
   undoRetireEvent,
   undoUsageEvent,
+  ADJUST_REASON_LABEL,
+  type AdjustReason,
   type AuditEvent,
   type AuditAnalytics,
 } from "../lib/inventoryApi";
+import { buildLocationPickerEntries } from "../lib/locationTree";
+import { CustomDropdown } from "./shared/CustomDropdown";
+import { CostOverTime } from "./shared/CostOverTime";
 import {
   Activity,
   BarChart3,
@@ -44,6 +50,9 @@ interface AuditLogPageProps {
   /** Required for the Undo button on USAGE_APPROVE events. Mirrors the perm
    *  that lets the user log usage in the first place. */
   canEditInventory?: boolean;
+  /** Read-only WickOps support operator. Reveals the Analytics tab (normally
+   *  admin-gated) without exposing any write controls. */
+  isSupportView?: boolean;
   /** Called when the user clicks "Open in Inventory" from the item-history
    *  view. Parent handles switching to the Inventory tab and focusing the row.
    *  Passes the item name rather than id because we filter inventory via
@@ -57,6 +66,12 @@ interface AuditLogPageProps {
   /** Notifies parent of the current sub-tab so subnav-level UI (e.g. tab-aware
    *  help button) can react. Fires on mount and on every change. */
   onTabChange?: (tab: AuditTab) => void;
+  /** Deep-link target: when set (e.g. from the pricing modal's "See full
+   *  activity" link), open this item's history view on arrival. */
+  initialHistoryItem?: { itemId: string; itemName: string };
+  /** Called once the deep-link target has been consumed so the parent can
+   *  clear it (prevents re-opening on unrelated re-renders). */
+  onHistoryItemConsumed?: () => void;
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -89,6 +104,7 @@ const ACTION_LABELS: Record<string, string> = {
   RESTOCK_RECEIVED: "Order received",
   RESTOCK_ORDER_CLOSED: "Order closed",
   RESTOCK_ADDED: "Fast restock",
+  VENDOR_PRICE_EDIT: "Price updated",
   MIGRATION_APPLY: "Inventory upgraded",
 };
 
@@ -244,6 +260,7 @@ const ACTION_COLORS: Record<string, string> = {
   RESTOCK_RECEIVED: "var(--success)",
   RESTOCK_ORDER_CLOSED: "var(--text-muted)",
   RESTOCK_ADDED: "var(--success)",
+  VENDOR_PRICE_EDIT: "var(--primary)",
   MIGRATION_APPLY: "var(--text-muted)",
 };
 
@@ -309,6 +326,18 @@ function buildRichRowSummary(event: AuditEvent): string {
     return "Restocked";
   }
   if (derived === "ITEM_QTY_ADJUST") {
+    // Real ITEM_QTY_ADJUST events (manual reconciliation) carry
+    // qtyBefore/qtyAfter + a reason; legacy ones derived from a qty-only
+    // ITEM_EDIT only have a changes diff and no reason.
+    const reason = typeof details.reason === "string" ? details.reason : "";
+    const notes = typeof details.notes === "string" ? details.notes : "";
+    const notePart = notes ? ` ${formatNotePreview(notes)}` : "";
+    if (details.qtyBefore !== undefined && details.qtyAfter !== undefined) {
+      const base = `Qty ${formatFieldValue("quantity", details.qtyBefore)} → ${formatFieldValue("quantity", details.qtyAfter)}`;
+      const reasonLabel = reason ? ADJUST_REASON_LABEL[reason as AdjustReason] ?? reason : "";
+      const reasonPart = reasonLabel ? ` (${reasonLabel})` : "";
+      return `${base}${reasonPart}${notePart}`;
+    }
     const q = getVisibleEditChanges(event).find((c) => c.field === "quantity");
     if (q) return `Qty ${formatFieldValue("quantity", q.from)} → ${formatFieldValue("quantity", q.to)}`;
     return "Adjusted qty";
@@ -400,6 +429,14 @@ function buildRichRowSummary(event: AuditEvent): string {
     if (delta !== undefined && vendor) return `Fast restock +${delta} from ${vendor}`;
     if (delta !== undefined) return `Fast restock +${delta}`;
     return "Fast restock";
+  }
+  if (derived === "VENDOR_PRICE_EDIT") {
+    const vendor = typeof details.vendor === "string" ? details.vendor : "";
+    const cost = typeof details.unitCost === "number" ? details.unitCost : undefined;
+    const priced = cost !== undefined ? formatCurrency(cost) : "";
+    if (priced && vendor) return `Price set to ${priced} at ${vendor}`;
+    if (vendor) return `Price updated at ${vendor}`;
+    return "Price updated";
   }
   if (derived === "USAGE_SUBMIT") {
     const used = details.quantityUsed;
@@ -570,7 +607,11 @@ export type ActivityRowData = {
   orderId?: string;
 };
 
-export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<ActivityRowData>> {
+export function aggregateActivityRows(
+  events: AuditEvent[],
+  options?: { hasMultipleLocations?: boolean },
+): Array<DayBucket<ActivityRowData>> {
+  const hasMultipleLocations = !!options?.hasMultipleLocations;
   type Bucket = {
     events: AuditEvent[];
     lastTimestamp: string;
@@ -678,15 +719,68 @@ export function aggregateActivityRows(events: AuditEvent[]): Array<DayBucket<Act
       let summary: string;
       if (bucket.kind === "order") {
         // Synthetic per-order bucket — collapses all line-level events for
-        // one order into "Order placed/received — Vendor (N items)".
-        const distinctItems = new Set(
-          bucket.events.map((e) => String(e.itemId ?? "")).filter(Boolean),
-        );
-        const itemCount = distinctItems.size || bucket.events.length;
-        const verb = bucket.orderAction === "placed" ? "Order placed" : "Order received";
-        const vendorPart = bucket.vendor ? ` — ${bucket.vendor}` : "";
-        const countPart = ` (${itemCount} item${itemCount !== 1 ? "s" : ""})`;
-        summary = `${verb}${vendorPart}${countPart}`;
+        // one order into one row. Single-item orders surface the item
+        // name + qty inline; multi-item orders show count + total $.
+        const isPlaced = bucket.orderAction === "placed";
+        const qtyKey = isPlaced ? "qtyOrdered" : "qtyReceived";
+        const verb = isPlaced ? "Order placed" : "Order received";
+
+        // Roll up qty + spend per distinct item; also track distinct
+        // locations across the bucket's events so multi-station orgs can
+        // see "at Station 3" when all lines land at one location.
+        type Roll = { itemName: string; qty: number; spend: number };
+        const byItem = new Map<string, Roll>();
+        const distinctLocations = new Set<string>();
+        let totalSpend = 0;
+        for (const e of bucket.events) {
+          const key = String(e.itemId ?? "") || String(e.itemName ?? "");
+          if (!key) continue;
+          const qty = Number(e.details?.[qtyKey] ?? 0);
+          const unitCost = Number(e.details?.unitCost ?? 0);
+          const safeQty = Number.isFinite(qty) ? qty : 0;
+          const lineSpend = Number.isFinite(unitCost) && unitCost > 0 ? safeQty * unitCost : 0;
+          totalSpend += lineSpend;
+          const existing = byItem.get(key);
+          if (existing) {
+            existing.qty += safeQty;
+            existing.spend += lineSpend;
+          } else {
+            byItem.set(key, {
+              itemName: String(e.itemName ?? "").trim() || "Unnamed item",
+              qty: safeQty,
+              spend: lineSpend,
+            });
+          }
+          const locName = typeof e.details?.location === "string" ? e.details.location.trim() : "";
+          if (locName) distinctLocations.add(locName);
+        }
+        const itemCount = byItem.size || bucket.events.length;
+        const spendPart = totalSpend > 0 ? ` · ${formatUsd(totalSpend)}` : "";
+
+        // Location suffix only when (a) org has 2+ locations (single-loc
+        // orgs would just see "at Default" everywhere) and (b) every line
+        // resolves to one location. Multi-location orders rely on the
+        // drill-in for the per-line breakdown.
+        const singleLocation = hasMultipleLocations && distinctLocations.size === 1
+          ? [...distinctLocations][0]
+          : "";
+
+        if (itemCount === 1) {
+          const only = [...byItem.values()][0];
+          const qtyLabel = only.qty > 0 ? `${formatQty(only.qty)} ` : "";
+          const vendorPart = bucket.vendor ? ` from ${bucket.vendor}` : "";
+          const locationPart = singleLocation ? ` at ${singleLocation}` : "";
+          // "Order received — 5 IV Start Kit from BoundTree at Station 3 · $120"
+          summary = `${verb} — ${qtyLabel}${only.itemName}${vendorPart}${locationPart}${spendPart}`;
+        } else {
+          // "Order received — BoundTree at Station 3 (3 items · $245)"
+          // For multi-location orders the location chunk is omitted —
+          // drill in to see the per-line breakdown.
+          const vendorSuffix = bucket.vendor ? ` — ${bucket.vendor}` : "";
+          const locationSuffix = singleLocation ? ` at ${singleLocation}` : "";
+          const countLabel = `${itemCount} items${totalSpend > 0 ? ` · ${formatUsd(totalSpend)}` : ""}`;
+          summary = `${verb}${vendorSuffix}${locationSuffix} (${countLabel})`;
+        }
       } else if (bucket.events.length === 1) {
         const lone = bucket.events[0];
         // Special case: standalone RESTOCK_ORDER_CLOSED — relabel "cancelled"
@@ -783,6 +877,7 @@ function FlatActivityFeed({
   events,
   onViewItemHistory,
   onOpenInOrders,
+  hasMultipleLocations,
   onUndoEvent,
   undoingEventId,
 }: {
@@ -792,10 +887,14 @@ function FlatActivityFeed({
    *  cancelled). Jumps to the Orders tab and focuses the matching order,
    *  mirroring the item-history flow for item rows. */
   onOpenInOrders?: (orderId: string) => void;
+  /** When true, per-order rows append "at {locationName}" when all the
+   *  bucket's events resolve to one location. Hidden for single-location
+   *  orgs (Florence) so the row doesn't read "at Default" everywhere. */
+  hasMultipleLocations?: boolean;
   onUndoEvent?: (undoable: UndoableEvent | UndoableEvent[]) => void;
   undoingEventId?: string | null;
 }) {
-  const days = aggregateActivityRows(events);
+  const days = aggregateActivityRows(events, { hasMultipleLocations });
   return (
     <div className="audit-flat-feed">
       {days.map((day) => {
@@ -886,193 +985,6 @@ function FlatActivityFeed({
         </DaySection>
         );
       })}
-    </div>
-  );
-}
-
-/** Walks an item's audit events chronologically to reconstruct its effective
- *  unit cost over time. Three sources contribute:
- *   - ITEM_EDIT changes to unitCost / packCost / packSize (manual edits)
- *   - ITEM_CREATE initial values (initial pricing snapshot)
- *   - RESTOCK_RECEIVED / RESTOCK_ADDED / USAGE_APPROVE event details (the
- *     stamped per-unit cost at that operation)
- *  Effective cost prefers packCost / packSize when both are set, else falls
- *  back to unitCost — same derivation used in usage approval and analytics.
- *  Consecutive same-cost points are deduped so a flat line doesn't sprout
- *  redundant vertices. */
-type CostTimelinePoint = {
-  timestamp: string;
-  unitCost: number;
-  source: "edit" | "create" | "restock-received" | "restock-added" | "usage-approve";
-};
-
-function extractCostTimeline(events: AuditEvent[]): CostTimelinePoint[] {
-  let curUnitCost = 0;
-  let curPackCost = 0;
-  let curPackSize = 0;
-
-  const sorted = [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
-  const points: CostTimelinePoint[] = [];
-
-  const recordPoint = (timestamp: string, source: CostTimelinePoint["source"]) => {
-    const effective = curPackCost > 0 && curPackSize > 0
-      ? curPackCost / curPackSize
-      : curUnitCost;
-    if (effective <= 0) return;
-    const last = points[points.length - 1];
-    if (last && Math.abs(last.unitCost - effective) < 0.0001) return;
-    points.push({ timestamp, unitCost: effective, source });
-  };
-
-  for (const e of sorted) {
-    const details = e.details ?? {};
-    if (e.action === "ITEM_CREATE") {
-      const snap = (details.initialValues ?? details.snapshot ?? {}) as Record<string, unknown>;
-      const u = Number(snap.unitCost ?? 0);
-      const pc = Number(snap.packCost ?? 0);
-      const ps = Number(snap.packSize ?? 0);
-      if (Number.isFinite(u) && u > 0) curUnitCost = u;
-      if (Number.isFinite(pc) && pc > 0) curPackCost = pc;
-      if (Number.isFinite(ps) && ps > 0) curPackSize = ps;
-      recordPoint(e.timestamp, "create");
-      continue;
-    }
-    if (e.action === "ITEM_EDIT") {
-      const changes = Array.isArray(details.changes)
-        ? (details.changes as Array<{ field: string; from: unknown; to: unknown }>)
-        : [];
-      let touched = false;
-      for (const c of changes) {
-        if (c.field === "unitCost") {
-          const n = Number(c.to ?? 0);
-          curUnitCost = Number.isFinite(n) && n >= 0 ? n : 0;
-          touched = true;
-        } else if (c.field === "packCost") {
-          const n = Number(c.to ?? 0);
-          curPackCost = Number.isFinite(n) && n >= 0 ? n : 0;
-          touched = true;
-        } else if (c.field === "packSize") {
-          const n = Number(c.to ?? 0);
-          curPackSize = Number.isFinite(n) && n >= 0 ? n : 0;
-          touched = true;
-        }
-      }
-      if (touched) recordPoint(e.timestamp, "edit");
-      continue;
-    }
-    if (e.action === "RESTOCK_RECEIVED" || e.action === "RESTOCK_ADDED" || e.action === "USAGE_APPROVE") {
-      const stamped = Number(details.unitCost ?? 0);
-      if (Number.isFinite(stamped) && stamped > 0) {
-        curUnitCost = stamped;
-        // Restock cost takes precedence over a stale packCost/packSize ratio.
-        curPackCost = 0;
-        curPackSize = 0;
-        recordPoint(
-          e.timestamp,
-          e.action === "RESTOCK_RECEIVED" ? "restock-received"
-            : e.action === "RESTOCK_ADDED" ? "restock-added"
-              : "usage-approve",
-        );
-      }
-    }
-  }
-
-  return points;
-}
-
-/** Per-item unit cost trend. Renders a tiny SVG line chart with min/max/
- *  current callouts. Useful for "did paper towels cost more than they did
- *  six months ago?" Empty state when the item has no recorded prices yet. */
-function CostOverTimeChart({ events }: { events: AuditEvent[] }) {
-  const points = extractCostTimeline(events);
-
-  if (points.length === 0) {
-    return (
-      <div className="audit-cost-trend audit-cost-trend--empty">
-        <p className="audit-empty">
-          No cost history yet. Set a Unit Cost (or Pack Cost + Pack Size) on
-          this item, or receive an order with a price, and trend data will
-          appear here.
-        </p>
-      </div>
-    );
-  }
-
-  const costs = points.map((p) => p.unitCost);
-  const minCost = Math.min(...costs);
-  const maxCost = Math.max(...costs);
-  const current = costs[costs.length - 1];
-  const first = costs[0];
-  const deltaPct = first > 0 ? ((current - first) / first) * 100 : 0;
-  const span = maxCost - minCost;
-
-  const W = 100;
-  const H = 40;
-  const xFor = (i: number) => points.length === 1 ? W / 2 : (i / (points.length - 1)) * W;
-  const yFor = (cost: number) => span === 0 ? H / 2 : H - ((cost - minCost) / span) * H;
-  const pathD = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${xFor(i)} ${yFor(p.unitCost)}`)
-    .join(" ");
-
-  const sourceLabel: Record<CostTimelinePoint["source"], string> = {
-    "create": "Initial price",
-    "edit": "Manual edit",
-    "restock-received": "Order received",
-    "restock-added": "Fast restock",
-    "usage-approve": "Usage logged",
-  };
-
-  return (
-    <div className="audit-cost-trend">
-      <div className="audit-cost-trend-stats">
-        <div className="audit-cost-trend-stat">
-          <span className="audit-cost-trend-stat-label">Current</span>
-          <span className="audit-cost-trend-stat-value">{formatCurrency(current)}</span>
-        </div>
-        <div className="audit-cost-trend-stat">
-          <span className="audit-cost-trend-stat-label">Lowest</span>
-          <span className="audit-cost-trend-stat-value">{formatCurrency(minCost)}</span>
-        </div>
-        <div className="audit-cost-trend-stat">
-          <span className="audit-cost-trend-stat-label">Highest</span>
-          <span className="audit-cost-trend-stat-value">{formatCurrency(maxCost)}</span>
-        </div>
-        {points.length > 1 ? (
-          <div className="audit-cost-trend-stat">
-            <span className="audit-cost-trend-stat-label">Change</span>
-            <span
-              className="audit-cost-trend-stat-value"
-              style={{ color: deltaPct > 0 ? "var(--danger)" : deltaPct < 0 ? "var(--success)" : "var(--text)" }}
-            >
-              {deltaPct > 0 ? "+" : ""}{deltaPct.toFixed(1)}%
-            </span>
-          </div>
-        ) : null}
-      </div>
-      <svg className="audit-cost-trend-chart" viewBox={`-2 -2 ${W + 4} ${H + 4}`} preserveAspectRatio="none">
-        {points.length > 1 ? (
-          <path d={pathD} fill="none" stroke="var(--primary)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-        ) : null}
-        {points.map((p, i) => (
-          <circle key={i} cx={xFor(i)} cy={yFor(p.unitCost)} r="1.5" fill="var(--primary)" vectorEffect="non-scaling-stroke">
-            <title>
-              {new Date(p.timestamp).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-              : {formatCurrency(p.unitCost)} ({sourceLabel[p.source]})
-            </title>
-          </circle>
-        ))}
-      </svg>
-      <ol className="audit-cost-trend-points">
-        {points.slice().reverse().map((p, i) => (
-          <li key={`${p.timestamp}-${i}`} className="audit-cost-trend-point">
-            <span className="audit-cost-trend-point-date">
-              {new Date(p.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
-            </span>
-            <span className="audit-cost-trend-point-cost">{formatCurrency(p.unitCost)}</span>
-            <span className="audit-cost-trend-point-source">{sourceLabel[p.source]}</span>
-          </li>
-        ))}
-      </ol>
     </div>
   );
 }
@@ -1201,6 +1113,9 @@ const REASON_LABELS: Record<string, string> = {
   recalled: "Recalled",
   discontinued: "Discontinued",
   donated: "Donated",
+  // Loss-kind adjustment reason (manual reconciliation). "damaged" shares the
+  // bucket above; shrinkage is adjustment-only.
+  shrinkage: "Shrinkage",
   unknown: "Unknown",
 };
 
@@ -1547,12 +1462,13 @@ function VendorDrillInPanel({
  *  Includes a search box for long lists and an Export CSV button so buyers
  *  can grab the raw numbers without us needing to build per-column sort
  *  primitives. */
-type BreakdownScope = "purchased" | "used" | "vendors";
+type BreakdownScope = "purchased" | "used" | "vendors" | "retired";
 
 const BREAKDOWN_TITLES: Record<BreakdownScope, string> = {
   purchased: "All items by purchase cost",
   used: "All items used",
   vendors: "All vendors by spend",
+  retired: "All items retired",
 };
 
 function downloadCsv(filename: string, rows: string[][]) {
@@ -1597,8 +1513,12 @@ function BreakdownDrawer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  /** "Used" scope shows two axes (qty + $); user toggles between them. */
-  const [usedSortBy, setUsedSortBy] = useState<"qty" | "cost">("qty");
+  /** Dual-axis scopes (Used, Retired) carry both qty + $; this toggle picks
+   *  which axis the rows sort by. For Retired the default is "cost" since
+   *  that's the primary question ("which items cost us most to retire?"). */
+  const [dualAxisSortBy, setDualAxisSortBy] = useState<"qty" | "cost">(
+    scope === "retired" ? "cost" : "qty",
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1629,16 +1549,28 @@ function BreakdownDrawer({
     }));
   } else if (data?.scope === "used") {
     const sorted = [...data.items].sort((a, b) =>
-      usedSortBy === "cost" ? b.cost - a.cost : b.qtyUsed - a.qtyUsed,
+      dualAxisSortBy === "cost" ? b.cost - a.cost : b.qtyUsed - a.qtyUsed,
     );
     rows = sorted.map((r) => ({
       key: r.itemId || r.itemName,
       label: r.itemName,
-      value: usedSortBy === "cost" ? r.cost : r.qtyUsed,
+      value: dualAxisSortBy === "cost" ? r.cost : r.qtyUsed,
       itemId: r.itemId,
       row: r as unknown as Record<string, unknown>,
     }));
-    valueFormatter = usedSortBy === "cost" ? formatUsd : formatQty;
+    valueFormatter = dualAxisSortBy === "cost" ? formatUsd : formatQty;
+  } else if (data?.scope === "retired") {
+    const sorted = [...data.items].sort((a, b) =>
+      dualAxisSortBy === "cost" ? b.value - a.value : b.qtyRetired - a.qtyRetired,
+    );
+    rows = sorted.map((r) => ({
+      key: r.itemId || r.itemName,
+      label: r.itemName,
+      value: dualAxisSortBy === "cost" ? r.value : r.qtyRetired,
+      itemId: r.itemId,
+      row: r as unknown as Record<string, unknown>,
+    }));
+    valueFormatter = dualAxisSortBy === "cost" ? formatUsd : formatQty;
   } else if (data?.scope === "vendors") {
     rows = data.vendors.map((r) => ({
       key: r.vendor,
@@ -1667,6 +1599,12 @@ function BreakdownDrawer({
     if (data?.scope === "used") {
       const header = ["Item", "Qty used", "Cost"];
       const body = data.items.map((r) => [r.itemName, String(r.qtyUsed), formatMoneyCsv(r.cost)]);
+      downloadCsv(filename, [header, ...body]);
+      return;
+    }
+    if (data?.scope === "retired") {
+      const header = ["Item", "Qty retired", "Value"];
+      const body = data.items.map((r) => [r.itemName, String(r.qtyRetired), formatMoneyCsv(r.value)]);
       downloadCsv(filename, [header, ...body]);
       return;
     }
@@ -1718,23 +1656,23 @@ function BreakdownDrawer({
                   onChange={(e) => setSearch(e.currentTarget.value)}
                 />
               </label>
-              {scope === "used" ? (
+              {(scope === "used" || scope === "retired") ? (
                 <div className="audit-breakdown-axis-toggle" role="tablist" aria-label="Sort axis">
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={usedSortBy === "qty"}
-                    className={`audit-top-items-tab ${usedSortBy === "qty" ? "is-active" : ""}`}
-                    onClick={() => setUsedSortBy("qty")}
+                    aria-selected={dualAxisSortBy === "qty"}
+                    className={`audit-top-items-tab ${dualAxisSortBy === "qty" ? "is-active" : ""}`}
+                    onClick={() => setDualAxisSortBy("qty")}
                   >
                     Qty
                   </button>
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={usedSortBy === "cost"}
-                    className={`audit-top-items-tab ${usedSortBy === "cost" ? "is-active" : ""}`}
-                    onClick={() => setUsedSortBy("cost")}
+                    aria-selected={dualAxisSortBy === "cost"}
+                    className={`audit-top-items-tab ${dualAxisSortBy === "cost" ? "is-active" : ""}`}
+                    onClick={() => setDualAxisSortBy("cost")}
                   >
                     $
                   </button>
@@ -1820,7 +1758,7 @@ function AnalyticsDashboard({
   onOpenBreakdown?: (scope: BreakdownScope) => void;
 }) {
   const titleSuffix = locationName ? ` · ${locationName}` : "";
-  const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, lossByReason } = analytics;
+  const { totals, usageOverTime, byVendor, bySpendItem, byUsageItem, byRetiredItem, lossByReason } = analytics;
   const previous = analytics.previous;
 
   // Top items chart toggle. Three lenses on the same item set:
@@ -1830,6 +1768,10 @@ function AnalyticsDashboard({
   // One card, one mental model: "rank items by …".
   type TopItemsView = "purchased" | "usedCost" | "usedQty";
   const [topItemsView, setTopItemsView] = useState<TopItemsView>("purchased");
+  // Top retired items chart toggle. Default to $ since the primary
+  // question for "what's being thrown out" is the financial impact.
+  type RetiredItemsView = "cost" | "qty";
+  const [retiredItemsView, setRetiredItemsView] = useState<RetiredItemsView>("cost");
 
   const hasData =
     totals.qtyUsed > 0
@@ -2043,23 +1985,98 @@ function AnalyticsDashboard({
         </section>
       ) : null}
 
-      {/* Retired section — only renders when there's actually retired stock to report. */}
-      {lossRows.length > 0 ? (
+      {/* Retired section — top retired items (tabbed by $ / qty) paired
+          with the per-reason breakdown. Only renders when there's actually
+          retired stock to report. */}
+      {(lossRows.length > 0 || byRetiredItem.length > 0) ? (
         <section className="audit-analytics-section">
           <h3 className="audit-analytics-section-title">Retired{titleSuffix}</h3>
-          <SimpleBarChart
-            data={lossRows as unknown as Array<Record<string, unknown>>}
-            labelKey="reasonLabel"
-            valueKey="qty"
-            title="Retired qty by reason"
-            formatValue={formatQty}
-            rowKey={(row) => String(row.reason)}
-            rowDelta={prevLossByReason ? (row) => computeDelta(
-              Number(row.qty ?? 0),
-              prevLossByReason.get(String(row.reason ?? "")),
-              true,
-            ) : undefined}
-          />
+          <div className="audit-analytics-grid">
+            <div className="audit-top-items-card">
+              <div className="audit-top-items-tabs" role="tablist" aria-label="Top retired items view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={retiredItemsView === "cost"}
+                  className={`audit-top-items-tab ${retiredItemsView === "cost" ? "is-active" : ""}`}
+                  onClick={() => setRetiredItemsView("cost")}
+                >
+                  Cost ($)
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={retiredItemsView === "qty"}
+                  className={`audit-top-items-tab ${retiredItemsView === "qty" ? "is-active" : ""}`}
+                  onClick={() => setRetiredItemsView("qty")}
+                >
+                  Qty
+                </button>
+              </div>
+              {retiredItemsView === "cost" ? (
+                <SimpleBarChart
+                  data={[...byRetiredItem]
+                    .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+                    .slice(0, 10) as unknown as Array<Record<string, unknown>>}
+                  labelKey="itemName"
+                  valueKey="value"
+                  title="What we threw out ($)"
+                  formatValue={formatUsd}
+                  onRowClick={onViewItemHistory ? (row) => {
+                    const itemId = String(row.itemId ?? "");
+                    const itemName = String(row.itemName ?? "");
+                    if (itemId) onViewItemHistory(itemId, itemName);
+                  } : undefined}
+                  rowKey={(row) => String(row.itemId ?? row.itemName)}
+                  emptyHint="No priced retires in this period. Set unit costs on items to value loss."
+                  viewAllCount={analytics.totalCounts?.byRetiredItem}
+                  onViewAll={onOpenBreakdown ? () => onOpenBreakdown("retired") : undefined}
+                />
+              ) : (
+                <SimpleBarChart
+                  data={[...byRetiredItem]
+                    .sort((a, b) => (b.qtyRetired ?? 0) - (a.qtyRetired ?? 0))
+                    .slice(0, 10) as unknown as Array<Record<string, unknown>>}
+                  labelKey="itemName"
+                  valueKey="qtyRetired"
+                  title="What we threw out (qty)"
+                  formatValue={formatQty}
+                  onRowClick={onViewItemHistory ? (row) => {
+                    const itemId = String(row.itemId ?? "");
+                    const itemName = String(row.itemName ?? "");
+                    if (itemId) onViewItemHistory(itemId, itemName);
+                  } : undefined}
+                  rowKey={(row) => String(row.itemId ?? row.itemName)}
+                  emptyHint="No retires in this period."
+                  viewAllCount={analytics.totalCounts?.byRetiredItem}
+                  onViewAll={onOpenBreakdown ? () => onOpenBreakdown("retired") : undefined}
+                />
+              )}
+            </div>
+            <SimpleBarChart
+              data={lossRows as unknown as Array<Record<string, unknown>>}
+              labelKey="reasonLabel"
+              valueKey="qty"
+              title="Retired by reason"
+              formatValue={(qty) => {
+                // Find the matching row to surface "$X" alongside the qty.
+                // SimpleBarChart only passes the value through formatValue,
+                // not the whole row, so we look up by exact qty match —
+                // safe here because reasons are distinct and the values
+                // differ per reason in the common case.
+                const row = lossRows.find((r) => r.qty === qty);
+                if (!row || !row.value || row.value <= 0) return formatQty(qty);
+                return `${formatQty(qty)} · ${formatUsd(row.value)}`;
+              }}
+              rowKey={(row) => String(row.reason)}
+              rowDelta={prevLossByReason ? (row) => computeDelta(
+                Number(row.qty ?? 0),
+                prevLossByReason.get(String(row.reason ?? "")),
+                true,
+              ) : undefined}
+              emptyHint="No retires in this period."
+            />
+          </div>
         </section>
       ) : null}
     </>
@@ -2068,9 +2085,11 @@ function AnalyticsDashboard({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInventory, onOpenInOrders, onTabChange }: AuditLogPageProps) {
+export function AuditLogPage({ canManageColumns, canEditInventory, isSupportView, onOpenInInventory, onOpenInOrders, onTabChange, initialHistoryItem, onHistoryItemConsumed }: AuditLogPageProps) {
   const { isMobile } = useMobileDetect();
   const [tab, setTab] = useState<AuditTab>("feed");
+  // Analytics is normally admin-only; a read-only support operator may view it.
+  const canViewAnalytics = canManageColumns || !!isSupportView;
 
   // Notify parent of active sub-tab so subnav-level help can react.
   useEffect(() => {
@@ -2187,7 +2206,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
   const [analyticsRefreshKey] = useState(0);
 
   useEffect(() => {
-    if (tab === "analytics" && canManageColumns) {
+    if (tab === "analytics" && canViewAnalytics) {
       setAnalyticsLoading(true);
       fetchAuditAnalytics({
         period: analyticsPeriod,
@@ -2197,13 +2216,15 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
         .catch(() => setAnalytics(null))
         .finally(() => setAnalyticsLoading(false));
     }
-  }, [tab, analyticsPeriod, analyticsLocationId, canManageColumns, analyticsRefreshKey]);
+  }, [tab, analyticsPeriod, analyticsLocationId, canViewAnalytics, analyticsRefreshKey]);
 
-  // Lazy-load locations the first time the Analytics tab opens. Single-
-  // location orgs get a list of length 1; the location selector renders
-  // nothing in that case so the UI stays clean.
+  // Lazy-load locations on first mount. Both the Activity feed (order rows
+  // append "at {location}" suffix when org has 2+ locations) and the
+  // Analytics tab (location filter dropdown) consume the list. Single-
+  // location orgs get a length-1 list, so the location selector and the
+  // suffix both auto-hide.
   useEffect(() => {
-    if (tab !== "analytics" || !canManageColumns) return;
+    if (!canManageColumns) return;
     if (analyticsLocations.length > 0) return;
     listInventoryLocations()
       .then((locs) => {
@@ -2215,7 +2236,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
         }
       })
       .catch(() => { /* dropdown stays empty; fetchAnalytics still works org-wide */ });
-  }, [tab, canManageColumns, analyticsLocations.length, analyticsLocationId, setAnalyticsLocationId]);
+  }, [canManageColumns, analyticsLocations.length, analyticsLocationId, setAnalyticsLocationId]);
 
   const viewItemHistory = useCallback(async (itemId: string, itemName: string) => {
     setTab("item-history");
@@ -2224,7 +2245,9 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
     setHistorySubTab("events");
     setHistoryLoading(true);
     try {
-      const res = await fetchItemHistory(itemId, { limit: 50 });
+      // By NAME so multi-lot items read as one item (all lots merged). The
+      // endpoint returns a bounded merged list — no cursor paging.
+      const res = await fetchItemHistoryByName(itemName);
       setHistoryEvents(res.events ?? []);
       setHistoryCursor(res.nextCursor);
     } catch {
@@ -2233,6 +2256,16 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
       setHistoryLoading(false);
     }
   }, []);
+
+  // Deep-link consumption: when the parent hands us a target item (e.g. from
+  // the pricing modal's "See full activity" link), open its history on the
+  // Cost-over-time sub-tab, then clear the target so it doesn't re-fire.
+  useEffect(() => {
+    if (!initialHistoryItem) return;
+    void viewItemHistory(initialHistoryItem.itemId, initialHistoryItem.itemName)
+      .then(() => setHistorySubTab("cost"));
+    onHistoryItemConsumed?.();
+  }, [initialHistoryItem, viewItemHistory, onHistoryItemConsumed]);
 
   const loadMoreHistory = useCallback(async () => {
     if (!historyItemId || !historyCursor) return;
@@ -2291,8 +2324,8 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
         // visible), so the Undo button hides immediately without another click.
         if (tab === "feed") {
           await loadFeed(false);
-        } else if (tab === "item-history" && historyItemId) {
-          const res = await fetchItemHistory(historyItemId, { limit: 50 });
+        } else if (tab === "item-history" && historyItemName) {
+          const res = await fetchItemHistoryByName(historyItemName);
           setHistoryEvents(res.events ?? []);
           setHistoryCursor(res.nextCursor);
         }
@@ -2346,7 +2379,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
         >
           <Activity size={16} /> Activity
         </button>
-        {canManageColumns && (
+        {canViewAnalytics && (
           <button
             type="button"
             className={`audit-tab${tab === "analytics" ? " active" : ""}`}
@@ -2456,6 +2489,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
                 events={visibleEvents}
                 onViewItemHistory={viewItemHistory}
                 onOpenInOrders={onOpenInOrders}
+                hasMultipleLocations={analyticsLocations.length > 1}
                 onUndoEvent={undoCallback}
                 undoingEventId={undoingEventId}
               />
@@ -2464,6 +2498,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
                 events={visibleEvents}
                 onViewItemHistory={viewItemHistory}
                 onOpenInOrders={onOpenInOrders}
+                hasMultipleLocations={analyticsLocations.length > 1}
                 onUndoEvent={undoCallback}
                 undoingEventId={undoingEventId}
               />
@@ -2549,7 +2584,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
           )}
 
           {historySubTab === "cost" && historyEvents.length > 0 && (
-            <CostOverTimeChart events={historyEvents} />
+            <CostOverTime events={historyEvents} />
           )}
 
           {historySubTab === "events"
@@ -2567,7 +2602,7 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
         </div>
       )}
 
-      {tab === "analytics" && canManageColumns && (
+      {tab === "analytics" && canViewAnalytics && (
         <div className="audit-analytics">
           {/* Location (scope) on the left, period (window) on the right.
               Reads "Station 3, last 30 days" — location is the primary lens,
@@ -2577,17 +2612,23 @@ export function AuditLogPage({ canManageColumns, canEditInventory, onOpenInInven
             {analyticsLocations.length > 1 && (
               <label className="audit-location-selector">
                 <MapPin size={14} className="audit-location-selector-icon" aria-hidden="true" />
-                <select
-                  className="field"
+                {/* Stations are selectable (roll-up across their cabinets, shown
+                    as "· all") in addition to each leaf — matching the Reorder
+                    picker. The backend expands a station id to its subtree. */}
+                <CustomDropdown
+                  ariaLabel="Filter analytics by location"
                   value={analyticsLocationId}
-                  onChange={(e) => setAnalyticsLocationId(e.currentTarget.value)}
-                  aria-label="Filter analytics by location"
-                >
-                  <option value="">All locations</option>
-                  {analyticsLocations.map((loc) => (
-                    <option key={loc.id} value={loc.id}>{loc.name}</option>
-                  ))}
-                </select>
+                  onChange={(next) => setAnalyticsLocationId(next)}
+                  options={[
+                    { value: "", label: "All locations" },
+                    ...buildLocationPickerEntries(analyticsLocations).map((entry) => ({
+                      value: entry.id,
+                      label: entry.label,
+                      depth: entry.depth,
+                      ...(entry.isStation ? { hint: "· all" } : {}),
+                    })),
+                  ]}
+                />
               </label>
             )}
             <label className="audit-period-dropdown">

@@ -33,6 +33,7 @@ export type InventoryDesktopTableProps = {
   onSetSelectedRowId: (rowId: string) => void;
   onSortColumn: (column: InventoryColumn) => void;
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
+  onRequestAdjustQuantity?: (rowId: string) => void;
   sortState: { key: string; direction: SortDirection } | null;
   columnWidths: Record<string, number>;
   getAppliedColumnWidth: (column: InventoryColumn) => number;
@@ -95,6 +96,7 @@ export function InventoryDesktopTable({
   onSetSelectedRowId,
   onSortColumn,
   onCellChange,
+  onRequestAdjustQuantity,
   sortState,
   getAppliedColumnWidth,
   getColumnMinWidth,
@@ -342,6 +344,7 @@ export function InventoryDesktopTable({
                     isEditingLink={isEditingLinkCell(row.id, column.key)}
                     isEditingDate={isEditingDateCell(row.id, column.key)}
                     onCellChange={onCellChange}
+                    onRequestAdjustQuantity={onRequestAdjustQuantity}
                     onLinkEditStart={(rowId, columnKey) => setEditingLinkCell({ rowId, columnKey })}
                     onLinkEditEnd={() => setEditingLinkCell(null)}
                     onDateEditStart={(rowId, columnKey) => setEditingDateCell({ rowId, columnKey })}

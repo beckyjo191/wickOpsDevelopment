@@ -47,6 +47,7 @@ export type InventoryMobileCardsProps = {
    *  only) — Remove works on any row, dialog handles routing. */
   onRequestRemoveRow: (rowId: string) => void;
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
+  onRequestAdjustQuantity?: (rowId: string) => void;
   getReadOnlyCellText: (column: InventoryColumn, value: unknown) => string;
   toDateInputValue: (raw: unknown) => string;
   normalizeLinkValue: (value: string) => string;
@@ -93,6 +94,7 @@ export function InventoryMobileCards({
   onRequestRemove,
   onRequestRemoveRow,
   onCellChange,
+  onRequestAdjustQuantity,
   getReadOnlyCellText,
   toDateInputValue,
   normalizeLinkValue,
@@ -311,6 +313,7 @@ export function InventoryMobileCards({
                         variant="mobile"
                         isEditingLink={isEditingLinkCell(row.id, column.key)}
                         onCellChange={onCellChange}
+                        onRequestAdjustQuantity={onRequestAdjustQuantity}
                         onLinkEditStart={(rowId, columnKey) => setEditingLinkCell({ rowId, columnKey })}
                         onLinkEditEnd={() => setEditingLinkCell(null)}
                         getReadOnlyCellText={getReadOnlyCellText}

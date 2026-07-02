@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type Dispatch, type SetStateAction } from "react";
+import { Fragment, useEffect, useMemo, useState, type CSSProperties, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import {
   DndContext,
   closestCenter,
@@ -7,6 +7,9 @@ import {
   useSensor,
   useSensors,
   type DragEndEvent,
+  type DragMoveEvent,
+  type DragOverEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -34,6 +37,9 @@ import {
   removeInventoryLocation,
   removeInventoryVendor,
   renameInventoryLocation,
+  reorderInventoryLocations,
+  moveInventoryItems,
+  setInventoryLocationParent,
   renameInventoryVendor,
   revokeUserAccess,
   syncCurrentUserEmail,
@@ -59,10 +65,14 @@ import {
   resendInvite,
   type PendingInvite,
 } from "../lib/invitesApi";
-import { AlertTriangle, ChevronRight, GripVertical, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, GripVertical, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 import { useToast } from "./shared/Toast";
 import { ConfirmDialog } from "./shared/ConfirmDialog";
+import { AddNameDialog } from "./shared/AddNameDialog";
 import { LocationPickerDialog } from "./inventory/LocationPickerDialog";
+import { buildLocationTree, buildLocationPickerEntries, locationsInScope } from "../lib/locationTree";
+import { isExpired } from "../lib/expiration";
+import { CustomDropdown } from "./shared/CustomDropdown";
 import { AddColumnDialog } from "./inventory/AddColumnDialog";
 import { SupportAccessCard } from "./SupportAccessCard";
 
@@ -97,6 +107,10 @@ interface SettingsPageProps {
   canManageModuleAccess: boolean;
   /** True only for the org OWNER. Gates the support-access consent card. */
   isOrgOwner: boolean;
+  /** Read-only WickOps support operator viewing a customer org. Reveals config
+   *  lists (locations/vendors/columns) read-only in place of the admin-only
+   *  placeholders, with no management controls. */
+  isSupportView?: boolean;
   currentUserId: string;
   /** Org identity — embedded into support-contact emails so tickets
    *  self-identify which org to look up in the support console. */
@@ -128,6 +142,7 @@ export function SettingsPage({
   canManageInventoryColumns,
   canManageModuleAccess,
   isOrgOwner,
+  isSupportView = false,
   currentUserId,
   organizationId,
   orgName,
@@ -180,19 +195,30 @@ export function SettingsPage({
   const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "done" | "error">("idle");
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [inventoryRows, setInventoryRows] = useState<InventoryRow[]>([]);
-  const [newLocationName, setNewLocationName] = useState("");
+  const [locationSearchTerm, setLocationSearchTerm] = useState("");
+  const [showLocationAdd, setShowLocationAdd] = useState(false);
   const [savingLocation, setSavingLocation] = useState(false);
-  const [locationError, setLocationError] = useState<string | null>(null);
+  const [reorderingLocations, setReorderingLocations] = useState(false);
+  /** Primary whose "Add sublocation" inline input is open (null = none). */
+  const [subParentId, setSubParentId] = useState<string | null>(null);
+  const [newSubName, setNewSubName] = useState("");
+  const [subError, setSubError] = useState<string | null>(null);
+  /** Location whose "Move all contents" dialog is open (null = closed). */
+  const [moveContentsSource, setMoveContentsSource] = useState<InventoryLocation | null>(null);
+  const [moveContentsDestId, setMoveContentsDestId] = useState("");
+  const [movingContents, setMovingContents] = useState(false);
+  const [moveContentsError, setMoveContentsError] = useState<string | null>(null);
   /** Currently-edited location id (rename inline). Null when not editing. */
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [editingLocationValue, setEditingLocationValue] = useState("");
   const [renameLocationError, setRenameLocationError] = useState<string | null>(null);
   const [pendingDeleteLocationId, setPendingDeleteLocationId] = useState<string | null>(null);
   const [deleteLocationError, setDeleteLocationError] = useState<string | null>(null);
+  const [reparentError, setReparentError] = useState<string | null>(null);
   const [registeredVendors, setRegisteredVendors] = useState<string[]>([]);
-  const [newVendorName, setNewVendorName] = useState("");
+  const [vendorSearchTerm, setVendorSearchTerm] = useState("");
+  const [showVendorAdd, setShowVendorAdd] = useState(false);
   const [savingVendor, setSavingVendor] = useState(false);
-  const [vendorError, setVendorError] = useState<string | null>(null);
   const [editingVendorName, setEditingVendorName] = useState<string | null>(null);
   const [editingVendorValue, setEditingVendorValue] = useState("");
   const [renameVendorError, setRenameVendorError] = useState<string | null>(null);
@@ -251,7 +277,7 @@ export function SettingsPage({
   }, [currentUserEmail]);
 
   useEffect(() => {
-    if (!canManageModuleAccess) return;
+    if (!canManageModuleAccess && !isSupportView) return;
     let cancelled = false;
 
     const loadModuleAccess = async () => {
@@ -273,7 +299,7 @@ export function SettingsPage({
     return () => {
       cancelled = true;
     };
-  }, [canManageModuleAccess]);
+  }, [canManageModuleAccess, isSupportView]);
 
   useEffect(() => {
     if (!canManageModuleAccess) return;
@@ -370,32 +396,120 @@ export function SettingsPage({
     (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name),
   );
 
+  // Flatten the location tree into a render order: each station/root, then its
+  // child leaves immediately beneath it. Drives the grouped Settings list.
+  const orderedLocations = useMemo<{ loc: InventoryLocation; depth: 0 | 1 }[]>(() => {
+    const rows: { loc: InventoryLocation; depth: 0 | 1 }[] = [];
+    for (const node of buildLocationTree(locations)) {
+      rows.push({ loc: node.location, depth: 0 });
+      for (const child of node.children) rows.push({ loc: child, depth: 1 });
+    }
+    return rows;
+  }, [locations]);
+
+  // Search-filtered tree for the Locations list. A primary shows if it or any
+  // of its sublocations match; non-matching sublocations are hidden. Drag is
+  // disabled while a search is active (mirrors the Columns list).
+  const isLocationSearching = locationSearchTerm.trim().length > 0;
+  const filteredLocationTree = useMemo(() => {
+    const tree = buildLocationTree(locations);
+    const q = locationSearchTerm.trim().toLowerCase();
+    if (!q) return tree;
+    const matches = (l: InventoryLocation) => l.name.toLowerCase().includes(q);
+    return tree
+      .map((node) => {
+        if (matches(node.location)) return node;
+        const kids = node.children.filter(matches);
+        return kids.length ? { ...node, children: kids } : null;
+      })
+      .filter((n): n is NonNullable<typeof n> => n !== null);
+  }, [locations, locationSearchTerm]);
+
+  // ── Drag-to-reorder + re-home ────────────────────────────────────────────
+  // Dragging vertically reorders; dragging horizontally changes nesting (drag
+  // left → top level, drag right under a primary → nested). Standard dnd-kit
+  // "sortable tree" projection, clamped to two levels. Replaces the old
+  // per-row "Move under…" dropdown.
+  const LOCATION_INDENT_PX = 24;
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [overDragId, setOverDragId] = useState<string | null>(null);
+  const [dragOffsetLeft, setDragOffsetLeft] = useState(0);
+
+  const flatLocationItems = useMemo(
+    () => orderedLocations.map(({ loc, depth }) => ({
+      id: loc.id,
+      depth,
+      parentId: (loc.parentLocationId ?? "").trim() || null,
+    })),
+    [orderedLocations],
+  );
+
+  /** Projected drop target: the depth + parent the active row would land at,
+   *  plus the resulting full ordering. Null when not dragging. */
+  const dragProjection = useMemo(() => {
+    if (!activeDragId || !overDragId) return null;
+    const items = flatLocationItems;
+    const activeIndex = items.findIndex((i) => i.id === activeDragId);
+    const overIndex = items.findIndex((i) => i.id === overDragId);
+    if (activeIndex < 0 || overIndex < 0) return null;
+    const activeItem = items[activeIndex];
+    const newItems = arrayMove(items, activeIndex, overIndex);
+    const prev = newItems[overIndex - 1];
+    const next = newItems[overIndex + 1];
+    // A location that has its own sublocations can't be nested (would be 3 levels).
+    const activeHasChildren = locations.some((l) => (l.parentLocationId ?? "") === activeItem.id);
+    const dragDepth = Math.round(dragOffsetLeft / LOCATION_INDENT_PX);
+    const projected = activeItem.depth + dragDepth;
+    const maxDepth = activeHasChildren ? 0 : (prev ? Math.min(prev.depth + 1, 1) : 0);
+    const minDepth = next ? next.depth : 0;
+    let depth = Math.max(minDepth, Math.min(projected, maxDepth));
+    depth = Math.max(0, Math.min(1, depth)) as 0 | 1;
+    let parentId: string | null = null;
+    if (depth > 0 && prev) {
+      if (depth === prev.depth) parentId = prev.parentId;
+      else if (depth > prev.depth) parentId = prev.id;
+      else parentId = newItems.slice(0, overIndex).reverse().find((i) => i.depth === depth)?.parentId ?? null;
+    }
+    return { depth: depth as 0 | 1, parentId, newOrder: newItems.map((i) => i.id) };
+  }, [activeDragId, overDragId, dragOffsetLeft, flatLocationItems, locations]);
+
   const getItemCountForLocationId = (locationId: string): number =>
     inventoryRows.filter((r) => r.locationId === locationId).length;
 
-  const onAddLocation = async () => {
-    const name = newLocationName.trim();
-    if (!name) return;
-    const duplicate = locations.find((l) => l.name.toLowerCase() === name.toLowerCase());
-    if (duplicate) {
-      setLocationError(`"${duplicate.name}" already exists`);
-      return;
-    }
-    setLocationError(null);
-    setSavingLocation(true);
+  // Active (non-retired) count, SUMMED over the subtree — a station ("bucket")
+  // holds no stock directly, so its count is the total across its leaves; a
+  // leaf counts just its own. Matches what the grid/dashboard/reorder surface
+  // (expired-but-not-retired lots still count as on-hand here).
+  const getActiveCountForLocationId = (locationId: string): number => {
+    const ids = locationsInScope(locations, locationId);
+    return inventoryRows.filter((r) => ids.has(String(r.locationId ?? "")) && !r.values?.retiredAt).length;
+  };
+
+  // Movable stock held DIRECTLY at a location: non-retired, non-expired rows.
+  // Drives "Move all contents" (count + menu gate) — retired/expired lots are
+  // dead stock and shouldn't be counted or relocated.
+  const getMovableCountForLocationId = (locationId: string): number =>
+    inventoryRows.filter((r) =>
+      r.locationId === locationId
+      && !r.values?.retiredAt
+      && !isExpired(r.values?.expirationDate)
+    ).length;
+
+  /** Add a primary location from the Add Location sheet. Returns an error
+   *  string to keep the sheet open, or null on success (sheet closes). */
+  const addLocationViaDialog = async (name: string): Promise<string | null> => {
+    // A primary's name only needs to be unique among other primaries.
+    const duplicate = locations.find(
+      (l) => !(l.parentLocationId && l.parentLocationId.trim()) && l.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (duplicate) return `"${duplicate.name}" already exists`;
     try {
       const result = await addInventoryLocation(name);
       setLocations(result.locations);
-      setNewLocationName("");
+      setShowLocationAdd(false);
+      return null;
     } catch (err: any) {
-      const msg = err?.message ?? String(err);
-      if (msg.includes("already exists")) {
-        setLocationError(msg);
-      } else {
-        console.error(err);
-      }
-    } finally {
-      setSavingLocation(false);
+      return err?.message ?? "Failed to add location";
     }
   };
 
@@ -408,11 +522,13 @@ export function SettingsPage({
       setRenameLocationError(null);
       return;
     }
+    // Names are unique only within a parent — check siblings, not all locations.
+    const targetParent = target.parentLocationId ?? "";
     const duplicate = locations.find(
-      (l) => l.id !== id && l.name.toLowerCase() === newName.toLowerCase(),
+      (l) => l.id !== id && (l.parentLocationId ?? "") === targetParent && l.name.toLowerCase() === newName.toLowerCase(),
     );
     if (duplicate) {
-      setRenameLocationError(`"${duplicate.name}" already exists`);
+      setRenameLocationError(`"${duplicate.name}" already exists here`);
       return;
     }
     setRenameLocationError(null);
@@ -428,6 +544,119 @@ export function SettingsPage({
       } else {
         console.error(err);
       }
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
+  const resetDragState = () => {
+    setActiveDragId(null);
+    setOverDragId(null);
+    setDragOffsetLeft(0);
+  };
+
+  /** Apply a drag: reorder and (if the horizontal projection changed it)
+   *  re-home the dragged location. Vertical = order; horizontal = nesting. */
+  const onLocationDragEnd = async (_event: DragEndEvent) => {
+    const activeId = activeDragId;
+    const proj = dragProjection;
+    resetDragState();
+    if (!canManageInventoryColumns || savingLocation || reorderingLocations) return;
+    if (!activeId || !proj) return;
+
+    const activeItem = flatLocationItems.find((i) => i.id === activeId);
+    if (!activeItem) return;
+    const newParent = proj.parentId; // string | null
+    const parentChanged = (newParent ?? "") !== (activeItem.parentId ?? "");
+    const currentOrder = flatLocationItems.map((i) => i.id);
+    const orderChanged = proj.newOrder.some((id, i) => id !== currentOrder[i]);
+    if (!parentChanged && !orderChanged) return;
+
+    // Optimistic: stamp the new parent + per-order sortOrder locally.
+    const sortByIndex = new Map(proj.newOrder.map((id, i) => [id, (i + 1) * 10]));
+    setLocations((prev) => prev.map((l) => {
+      const next: InventoryLocation = { ...l, sortOrder: sortByIndex.get(l.id) ?? l.sortOrder };
+      if (l.id === activeId) {
+        if (newParent) next.parentLocationId = newParent;
+        else delete next.parentLocationId;
+      }
+      return next;
+    }));
+    setReorderingLocations(true);
+    setReparentError(null);
+    try {
+      if (parentChanged) await setInventoryLocationParent(activeId, newParent);
+      const result = await reorderInventoryLocations(proj.newOrder);
+      setLocations([...result].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
+    } catch (err: any) {
+      console.error("Failed to move location:", err);
+      setReparentError(err?.message ?? "Couldn't move that location.");
+      const bootstrap = await loadInventoryBootstrap();
+      setLocations([...bootstrap.locations].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)));
+    } finally {
+      setReorderingLocations(false);
+    }
+  };
+
+  /** Move EVERY row at a location (active + retired history) to a destination.
+   *  Unlike the grid's "Move to…" (which only sees visible/active rows), this
+   *  reorganizes a location's full contents so the source ends truly empty. */
+  const onMoveAllContents = async () => {
+    const source = moveContentsSource;
+    if (!source) return;
+    const destId = moveContentsDestId.trim();
+    if (!destId) {
+      setMoveContentsError("Pick a destination location.");
+      return;
+    }
+    // Only movable stock — non-retired, non-expired. Dead lots (retired history
+    // / past-date) stay put; they aren't counted or relocated.
+    const rowIds = inventoryRows
+      .filter((r) => r.locationId === source.id && !r.values?.retiredAt && !isExpired(r.values?.expirationDate))
+      .map((r) => r.id);
+    if (rowIds.length === 0) {
+      setMoveContentsSource(null);
+      return;
+    }
+    setMoveContentsError(null);
+    setMovingContents(true);
+    try {
+      await moveInventoryItems(rowIds, destId);
+      const bootstrap = await loadInventoryBootstrap();
+      setInventoryRows(bootstrap.items ?? []);
+      setLocations(bootstrap.locations ?? []);
+      setMoveContentsSource(null);
+      setMoveContentsDestId("");
+    } catch (err: any) {
+      console.error(err);
+      setMoveContentsError(err?.message ?? "Failed to move contents");
+    } finally {
+      setMovingContents(false);
+    }
+  };
+
+  /** Create a sublocation directly under a primary via its inline "Add
+   *  sublocation" input. */
+  const onAddSublocation = async (parentId: string) => {
+    const name = newSubName.trim();
+    if (!name) return;
+    // A sublocation name only needs to be unique among its siblings.
+    const duplicate = locations.find(
+      (l) => (l.parentLocationId ?? "") === parentId && l.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (duplicate) {
+      setSubError(`"${duplicate.name}" already exists here`);
+      return;
+    }
+    setSubError(null);
+    setSavingLocation(true);
+    try {
+      const result = await addInventoryLocation(name, parentId);
+      setLocations(result.locations);
+      setNewSubName("");
+      setSubParentId(null);
+    } catch (err: any) {
+      setSubError(err?.message ?? "Failed to add sublocation");
     } finally {
       setSavingLocation(false);
     }
@@ -454,6 +683,119 @@ export function SettingsPage({
     }
   };
 
+  /** Render one location row (primary or sublocation). Nesting is done via the
+   *  ⋯ menu (re-home) and "Add sublocation"; drag is order-only. */
+  const renderLocationRow = (loc: InventoryLocation, depth: 0 | 1) => {
+    const itemCount = getActiveCountForLocationId(loc.id);
+    // "Move all contents" only relocates MOVABLE stock — non-retired, non-expired
+    // rows held directly here. Retired/expired lots are dead stock (history or
+    // past-date) and neither count nor move. Gates the menu option + its count.
+    const hasContents = getMovableCountForLocationId(loc.id) > 0;
+    const showMenu = depth === 0 || hasContents;
+    return (
+      <SortableLocationRow
+        key={loc.id}
+        id={loc.id}
+        depth={depth}
+        dragDisabled={savingLocation || reorderingLocations || editingLocationId === loc.id || isLocationSearching}
+      >
+        <div className="settings-column-visibility">
+          {editingLocationId === loc.id ? (
+            <span className="settings-column-edit">
+              <input
+                className={`field settings-column-edit-input${renameLocationError ? " field--error" : ""}`}
+                value={editingLocationValue}
+                onChange={(e) => { setEditingLocationValue(e.target.value); setRenameLocationError(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc.id); if (e.key === "Escape") { setEditingLocationId(null); setRenameLocationError(null); } }}
+                disabled={savingLocation}
+                autoFocus
+                aria-invalid={!!renameLocationError || undefined}
+                aria-describedby={renameLocationError ? `settings-rename-location-error-${loc.id}` : undefined}
+                aria-label={`Rename ${loc.name}`}
+              />
+              <button
+                className="button button-secondary settings-inline-action"
+                onClick={() => void onRenameLocation(loc.id)}
+                disabled={savingLocation || !editingLocationValue.trim()}
+                type="button"
+              >
+                Save
+              </button>
+              <button
+                className="button button-ghost settings-inline-action"
+                onClick={() => { setEditingLocationId(null); setRenameLocationError(null); }}
+                type="button"
+              >
+                Cancel
+              </button>
+              {renameLocationError ? (
+                <p id={`settings-rename-location-error-${loc.id}`} className="field-error" style={{ width: "100%" }}>{renameLocationError}</p>
+              ) : null}
+            </span>
+          ) : (
+            <span>
+              {loc.name}
+              <span className="settings-location-count">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
+            </span>
+          )}
+        </div>
+        <div className="settings-column-actions">
+          {showMenu ? (
+            <details className="settings-move-menu">
+              <summary className="settings-action-icon settings-move-summary" aria-label={`Actions for ${loc.name}`}>
+                <MoreHorizontal aria-hidden="true" />
+              </summary>
+              <div className="settings-move-panel">
+                {depth === 0 ? (
+                  <button
+                    type="button"
+                    className="settings-move-option"
+                    onClick={(e) => { setSubParentId(loc.id); setNewSubName(""); setSubError(null); e.currentTarget.closest("details")?.removeAttribute("open"); }}
+                  >
+                    <Plus size={14} aria-hidden="true" /> Add sublocation
+                  </button>
+                ) : null}
+                {hasContents ? (
+                  <button
+                    type="button"
+                    className="settings-move-option"
+                    onClick={(e) => { setMoveContentsSource(loc); setMoveContentsDestId(""); setMoveContentsError(null); e.currentTarget.closest("details")?.removeAttribute("open"); }}
+                  >
+                    Move all contents…
+                  </button>
+                ) : null}
+              </div>
+            </details>
+          ) : null}
+          <div className="settings-action-wrap">
+            <button
+              className="settings-action-icon"
+              onClick={() => { setEditingLocationId(loc.id); setEditingLocationValue(loc.name); }}
+              disabled={savingLocation}
+              aria-label="Rename location"
+              type="button"
+            >
+              <Pencil aria-hidden="true" />
+            </button>
+            <span className="settings-action-tip" role="tooltip">Rename</span>
+          </div>
+          <div className="settings-action-wrap">
+            <button
+              className="settings-action-icon settings-action-icon--danger"
+              onClick={() => { setDeleteLocationError(null); setPendingDeleteLocationId((prev) => prev === loc.id ? null : loc.id); }}
+              disabled={savingLocation}
+              aria-label="Remove location"
+              type="button"
+            >
+              <Trash2 aria-hidden="true" />
+            </button>
+            <span className="settings-action-tip" role="tooltip">Remove</span>
+          </div>
+        </div>
+      </SortableLocationRow>
+    );
+  };
+
   // Derive merged vendor list: registered + from item data
   const allVendors = (() => {
     const fromItems = new Set(
@@ -465,32 +807,26 @@ export function SettingsPage({
     return Array.from(merged).sort((a, b) => a.localeCompare(b));
   })();
 
+  const filteredVendors = (() => {
+    const q = vendorSearchTerm.trim().toLowerCase();
+    return q ? allVendors.filter((v) => v.toLowerCase().includes(q)) : allVendors;
+  })();
+
   const getItemCountForVendor = (vendor: string): number =>
     inventoryRows.filter((r) => String(r.values.vendor ?? "").trim() === vendor).length;
 
-  const onAddVendor = async () => {
-    const name = newVendorName.trim();
-    if (!name) return;
+  /** Add a vendor from the Add Vendor sheet. Returns an error string to keep
+   *  the sheet open, or null on success. */
+  const addVendorViaDialog = async (name: string): Promise<string | null> => {
     const duplicate = allVendors.find((v) => v.toLowerCase() === name.toLowerCase());
-    if (duplicate) {
-      setVendorError(`"${duplicate}" already exists`);
-      return;
-    }
-    setVendorError(null);
-    setSavingVendor(true);
+    if (duplicate) return `"${duplicate}" already exists`;
     try {
       const vendors = await addInventoryVendor(name);
       setRegisteredVendors(vendors);
-      setNewVendorName("");
+      setShowVendorAdd(false);
+      return null;
     } catch (err: any) {
-      const msg = err?.message ?? String(err);
-      if (msg.includes("already exists")) {
-        setVendorError(msg);
-      } else {
-        console.error(err);
-      }
-    } finally {
-      setSavingVendor(false);
+      return err?.message ?? "Failed to add vendor";
     }
   };
 
@@ -1313,6 +1649,19 @@ export function SettingsPage({
               ))}
               {revokeError && <p className="settings-error">{revokeError}</p>}
             </div>
+          ) : isSupportView ? (
+            <div className="settings-columns-list">
+              {loadingModuleAccess ? <div>Loading users…</div> : null}
+              {!loadingModuleAccess && moduleAccessUsers.length === 0 ? <div>No users found.</div> : null}
+              {moduleAccessUsers.map((user) => (
+                <div className="settings-column-row" key={`support-team-${user.userId}`}>
+                  <div className="settings-column-visibility">
+                    <span>{user.displayName?.trim() || user.email || user.userId}</span>
+                    <span className="settings-core-pill">{user.role}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : (
             <p className="settings-section-copy">
               Only administrators can manage module access.
@@ -1431,107 +1780,115 @@ export function SettingsPage({
           </summary>
           {canManageInventoryColumns ? (
             <>
-              <div className="settings-field-row" style={{ marginBottom: locationError ? "0.25rem" : "0.5rem" }}>
-                <input
-                  id="settings-new-location"
-                  className={`field${locationError ? " field--error" : ""}`}
-                  placeholder="New location name"
-                  value={newLocationName}
-                  onChange={(e) => { setNewLocationName(e.target.value); setLocationError(null); }}
-                  onKeyDown={(e) => { if (e.key === "Enter") void onAddLocation(); }}
-                  aria-invalid={!!locationError || undefined}
-                  aria-describedby={locationError ? "settings-new-location-error" : undefined}
-                  aria-label="New location name"
-                />
-                <button
-                  className="button button-secondary"
-                  onClick={() => void onAddLocation()}
-                  disabled={savingLocation || !newLocationName.trim()}
-                >
-                  Add Location
-                </button>
+              <p className="settings-section-copy">
+                Drag the handle to reorder. Drag a row left to move it to the top level, or right to nest it under a primary. Open the ⋯ menu to add a sublocation or move a location's contents.
+              </p>
+              <div className="settings-columns-toolbar">
+                <div className="inventory-search-wrap settings-columns-toolbar-search">
+                  <input
+                    className="inventory-search-input"
+                    placeholder="Search locations..."
+                    value={locationSearchTerm}
+                    onChange={(e) => setLocationSearchTerm(e.target.value)}
+                  />
+                  {locationSearchTerm ? (
+                    <button
+                      type="button"
+                      className="inventory-search-clear"
+                      onClick={() => setLocationSearchTerm("")}
+                      aria-label="Clear location search"
+                      title="Clear location search"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+                <div className="settings-columns-add settings-columns-add-inline">
+                  <button
+                    className="button button-secondary"
+                    onClick={() => setShowLocationAdd(true)}
+                    disabled={savingLocation}
+                    type="button"
+                  >
+                    + Add Location
+                  </button>
+                </div>
               </div>
-              {locationError ? (
-                <p id="settings-new-location-error" className="field-error">{locationError}</p>
+              {showLocationAdd ? (
+                <AddNameDialog
+                  title="Add Location"
+                  label="Location name"
+                  placeholder="e.g. Station 3"
+                  confirmLabel="Add Location"
+                  onConfirm={addLocationViaDialog}
+                  onCancel={() => setShowLocationAdd(false)}
+                />
               ) : null}
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading locations...</div> : null}
                 {!loadingColumns && sortedLocations.length === 0 ? (
                   <div className="settings-section-copy">No locations yet. Add one above.</div>
                 ) : null}
-                {sortedLocations.map((loc) => {
-                  const itemCount = getItemCountForLocationId(loc.id);
-                  return (
-                    <div key={loc.id} className="settings-column-row">
-                      <div className="settings-column-visibility">
-                        {editingLocationId === loc.id ? (
-                          <span className="settings-column-edit">
+                {!loadingColumns && sortedLocations.length > 0 && filteredLocationTree.length === 0 ? (
+                  <div className="settings-section-copy">No matching locations.</div>
+                ) : null}
+                {reparentError ? (
+                  <p className="field-error" style={{ marginBottom: "0.5rem" }}>{reparentError}</p>
+                ) : null}
+                <DndContext
+                  sensors={dragSensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={(e: DragStartEvent) => { setActiveDragId(String(e.active.id)); setOverDragId(String(e.active.id)); setDragOffsetLeft(0); }}
+                  onDragMove={(e: DragMoveEvent) => { setDragOffsetLeft(e.delta.x); }}
+                  onDragOver={(e: DragOverEvent) => { setOverDragId(e.over ? String(e.over.id) : null); }}
+                  onDragEnd={(event) => { void onLocationDragEnd(event); }}
+                  onDragCancel={resetDragState}
+                >
+                  <SortableContext
+                    items={filteredLocationTree.flatMap((n) => [n.location.id, ...n.children.map((c) => c.id)])}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {filteredLocationTree.map((node) => (
+                      <Fragment key={node.location.id}>
+                        {renderLocationRow(node.location, node.location.id === activeDragId && dragProjection ? dragProjection.depth : 0)}
+                        {node.children.map((child) => renderLocationRow(child, child.id === activeDragId && dragProjection ? dragProjection.depth : 1))}
+                        {/* Inline add input — opened by the ＋ on the primary row. */}
+                        {subParentId === node.location.id ? (
+                          <div className="settings-sublocation-add">
                             <input
-                              className={`field settings-column-edit-input${renameLocationError ? " field--error" : ""}`}
-                              value={editingLocationValue}
-                              onChange={(e) => { setEditingLocationValue(e.target.value); setRenameLocationError(null); }}
-                              onKeyDown={(e) => { if (e.key === "Enter") void onRenameLocation(loc.id); if (e.key === "Escape") { setEditingLocationId(null); setRenameLocationError(null); } }}
+                              className={`field settings-column-edit-input${subError ? " field--error" : ""}`}
+                              placeholder="Sublocation name"
+                              value={newSubName}
+                              onChange={(e) => { setNewSubName(e.target.value); setSubError(null); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") void onAddSublocation(node.location.id); if (e.key === "Escape") { setSubParentId(null); setNewSubName(""); setSubError(null); } }}
                               disabled={savingLocation}
                               autoFocus
-                              aria-invalid={!!renameLocationError || undefined}
-                              aria-describedby={renameLocationError ? `settings-rename-location-error-${loc.id}` : undefined}
-                              aria-label={`Rename ${loc.name}`}
+                              aria-label={`New sublocation in ${node.location.name}`}
                             />
                             <button
                               className="button button-secondary settings-inline-action"
-                              onClick={() => void onRenameLocation(loc.id)}
-                              disabled={savingLocation || !editingLocationValue.trim()}
+                              onClick={() => void onAddSublocation(node.location.id)}
+                              disabled={savingLocation || !newSubName.trim()}
                               type="button"
                             >
-                              Save
+                              Add
                             </button>
                             <button
                               className="button button-ghost settings-inline-action"
-                              onClick={() => { setEditingLocationId(null); setRenameLocationError(null); }}
+                              onClick={() => { setSubParentId(null); setNewSubName(""); setSubError(null); }}
                               type="button"
                             >
                               Cancel
                             </button>
-                            {renameLocationError ? (
-                              <p id={`settings-rename-location-error-${loc.id}`} className="field-error" style={{ width: "100%" }}>{renameLocationError}</p>
+                            {subError ? (
+                              <p className="field-error" style={{ width: "100%" }}>{subError}</p>
                             ) : null}
-                          </span>
-                        ) : (
-                          <span>
-                            {loc.name}
-                            <span className="settings-location-count">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
-                          </span>
-                        )}
-                      </div>
-                      <div className="settings-column-actions">
-                        <div className="settings-action-wrap">
-                          <button
-                            className="settings-action-icon"
-                            onClick={() => { setEditingLocationId(loc.id); setEditingLocationValue(loc.name); }}
-                            disabled={savingLocation}
-                            aria-label="Rename location"
-                            type="button"
-                          >
-                            <Pencil aria-hidden="true" />
-                          </button>
-                          <span className="settings-action-tip" role="tooltip">Rename</span>
-                        </div>
-                        <div className="settings-action-wrap">
-                          <button
-                            className="settings-action-icon settings-action-icon--danger"
-                            onClick={() => { setDeleteLocationError(null); setPendingDeleteLocationId((prev) => prev === loc.id ? null : loc.id); }}
-                            disabled={savingLocation}
-                            aria-label="Remove location"
-                            type="button"
-                          >
-                            <Trash2 aria-hidden="true" />
-                          </button>
-                          <span className="settings-action-tip" role="tooltip">Remove</span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                          </div>
+                        ) : null}
+                      </Fragment>
+                    ))}
+                  </SortableContext>
+                </DndContext>
               </div>
               {pendingDeleteLocationId ? (() => {
                 const target = locations.find((l) => l.id === pendingDeleteLocationId);
@@ -1555,7 +1912,68 @@ export function SettingsPage({
                   />
                 );
               })() : null}
+              {moveContentsSource ? (() => {
+                const source = moveContentsSource;
+                // Move-contents relocates MOVABLE rows held DIRECTLY at this
+                // location — non-retired, non-expired (matches onMoveAllContents).
+                // Count those same rows so the dialog reflects what moves, NOT
+                // the subtree roll-up the list shows for a bucket, and NOT dead
+                // (retired/expired) stock.
+                const total = getMovableCountForLocationId(source.id);
+                const sourceHasChildren = locations.some((l) => (l.parentLocationId ?? "") === source.id);
+                // Match the New Order picker: show buckets AND leaves with the
+                // full "Station / Cabinet" path; stations render as disabled
+                // headers since stock can only land on a leaf. Exclude the
+                // source itself.
+                const destOptions = buildLocationPickerEntries(locations)
+                  .filter((entry) => entry.id !== source.id)
+                  .map((entry) => ({
+                    value: entry.id,
+                    label: entry.label,
+                    depth: entry.depth,
+                    ...(entry.isStation ? { disabled: true } : {}),
+                  }));
+                return (
+                  <ConfirmDialog
+                    title={`Move contents of ${source.name}`}
+                    message={
+                      <div className="settings-move-contents-dialog">
+                        <p>
+                          Move {total} item{total !== 1 ? "s" : ""} held directly in
+                          {" "}<strong>{source.name}</strong>
+                          {sourceHasChildren ? " (its sublocations keep their own)" : ""} to:
+                        </p>
+                        <CustomDropdown
+                          ariaLabel="Destination location"
+                          placeholder="Select a location…"
+                          value={moveContentsDestId}
+                          onChange={(v) => { setMoveContentsDestId(v); setMoveContentsError(null); }}
+                          options={destOptions}
+                        />
+                        {moveContentsError ? (
+                          <p className="field-error">{moveContentsError}</p>
+                        ) : null}
+                      </div>
+                    }
+                    confirmLabel="Move contents"
+                    loading={movingContents}
+                    loadingLabel="Moving…"
+                    onConfirm={() => { void onMoveAllContents(); }}
+                    onCancel={() => { setMoveContentsSource(null); setMoveContentsDestId(""); setMoveContentsError(null); }}
+                  />
+                );
+              })() : null}
             </>
+          ) : isSupportView ? (
+            locations.length === 0 ? (
+              <p className="settings-section-copy">No locations.</p>
+            ) : (
+              <ul className="settings-readonly-list">
+                {locations.map((loc) => (
+                  <li key={loc.id}>{loc.name}</li>
+                ))}
+              </ul>
+            )
           ) : (
             <p className="settings-section-copy">
               Only administrators can manage locations.
@@ -1574,36 +1992,59 @@ export function SettingsPage({
           </summary>
           {canManageInventoryColumns ? (
             <>
-              <div className="settings-field-row" style={{ marginBottom: vendorError ? "0.25rem" : "0.5rem" }}>
-                <input
-                  id="settings-new-vendor"
-                  className={`field${vendorError ? " field--error" : ""}`}
-                  placeholder="New vendor name"
-                  value={newVendorName}
-                  onChange={(e) => { setNewVendorName(e.target.value); setVendorError(null); }}
-                  onKeyDown={(e) => { if (e.key === "Enter") void onAddVendor(); }}
-                  aria-invalid={!!vendorError || undefined}
-                  aria-describedby={vendorError ? "settings-new-vendor-error" : undefined}
-                  aria-label="New vendor name"
-                />
-                <button
-                  className="button button-secondary"
-                  onClick={() => void onAddVendor()}
-                  disabled={savingVendor || !newVendorName.trim()}
-                >
-                  Add Vendor
-                </button>
+              <p className="settings-section-copy">
+                Add the vendors you order from.
+              </p>
+              <div className="settings-columns-toolbar">
+                <div className="inventory-search-wrap settings-columns-toolbar-search">
+                  <input
+                    className="inventory-search-input"
+                    placeholder="Search vendors..."
+                    value={vendorSearchTerm}
+                    onChange={(e) => setVendorSearchTerm(e.target.value)}
+                  />
+                  {vendorSearchTerm ? (
+                    <button
+                      type="button"
+                      className="inventory-search-clear"
+                      onClick={() => setVendorSearchTerm("")}
+                      aria-label="Clear vendor search"
+                      title="Clear vendor search"
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+                <div className="settings-columns-add settings-columns-add-inline">
+                  <button
+                    className="button button-secondary"
+                    onClick={() => setShowVendorAdd(true)}
+                    disabled={savingVendor}
+                    type="button"
+                  >
+                    + Add Vendor
+                  </button>
+                </div>
               </div>
-              {vendorError ? (
-                <p id="settings-new-vendor-error" className="field-error">{vendorError}</p>
+              {showVendorAdd ? (
+                <AddNameDialog
+                  title="Add Vendor"
+                  label="Vendor name"
+                  placeholder="e.g. BoundTree"
+                  confirmLabel="Add Vendor"
+                  onConfirm={addVendorViaDialog}
+                  onCancel={() => setShowVendorAdd(false)}
+                />
               ) : null}
               <div className="settings-columns-list">
                 {loadingColumns ? <div>Loading vendors...</div> : null}
                 {!loadingColumns && allVendors.length === 0 ? (
                   <div className="settings-section-copy">No vendors yet. Add one above.</div>
                 ) : null}
-                {allVendors.map((vendor) => {
-                  const itemCount = getItemCountForVendor(vendor);
+                {!loadingColumns && allVendors.length > 0 && filteredVendors.length === 0 ? (
+                  <div className="settings-section-copy">No matching vendors.</div>
+                ) : null}
+                {filteredVendors.map((vendor) => {
                   return (
                     <div key={vendor} className="settings-column-row">
                       <div className="settings-column-visibility">
@@ -1640,10 +2081,7 @@ export function SettingsPage({
                             ) : null}
                           </span>
                         ) : (
-                          <span>
-                            {vendor}
-                            <span className="settings-location-count">{itemCount} item{itemCount !== 1 ? "s" : ""}</span>
-                          </span>
+                          <span>{vendor}</span>
                         )}
                       </div>
                       <div className="settings-column-actions">
@@ -1696,6 +2134,16 @@ export function SettingsPage({
                 );
               })() : null}
             </>
+          ) : isSupportView ? (
+            registeredVendors.length === 0 ? (
+              <p className="settings-section-copy">No vendors.</p>
+            ) : (
+              <ul className="settings-readonly-list">
+                {registeredVendors.map((vendor) => (
+                  <li key={vendor}>{vendor}</li>
+                ))}
+              </ul>
+            )
           ) : (
             <p className="settings-section-copy">
               Only administrators can manage vendors.
@@ -1832,6 +2280,19 @@ export function SettingsPage({
                 />
               ) : null}
             </>
+          ) : isSupportView ? (
+            columns.length === 0 ? (
+              <p className="settings-section-copy">No columns.</p>
+            ) : (
+              <ul className="settings-readonly-list">
+                {columns.map((col) => (
+                  <li key={col.id}>
+                    {col.label}
+                    <span className="settings-readonly-meta">{col.type}{col.isCore ? " · core" : ""}</span>
+                  </li>
+                ))}
+              </ul>
+            )
           ) : (
             <p className="settings-section-copy">
               Only administrators can manage inventory columns.
@@ -1887,6 +2348,52 @@ export function SettingsPage({
 
       </div>
     </section>
+  );
+}
+
+/** Sortable wrapper for a location row. Provides the drag handle + dnd-kit
+ *  wiring; the caller passes the row's content as children. Mirrors
+ *  SortableColumnRow but for the (2-level) locations list. */
+function SortableLocationRow({
+  id,
+  depth,
+  dragDisabled,
+  children,
+}: {
+  id: string;
+  depth: 0 | 1;
+  dragDisabled: boolean;
+  children: ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled: dragDisabled,
+  });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.55 : 1,
+    zIndex: isDragging ? 2 : undefined,
+    marginLeft: depth === 1 ? "1.25rem" : undefined,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`settings-column-row${isDragging ? " settings-column-row--dragging" : ""}`}
+    >
+      <button
+        type="button"
+        className="settings-column-drag-handle"
+        aria-label="Drag to reorder"
+        disabled={dragDisabled}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical aria-hidden="true" />
+      </button>
+      {children}
+    </div>
   );
 }
 

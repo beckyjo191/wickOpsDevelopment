@@ -9,6 +9,7 @@ import {
   type InventoryLocation,
 } from "../lib/inventoryApi";
 import { pickLoadingLine } from "../lib/loadingLines";
+import { buildLocationPickerEntries, locationsInScope, locationPath } from "../lib/locationTree";
 
 type InventoryFilter = "expired" | "exp30" | "lowStock" | "logUsage";
 
@@ -45,29 +46,41 @@ export function DashboardPage({
       setLoading(false);
       return;
     }
-    // Load alert summary + locations in parallel. Locations let us translate
-    // the App-level locationId (UUID) to the location name the alert summary
-    // is keyed by — it sits between the byLocation map and the dashboard UI.
+    // Load alert summary + locations in parallel. The summary is keyed by
+    // locationId; the locations list gives us the tree to roll a primary up
+    // over its sublocations and to render the grouped picker.
     void Promise.all([
       fetchInventoryAlertSummary().then(setAlertSummary),
       listInventoryLocations().then(setStructuralLocations).catch(() => setStructuralLocations([])),
     ]).finally(() => setLoading(false));
   }, [canSeeAlerts]);
 
-  // Resolve the App-level id → name. The alert summary's byLocation array is
-  // keyed by name (server-side denormalization), so the rest of this component
-  // works against names exactly as before.
-  const selectedLocationName = useMemo(() => {
-    if (!selectedLocationId) return null;
-    return structuralLocations.find((l) => l.id === selectedLocationId)?.name ?? null;
-  }, [selectedLocationId, structuralLocations]);
-  const setSelectedLocationByName = (name: string | null) => {
-    if (name === null) {
-      onSelectedLocationIdChange(null);
-      return;
+  // Alert counts arrive keyed by location id. A primary rolls up by summing
+  // its own counts plus those of its sublocations.
+  const countsById = useMemo(() => {
+    const m = new Map<string, { expiredCount: number; expiringSoonCount: number; lowStockCount: number }>();
+    for (const b of alertSummary?.byLocation ?? []) {
+      // Fall back to name only for legacy responses that lack locationId.
+      m.set(b.locationId || b.location, {
+        expiredCount: b.expiredCount,
+        expiringSoonCount: b.expiringSoonCount,
+        lowStockCount: b.lowStockCount,
+      });
     }
-    const match = structuralLocations.find((l) => l.name === name);
-    onSelectedLocationIdChange(match?.id ?? null);
+    return m;
+  }, [alertSummary]);
+  const countsForScope = (scopeId: string) => {
+    let expiredCount = 0;
+    let expiringSoonCount = 0;
+    let lowStockCount = 0;
+    for (const locId of locationsInScope(structuralLocations, scopeId)) {
+      const c = countsById.get(locId);
+      if (!c) continue;
+      expiredCount += c.expiredCount;
+      expiringSoonCount += c.expiringSoonCount;
+      lowStockCount += c.lowStockCount;
+    }
+    return { expiredCount, expiringSoonCount, lowStockCount };
   };
 
   useEffect(() => {
@@ -78,54 +91,33 @@ export function DashboardPage({
     return () => window.clearInterval(interval);
   }, [loading]);
 
-  // Derive locations from byLocation (only non-empty location names)
-  const locations = alertSummary?.byLocation?.filter((b) => b.location !== "") ?? [];
-  const showLocationPills = locations.length >= 1;
-
-  const locationBadges = useMemo(
-    () =>
-      locations.map((loc) => ({
-        location: loc.location,
-        badge: loc.expiredCount + loc.expiringSoonCount + loc.lowStockCount,
-      })),
-    [locations],
+  // Grouped picker entries (stations, each followed by their child cabinets).
+  const pickerEntries = useMemo(
+    () => buildLocationPickerEntries(structuralLocations),
+    [structuralLocations],
   );
+  const showLocationPills = pickerEntries.length >= 1;
 
-  // Auto-select first location if none selected or selected location isn't a real dashboard location
-  const validSelection = selectedLocationName !== null
-    && locations.some((l) => l.location === selectedLocationName);
+  // The scope currently shown. Auto-default to the first entry when the saved
+  // selection isn't a known location (e.g. it was just deleted).
+  const selectedScopeId = selectedLocationId ?? "";
+  const validSelection =
+    selectedScopeId !== "" && structuralLocations.some((l) => l.id === selectedScopeId);
+  const displayedScopeId = validSelection ? selectedScopeId : (pickerEntries[0]?.id ?? "");
+  const displayedLocation = displayedScopeId ? (locationPath(structuralLocations, displayedScopeId) || null) : null;
+  const displayedLocationId = displayedScopeId || null;
 
   useEffect(() => {
-    if (!validSelection && locations.length > 0) {
-      setSelectedLocationByName(locations[0].location);
+    if (!validSelection && pickerEntries.length > 0) {
+      onSelectedLocationIdChange(pickerEntries[0].id);
     }
-    // setSelectedLocationByName is stable enough for this useEffect — it's
-    // recreated each render but only called when validSelection flips false.
+    // onSelectedLocationIdChange is stable enough here — only called when the
+    // saved selection isn't a known location.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validSelection, locations]);
+  }, [validSelection, pickerEntries]);
 
-  // What the dropdown trigger and "No issues at X" text should actually
-  // display. When the saved selection isn't valid (e.g. user just deleted
-  // the location), the auto-sync above will correct the stored value on the
-  // next tick — but in this render we still want the UI to show the location
-  // whose data is actually being shown, not the stale saved value.
-  const displayedLocation = validSelection
-    ? selectedLocationName
-    : (locations[0]?.location ?? null);
-  const displayedLocationId = displayedLocation
-    ? structuralLocations.find((l) => l.name === displayedLocation)?.id ?? null
-    : null;
-
-  // Get alert counts for the selected location
-  const activeAlerts = (() => {
-    if (!alertSummary) return null;
-    if (!validSelection && locations.length > 0) {
-      // Will auto-select soon, use first location's data in the meantime
-      return locations[0];
-    }
-    const match = alertSummary.byLocation?.find((b) => b.location === selectedLocationName);
-    return match ?? { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 };
-  })();
+  // Alert counts for the displayed scope (a station sums its cabinets).
+  const activeAlerts = alertSummary && displayedScopeId ? countsForScope(displayedScopeId) : null;
 
   const hasAlerts =
     activeAlerts &&
@@ -155,17 +147,18 @@ export function DashboardPage({
                   <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                 </summary>
                 <div className="inventory-dropdown-panel">
-                  {locationBadges.map((loc) => (
+                  {pickerEntries.map((entry) => (
                     <button
-                      key={loc.location}
+                      key={entry.id}
                       type="button"
-                      className={`inventory-dropdown-option${displayedLocation === loc.location ? " active" : ""}`}
+                      className={`inventory-dropdown-option${displayedScopeId === entry.id ? " active" : ""}${entry.depth === 1 ? " inventory-dropdown-option--child" : ""}`}
                       onClick={(e) => {
-                        setSelectedLocationByName(loc.location);
+                        onSelectedLocationIdChange(entry.id);
                         e.currentTarget.closest("details")?.removeAttribute("open");
                       }}
                     >
-                      {loc.location}
+                      {entry.label}
+                      {entry.isStation ? <span className="inventory-dropdown-hint"> · all</span> : null}
                     </button>
                   ))}
                 </div>

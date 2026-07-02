@@ -13,6 +13,11 @@ export type CellEditorProps = {
   isEditingLink?: boolean;
   isEditingDate?: boolean;
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
+  /** When provided, the Quantity cell on an already-saved row becomes a
+   *  click-to-adjust trigger instead of a free input — every manual count
+   *  correction routes through the reason-capturing Adjust dialog. New
+   *  (unsaved) rows keep inline entry so initial stocking stays quick. */
+  onRequestAdjustQuantity?: (rowId: string) => void;
   onLinkEditStart?: (rowId: string, columnKey: string) => void;
   onLinkEditEnd?: () => void;
   onDateEditStart?: (rowId: string, columnKey: string) => void;
@@ -49,6 +54,7 @@ export function CellEditor({
   isEditingLink,
   isEditingDate,
   onCellChange,
+  onRequestAdjustQuantity,
   onLinkEditStart,
   onLinkEditEnd,
   onDateEditStart,
@@ -333,6 +339,7 @@ export function CellEditor({
         variant={variant}
         inputClass={inputClass}
         onCellChange={onCellChange}
+        onRequestAdjustQuantity={onRequestAdjustQuantity}
         beginCellEditSession={beginCellEditSession}
         endCellEditSession={endCellEditSession}
         displayUnit={displayUnit}
@@ -342,94 +349,23 @@ export function CellEditor({
 
   // -- Date column --
   if (column.type === "date") {
-    const isoValue = toDateInputValue(value);
-
-    if (variant === "mobile") {
-      return (
-        <div className="inventory-card-date-wrap">
-          <input
-            type="date"
-            className={inputClass}
-            value={isoValue}
-            onFocus={() => {
-              beginCellEditSession?.(row.id, column.key);
-            }}
-            onChange={(e) => onCellChange(row.id, column, e.currentTarget.value)}
-            onBlur={() => endCellEditSession?.()}
-          />
-          {isoValue && (
-            <button
-              type="button"
-              className="inventory-date-clear"
-              onClick={() => onCellChange(row.id, column, "")}
-              aria-label="Clear date"
-            >
-              &times;
-            </button>
-          )}
-        </div>
-      );
-    }
-
-    // Desktop date
-    const editing = !!isEditingDate;
-    if (!isoValue && !editing) {
-      return (
-        <button
-          type="button"
-          className="inventory-date-add"
-          onClick={(event) => {
-            event.stopPropagation();
-            onSetSelectedRowId?.(row.id);
-            onDateEditStart?.(row.id, column.key);
-          }}
-          disabled={!canEdit}
-        >
-          Add date
-        </button>
-      );
-    }
-
     return (
-      <div className="inventory-date-edit-wrap">
-        <input
-          type="date"
-          value={isoValue}
-          autoFocus={editing}
-          onFocus={() => {
-            beginCellEditSession?.(row.id, column.key);
-            onDateEditStart?.(row.id, column.key);
-          }}
-          onChange={(event) => onCellChange(row.id, column, event.currentTarget.value)}
-          onBlur={() => {
-            endCellEditSession?.();
-            onDateEditEnd?.();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              (event.currentTarget as HTMLInputElement).blur();
-            }
-          }}
-          disabled={!canEdit}
-        />
-        {isoValue ? (
-          <button
-            type="button"
-            className="inventory-date-clear"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onCellChange(row.id, column, "");
-              onDateEditStart?.(row.id, column.key);
-            }}
-            disabled={!canEdit}
-            aria-label="Clear date"
-            title="Clear date"
-          >
-            <X size={14} />
-          </button>
-        ) : null}
-      </div>
+      <DateCell
+        column={column}
+        row={row}
+        value={value}
+        variant={variant}
+        inputClass={inputClass}
+        isEditingDate={isEditingDate}
+        canEdit={canEdit}
+        toDateInputValue={toDateInputValue}
+        onCellChange={onCellChange}
+        onDateEditStart={onDateEditStart}
+        onDateEditEnd={onDateEditEnd}
+        beginCellEditSession={beginCellEditSession}
+        endCellEditSession={endCellEditSession}
+        onSetSelectedRowId={onSetSelectedRowId}
+      />
     );
   }
 
@@ -486,6 +422,7 @@ function NumberCell({
   variant,
   inputClass,
   onCellChange,
+  onRequestAdjustQuantity,
   beginCellEditSession,
   endCellEditSession,
   displayUnit,
@@ -496,6 +433,7 @@ function NumberCell({
   variant: "desktop" | "mobile";
   inputClass: string | undefined;
   onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
+  onRequestAdjustQuantity?: (rowId: string) => void;
   beginCellEditSession?: (rowId: string, columnKey: string) => void;
   endCellEditSession?: () => void;
   /** Resolved by the parent table from item displayUnit / first vendor
@@ -562,6 +500,33 @@ function NumberCell({
     || "ct";
   const unitSuffix = isUnitAware ? resolvedSuffix : null;
 
+  // Gate: on an already-saved row, the Quantity cell is not a free input —
+  // editing the on-hand count is a reconciliation that must capture a reason.
+  // Render a click-to-adjust trigger that opens the Adjust dialog. Brand-new
+  // (unsaved) rows have no createdAt yet, so initial stocking stays inline.
+  if (column.key === "quantity" && row.createdAt && onRequestAdjustQuantity) {
+    const display = rawString.trim() === "" ? "0" : rawString;
+    const trigger = (
+      <button
+        type="button"
+        className="inventory-qty-adjust-trigger"
+        onClick={() => onRequestAdjustQuantity(row.id)}
+        title="Adjust count — records a reason in the activity log"
+      >
+        {display}
+      </button>
+    );
+    if (unitSuffix) {
+      return (
+        <div className="inventory-number-with-unit">
+          {trigger}
+          <span className="inventory-unit-suffix">{unitSuffix}</span>
+        </div>
+      );
+    }
+    return trigger;
+  }
+
   if (variant === "mobile") {
     if (unitSuffix) {
       return (
@@ -602,5 +567,149 @@ function NumberCell({
     );
   }
   return desktopInput;
+}
+
+// ── DateCell ───────────────────────────────────────────────────────────────
+// Editable date input. A native <input type="date"> fires `change` per segment
+// as the user types, so persisting on every change spams the row (and activity
+// log) with partial dates like "0002-01-01" while a year is half-typed. We keep
+// a local draft while focused and commit ONCE on blur/Enter — and only when the
+// year is plausible, so an incomplete year is never saved.
+function DateCell({
+  column,
+  row,
+  value,
+  variant,
+  inputClass,
+  isEditingDate,
+  canEdit,
+  toDateInputValue,
+  onCellChange,
+  onDateEditStart,
+  onDateEditEnd,
+  beginCellEditSession,
+  endCellEditSession,
+  onSetSelectedRowId,
+}: {
+  column: InventoryColumn;
+  row: InventoryRow;
+  value: unknown;
+  variant: "mobile" | "desktop";
+  inputClass: string | undefined;
+  isEditingDate?: boolean;
+  canEdit: boolean;
+  toDateInputValue: (raw: unknown) => string;
+  onCellChange: (rowId: string, column: InventoryColumn, value: string) => void;
+  onDateEditStart?: (rowId: string, columnKey: string) => void;
+  onDateEditEnd?: () => void;
+  beginCellEditSession?: (rowId: string, columnKey: string) => void;
+  endCellEditSession?: () => void;
+  onSetSelectedRowId?: (rowId: string) => void;
+}) {
+  const isoValue = toDateInputValue(value);
+  // null → not editing (mirror the saved value); a string → the in-progress draft.
+  const [draft, setDraft] = useState<string | null>(null);
+  const current = draft ?? isoValue;
+
+  // Commit the draft on blur. Reject an implausible year (a half-typed
+  // "0002-…") so partial dates never reach the row or the activity log; a
+  // cleared ("") value is allowed through so blanking still works.
+  const commit = () => {
+    const next = draft;
+    setDraft(null);
+    endCellEditSession?.();
+    onDateEditEnd?.();
+    if (next === null || next === isoValue) return;
+    if (next !== "") {
+      const year = Number(next.slice(0, 4));
+      if (!Number.isFinite(year) || year < 1900 || year > 2200) return;
+    }
+    onCellChange(row.id, column, next);
+  };
+
+  if (variant === "mobile") {
+    return (
+      <div className="inventory-card-date-wrap">
+        <input
+          type="date"
+          className={inputClass}
+          value={current}
+          onFocus={() => { beginCellEditSession?.(row.id, column.key); }}
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          onBlur={commit}
+        />
+        {current && (
+          <button
+            type="button"
+            className="inventory-date-clear"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { setDraft(null); onCellChange(row.id, column, ""); }}
+            aria-label="Clear date"
+          >
+            &times;
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // Desktop date
+  const editing = !!isEditingDate;
+  if (!isoValue && !editing) {
+    return (
+      <button
+        type="button"
+        className="inventory-date-add"
+        onClick={(event) => {
+          event.stopPropagation();
+          onSetSelectedRowId?.(row.id);
+          onDateEditStart?.(row.id, column.key);
+        }}
+        disabled={!canEdit}
+      >
+        Add date
+      </button>
+    );
+  }
+
+  return (
+    <div className="inventory-date-edit-wrap">
+      <input
+        type="date"
+        value={current}
+        autoFocus={editing}
+        onFocus={() => {
+          beginCellEditSession?.(row.id, column.key);
+          onDateEditStart?.(row.id, column.key);
+        }}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            (event.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+        disabled={!canEdit}
+      />
+      {current ? (
+        <button
+          type="button"
+          className="inventory-date-clear"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={(event) => {
+            event.stopPropagation();
+            setDraft(null);
+            onCellChange(row.id, column, "");
+            onDateEditStart?.(row.id, column.key);
+          }}
+          disabled={!canEdit}
+          aria-label="Clear date"
+          title="Clear date"
+        >
+          <X size={14} />
+        </button>
+      ) : null}
+    </div>
+  );
 }
 

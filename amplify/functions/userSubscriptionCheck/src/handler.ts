@@ -579,6 +579,13 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
       });
     }
 
+    // A PLATFORM_SUPPORT member not impersonating anyone lands on the operator
+    // shell — ALWAYS, even if an org row exists for them (e.g. the support
+    // account once self-signed-up). The support identity is never a tenant.
+    if (isPlatformSupportGroupMember) {
+      return buildOperatorShellResponse();
+    }
+
     // 1️⃣ Load user
     const userRes = await ddb.send(
       new GetCommand({
@@ -606,11 +613,6 @@ const email = claims?.email ? normalizeEmail(claims.email) : undefined;
     }
 
     if (!user) {
-      // Dedicated support account (support@wickops): no org membership, not
-      // currently impersonating → land on the operator shell + org picker.
-      if (isPlatformSupportGroupMember) {
-        return buildOperatorShellResponse();
-      }
       if (!email) {
         return json(404, { error: "User not found" });
       }

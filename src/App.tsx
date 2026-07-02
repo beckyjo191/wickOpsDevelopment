@@ -81,6 +81,10 @@ function AppInner() {
   // expands it on mount, and scrolls it into view. Cleared on tab change so
   // the focus only fires once per navigation.
   const [ordersInitialFocusOrderId, setOrdersInitialFocusOrderId] = useState<string | undefined>(undefined);
+  // Deep-link target for opening an item's full history in the Activity tab
+  // (fired from the pricing modal's embedded History view). Consumed + cleared
+  // by AuditLogPage on mount.
+  const [activityHistoryTarget, setActivityHistoryTarget] = useState<{ itemId: string; itemName: string } | undefined>(undefined);
   const [inventoryKey, setInventoryKey] = useState(0);
   const [dashboardKey, setDashboardKey] = useState(0);
   // Applies view-change side effects without touching browser history.
@@ -131,6 +135,27 @@ function AppInner() {
 
   // Mirrors AuditLogPage's active sub-tab for the same reason.
   const [activityActiveTab, setActivityActiveTab] = useState<AuditTab>("feed");
+
+  // Deep-link into the Activity tab's item-history view for a specific item.
+  // Mirrors the onOpenInInventory pattern: stash the target, switch views;
+  // AuditLogPage reads it on mount and opens the history.
+  const openActivityHistory = (itemId: string, itemName: string) => {
+    setActivityHistoryTarget({ itemId, itemName });
+    setView("activity");
+  };
+
+  // Jump to the Inventory tab with an item pre-filtered by name. Resets the
+  // location scope to All Locations so the item is found regardless of the
+  // last-viewed leaf (and multi-lot items that span leaves all show). Reused
+  // by Activity item rows and closed-order item names.
+  const openInInventory = (itemName: string) => {
+    onSelectedLocationIdChange(null);
+    // Reset the filter tab to All — otherwise landing on a stale tab (e.g. "No
+    // Pricing") filters out the very item we navigated to, showing "0 of 0".
+    setInventoryInitialFilter("all");
+    setInventoryInitialSearch(itemName);
+    setView("inventory");
+  };
 
   // Navigates away from inventory only after flushing any pending save.
   // Prevents race conditions where the destination page fetches stale data.
@@ -502,6 +527,9 @@ function AppInner() {
             open organizations that have granted you a live support window — they appear
             at the top of the list with a green badge.
           </p>
+          <button className="button button-ghost" onClick={signOut} style={{ marginTop: "1.25rem" }}>
+            Sign Out
+          </button>
         </div>
       </section>
     );
@@ -534,6 +562,11 @@ function AppInner() {
   const canEditInventory = ["ADMIN", "OWNER", "ACCOUNT_OWNER", "EDITOR"].includes(subState.role);
   const canManageInventoryColumns = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
   const canManageModuleAccess = ["ADMIN", "OWNER", "ACCOUNT_OWNER"].includes(subState.role);
+  // A support operator viewing a customer org gets read-only visibility into
+  // every surface (Analytics, Orders, etc.) that's normally admin-gated — but
+  // the can-EDIT/can-MANAGE flags stay false, so no write controls appear and
+  // the backend blocks mutations regardless.
+  const isSupportView = !!subState.platformSupport;
 
   let content: JSX.Element;
   if (view === "settings") {
@@ -562,6 +595,7 @@ function AppInner() {
         }
         canManageModuleAccess={canManageModuleAccess}
         isOrgOwner={isOrgOwner}
+        isSupportView={isSupportView}
         currentUserId={String(user?.attributes?.sub ?? "")}
         organizationId={subState.organizationId}
         orgName={subState.orgName}
@@ -593,6 +627,7 @@ function AppInner() {
         onSelectedLocationIdChange={onSelectedLocationIdChange}
         onSaveFnChange={(fn) => { inventorySaveFnRef.current = fn; }}
         onActiveTabChange={setInventoryActiveTab}
+        onOpenActivityHistory={openActivityHistory}
       />
     ) : (
       <DashboardPage
@@ -616,11 +651,14 @@ function AppInner() {
       />
     );
   } else if (view === "orders") {
-    content = canAccessInventory && canEditInventory ? (
+    content = canAccessInventory && (canEditInventory || isSupportView) ? (
       <OrdersPage
         selectedLocationId={selectedLocationId}
         onSelectedLocationIdChange={onSelectedLocationIdChange}
         initialFocusOrderId={ordersInitialFocusOrderId}
+        readOnly={isSupportView}
+        onOpenActivityHistory={openActivityHistory}
+        onOpenInInventory={openInInventory}
       />
     ) : (
       <DashboardPage
@@ -636,12 +674,8 @@ function AppInner() {
       <AuditLogPage
         canManageColumns={canManageInventoryColumns}
         canEditInventory={canEditInventory}
-        onOpenInInventory={(itemName) => {
-          // Jump to the Inventory tab with the item pre-filtered via search —
-          // works for single and multi-lot items since search matches on name.
-          setInventoryInitialSearch(itemName);
-          setView("inventory");
-        }}
+        isSupportView={isSupportView}
+        onOpenInInventory={openInInventory}
         onOpenInOrders={(orderId) => {
           // Jump to the Orders tab with the matching order expanded + scrolled
           // into view. Same affordance as items but for per-order rows.
@@ -649,6 +683,8 @@ function AppInner() {
           setView("orders");
         }}
         onTabChange={setActivityActiveTab}
+        initialHistoryItem={activityHistoryTarget}
+        onHistoryItemConsumed={() => setActivityHistoryTarget(undefined)}
       />
     ) : (
       <DashboardPage
@@ -727,6 +763,7 @@ function AppInner() {
         activeView={view}
         accessibleModules={subState.allowedModules}
         canEditInventory={canEditInventory}
+        isSupportView={isSupportView}
         onNavigate={(v) => void navigateTo(v as AppView)}
         rightSlot={
           view === "orders"

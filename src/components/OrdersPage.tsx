@@ -38,10 +38,13 @@ import {
 } from "../lib/inventoryApi";
 import { VendorSelect, type OrderItem } from "./ReorderTab";
 import { ShoppingListTab } from "./ShoppingListTab";
+import { buildLocationPickerEntries, locationPath } from "../lib/locationTree";
+import { CustomDropdown } from "./shared/CustomDropdown";
 import { ItemDetailModal } from "./inventory/ItemDetailModal";
 import { PaginationControls } from "./inventory/PaginationControls";
 import { UnitCombobox } from "./inventory/UnitCombobox";
 import { formatCurrency, parseCurrency } from "../lib/currency";
+import { aggregateVendorPricingByName, rawPricingForName } from "../lib/vendorPricingAggregate";
 import {
   dimensionForUnit,
   KNOWN_UNITS,
@@ -58,6 +61,16 @@ interface OrdersPageProps {
    *  row in the activity feed. The page finds the matching OrderCard,
    *  expands it, and scrolls it into view. */
   initialFocusOrderId?: string;
+  /** Read-only WickOps support view: only the order history (Pending +
+   *  Closed) is shown, and every write control (Reorder, New Order, Receive,
+   *  Cancel) is hidden. */
+  readOnly?: boolean;
+  /** Deep-link an item's full history into the Activity tab — passed through to
+   *  the vendor-pricing modal's embedded History view. */
+  onOpenActivityHistory?: (itemId: string, itemName: string) => void;
+  /** Jump to an item in the Inventory tab (by name) — used by closed-order
+   *  item names. Mirrors Activity's "Open in Inventory". */
+  onOpenInInventory?: (itemName: string) => void;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -200,8 +213,23 @@ function ReceiveOrderForm({
           : undefined;
         if (row) {
           if (prefillUnitCost === undefined) {
+            // Per-unit cost from the vendor's pricing row. New rows store
+            // packCost + packCount (the legacy flat unitCost is no longer
+            // written), so derive $/unit from those before falling back to the
+            // inventory row's cached price — otherwise a vendor you've priced
+            // but never received from prefills the LAST price paid to a
+            // DIFFERENT vendor.
+            let vpUnit: number | undefined;
             if (vp?.unitCost !== undefined) {
-              prefillUnitCost = vp.unitCost;
+              vpUnit = vp.unitCost;
+            } else if (vp?.packCost !== undefined) {
+              const per = vp.packCount !== undefined && vp.packCount > 0
+                ? vp.packCount
+                : (vp.packSize !== undefined && vp.packSize > 0 ? vp.packSize : 1);
+              vpUnit = vp.packCost / per;
+            }
+            if (vpUnit !== undefined && Number.isFinite(vpUnit) && vpUnit >= 0) {
+              prefillUnitCost = vpUnit;
             } else {
               const rowCost = Number(row.values.unitCost);
               if (Number.isFinite(rowCost) && rowCost >= 0) prefillUnitCost = rowCost;
@@ -680,15 +708,20 @@ function ReceiveOrderForm({
 
 function OrderCard({
   order,
+  locations,
   hasExpirationColumn,
   inventoryRows,
   vendorPricing,
   onRefresh,
   onOpenItemDetails,
+  onOpenInInventory,
   initialExpanded,
   highlight,
+  readOnly,
 }: {
   order: RestockOrder;
+  /** Structural locations — resolves the order's destination to a path label. */
+  locations: InventoryLocation[];
   hasExpirationColumn: boolean;
   inventoryRows: InventoryRow[];
   /** 1g.6: per-(item, vendor) pricing for the receive form pre-fill. */
@@ -696,6 +729,9 @@ function OrderCard({
   // closedOrder is passed when the order was just received or closed,
   // so the parent can clear orderedAt for its items and refresh inventory.
   onRefresh: (closedOrder?: RestockOrder) => void;
+  /** Jump to this item in the Inventory table (by name) — same affordance as
+   *  Activity's "Open in Inventory". When omitted, item names render as text. */
+  onOpenInInventory?: (itemName: string) => void;
   /** 1h.8: per-line "edit pricing" callback. Forwarded to the receive
    *  form so each line gets an i button that opens the i modal scoped
    *  to that item. Modal edits live-update the form's pack-size
@@ -708,6 +744,8 @@ function OrderCard({
   /** When true, the card flashes a temporary highlight after mount so the
    *  user can spot it after the scroll. */
   highlight?: boolean;
+  /** Read-only support view: hide the Receive / Cancel actions. */
+  readOnly?: boolean;
 }) {
   const [expanded, setExpanded] = useState(!!initialExpanded);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -739,6 +777,27 @@ function OrderCard({
   // An order was "cancelled" (vs. closed after at least one receive) when it
   // was closed without anything being received.
   const isCancelled = order.status === "closed" && order.receives.length === 0;
+
+  // The destination the order was placed for, shown as a full "Station / Cabinet"
+  // path. Each line carries a locationId (v1+) or a legacy `location` name;
+  // resolve names to a location so they path-qualify too. All lines of an order
+  // share one destination, so a single resolved id → its path.
+  const orderLocationLabel = (() => {
+    const ids = new Set<string>();
+    for (const oi of order.items) {
+      const lid = String((oi as { locationId?: string }).locationId ?? "").trim();
+      if (lid) { ids.add(lid); continue; }
+      const nm = String((oi as { location?: string }).location ?? "").trim();
+      if (!nm) continue;
+      const match = locations.find((l) => l.name.trim().toLowerCase() === nm.toLowerCase());
+      ids.add(match ? match.id : `name:${nm}`);
+    }
+    if (ids.size === 0) return null;
+    if (ids.size > 1) return "Multiple locations";
+    const only = [...ids][0];
+    if (only.startsWith("name:")) return only.slice(5); // unresolved legacy name
+    return locationPath(locations, only) || null;
+  })();
 
   const handleConfirmCancel = async () => {
     setClosing(true);
@@ -787,6 +846,7 @@ function OrderCard({
           <div className="order-card-identity">
             <StatusBadge status={order.status} cancelled={isCancelled} />
             <span className="order-card-vendor">{order.vendor || "No vendor"}</span>
+            {orderLocationLabel && <span className="order-card-location">{orderLocationLabel}</span>}
             <span className="order-card-date">{formatDate(order.createdAt)}</span>
           </div>
           <div className="order-card-summary">
@@ -799,7 +859,7 @@ function OrderCard({
             {total !== null && <span className="order-card-cost">{formatCurrency(total)}</span>}
           </div>
           <div className="order-card-actions">
-            {order.status !== "closed" && !confirmingCancel && (
+            {!readOnly && order.status !== "closed" && !confirmingCancel && (
               <>
                 <button
                   type="button"
@@ -938,7 +998,18 @@ function OrderCard({
                 return (
                   <tr key={item.itemId} className={item.qtyReceived >= item.qtyOrdered ? "order-detail-row--done" : ""}>
                     <td>
-                      {item.itemName}
+                      {onOpenInInventory ? (
+                        <button
+                          type="button"
+                          className="order-item-name-link"
+                          onClick={() => onOpenInInventory(item.itemName)}
+                          title={`Find ${item.itemName} in Inventory`}
+                        >
+                          {item.itemName}
+                        </button>
+                      ) : (
+                        item.itemName
+                      )}
                       {item.itemId.startsWith("freeform-") && (
                         <span className="order-freeform-badge">new</span>
                       )}
@@ -1342,6 +1413,10 @@ type ComposeOrderSubmitLine = {
   itemId?: string;
   itemName: string;
   qtyOrdered: number;
+  /** Destination location for FREEFORM (new) lines — the new inventory row is
+   *  created here on receive. Existing-item lines ignore this (received stock
+   *  returns to the item's own row). */
+  locationId?: string;
   minQuantity?: number;
   reorderLink?: string;
   /** Per-unit cost. Persists to the order line for analytics and back to the
@@ -1406,6 +1481,8 @@ type ComposeLine = {
 
 function ComposeOrderPanel({
   inventoryRows,
+  locations,
+  defaultLocationId,
   availableVendors,
   onAddVendor,
   onSubmit,
@@ -1415,6 +1492,10 @@ function ComposeOrderPanel({
   allowedUnits: _allowedUnits,
 }: {
   inventoryRows: InventoryRow[];
+  /** Structural locations — drives the freeform destination picker. */
+  locations: InventoryLocation[];
+  /** Default destination for new items (the app's current scope). */
+  defaultLocationId?: string | null;
   availableVendors: string[];
   onAddVendor?: (name: string) => Promise<void>;
   onSubmit: (input: {
@@ -1494,14 +1575,20 @@ function ComposeOrderPanel({
     let amount = "1";
     let price = "";
     if (mode === "pack" && packSize && packSize > 0) {
-      amount = "1"; // 1 pack
+      // Pack mode: price is the cost of one pack.
+      amount = "1";
       if (packCost !== null) price = formatCurrency(packCost);
-    } else if (isCountUnit && unitCost !== null) {
+    } else if (!isCountUnit && vp?.packCost !== undefined && vp?.packAmount !== undefined && vp.packAmount > 0) {
+      // Weight/volume: per-unit price = packCost ÷ packAmount. The line's unit
+      // came from packAmountUnit, so they line up (e.g. $9.99 / 5 lb → $2.00/lb).
+      amount = "1";
+      price = formatCurrency(vp.packCost / vp.packAmount);
+    } else if (unitCost !== null) {
+      // Count (or legacy flat) single mode.
       amount = "1";
       price = formatCurrency(unitCost);
     }
-    // Weight/volume single mode (or any mode without a vendor entry):
-    // leave price blank — user types per-purchase.
+    // No vendor entry → leave price blank; the user types per-purchase.
 
     return {
       unit,
@@ -1518,6 +1605,18 @@ function ComposeOrderPanel({
 
   const [vendor, setVendor] = useState("");
   const [notes, setNotes] = useState("");
+  const [destinationLocationId, setDestinationLocationId] = useState<string>("");
+  // The destination must be a LEAF (orders can't target a station). Default to
+  // the current scope when it's a leaf, otherwise the first leaf.
+  useEffect(() => {
+    const entries = buildLocationPickerEntries(locations);
+    const isLeaf = (id: string) => { const e = entries.find((x) => x.id === id); return e ? !e.isStation : false; };
+    if (destinationLocationId && isLeaf(destinationLocationId)) return;
+    const fallback = (defaultLocationId && isLeaf(defaultLocationId))
+      ? defaultLocationId
+      : (entries.find((e) => !e.isStation)?.id ?? "");
+    if (fallback && fallback !== destinationLocationId) setDestinationLocationId(fallback);
+  }, [locations, defaultLocationId, destinationLocationId]);
   const [markReceived, setMarkReceived] = useState(false);
   // Always start with one empty line so the picker is visible — matches
   // Log Usage's pattern (one empty entry waiting for input).
@@ -1715,8 +1814,19 @@ function ComposeOrderPanel({
         }
       }
 
+      // Existing items restock to their OWN leaf so the received qty MERGES
+      // into the current row instead of splitting a new lot at the order's
+      // destination. The Destination picker only homes FREEFORM (new) lines —
+      // an existing item routed to a different leaf was silently duplicating
+      // no-expiration items on receive.
+      const existingRow = l.itemId ? inventoryRows.find((r) => r.id === l.itemId) : undefined;
+      const lineLocationId = l.itemId
+        ? (String(existingRow?.locationId ?? "").trim() || undefined)
+        : (destinationLocationId || undefined);
+
       payloadLines.push({
         ...(l.itemId ? { itemId: l.itemId } : {}),
+        ...(lineLocationId ? { locationId: lineLocationId } : {}),
         itemName: name,
         // qtyOrdered is always in primary units. Pack-mode amounts are
         // multiplied through here before sending.
@@ -1750,13 +1860,26 @@ function ComposeOrderPanel({
 
   return (
     <section className="compose-order app-card" aria-label="New order">
-      <div className="compose-order-intro">
-        <h3 className="compose-order-title">New Order</h3>
-        <p className="compose-order-hint">
-          Pick a vendor (or add a new one), then build the order by
-          searching inventory or quick-adding freeform lines.
-        </p>
-      </div>
+        {locations.length > 1 ? (
+          <div className="manual-order-field manual-order-field--full">
+            <label className="field-label">Location</label>
+            <CustomDropdown
+              ariaLabel="Destination location"
+              className="manual-order-location-dropdown"
+              disabled={submitting}
+              value={destinationLocationId}
+              onChange={setDestinationLocationId}
+              options={buildLocationPickerEntries(locations).map((entry) => ({
+                value: entry.id,
+                // Full path on leaves ("Station 1 / EMS Cabinet") so the closed
+                // value is unambiguous. Stations are non-selectable headers.
+                label: entry.label,
+                depth: entry.depth,
+                ...(entry.isStation ? { disabled: true } : {}),
+              }))}
+            />
+          </div>
+        ) : null}
         <div className="manual-order-fields">
           <div className="manual-order-field">
             <label className="field-label" htmlFor="manual-order-vendor">Vendor</label>
@@ -1777,7 +1900,7 @@ function ComposeOrderPanel({
               id="manual-order-notes"
               className="field"
               type="text"
-              placeholder="e.g. Costco run — Apr 27"
+              placeholder="e.g. Monthly restock — Apr 27"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               disabled={submitting}
@@ -2116,7 +2239,7 @@ function ComposeOrderPanel({
 
 // ── Main Orders Page ───────────────────────────────────────────────────────
 
-export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPageProps) {
+export function OrdersPage({ selectedLocationId, onSelectedLocationIdChange, initialFocusOrderId, readOnly = false, onOpenActivityHistory, onOpenInInventory }: OrdersPageProps) {
   const [orders, setOrders] = useState<RestockOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2143,8 +2266,17 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
   const detailItem = detailItemId
     ? inventoryRows.find((r) => r.id === detailItemId) ?? null
     : null;
-  const detailItemPricing: ItemVendorPricingEntry[] = detailItemId
-    ? Array.from(vendorPricing.get(detailItemId)?.values() ?? [])
+  // Name-aggregated pricing for READS (Shop list, receive prefill, compose):
+  // every lot of a logical item resolves to the same merged pricing. `raw`
+  // stays the write target.
+  const vendorPricingByName = useMemo(
+    () => aggregateVendorPricingByName(inventoryRows, vendorPricing),
+    [inventoryRows, vendorPricing],
+  );
+  // The modal gets the RAW union across the item's lots so it can edit an entry
+  // in place and delete a vendor across every lot.
+  const detailItemPricing: ItemVendorPricingEntry[] = detailItem
+    ? rawPricingForName(String(detailItem.values.itemName ?? ""), inventoryRows, vendorPricing)
     : [];
   // Patch a single (item, vendor) pricing row into the in-memory map so the
   // Shop list and any open Receive form pick up the change without a full
@@ -2296,6 +2428,9 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
             ...(item.packCost !== undefined ? { packCost: item.packCost } : {}),
             ...(item.reorderLink ? { reorderLink: item.reorderLink } : {}),
             ...(item.location ? { location: item.location } : {}),
+            // Per-leaf reorder lines carry their leaf id so receive routes
+            // stock back to the right cabinet (mixed multi-leaf orders).
+            ...(item.locationId ? { locationId: item.locationId } : {}),
             // 1d: forward amount/UoM/price/dimension when the Shop tab supplied
             // them. Server re-derives pricePerCanonical via uom.ts.
             ...(item.purchaseAmount !== undefined ? { purchaseAmount: item.purchaseAmount } : {}),
@@ -2424,7 +2559,8 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
   // best-price comparison from receipt history). The ReorderTab module
   // stays in tree as `./ReorderTab` since OrderItem + VendorSelect still
   // export from there; reverting is "re-add the tab button + render".
-  const [activeTab, setActiveTab] = useState<OrdersTab>("shop");
+  // Support view has no Reorder/New Order tabs, so default to the order history.
+  const [activeTab, setActiveTab] = useState<OrdersTab>(readOnly ? "pending" : "shop");
   // When arriving via an activity-feed click, flip to the sub-tab that
   // contains the focused order. Pagination + page-jump is handled below
   // once the closed-orders pagination is in scope.
@@ -2452,6 +2588,7 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
   }) => {
     const itemsPayload = input.lines.map((l) => ({
       ...(l.itemId ? { itemId: l.itemId } : {}),
+      ...(l.locationId ? { locationId: l.locationId } : {}),
       itemName: l.itemName,
       qtyOrdered: l.qtyOrdered,
       ...(l.minQuantity !== undefined ? { minQuantity: l.minQuantity } : {}),
@@ -2505,7 +2642,9 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
         }));
         await receiveRestockOrder(orderId, { lines: receiveLines, closeOrder: true });
       }
-      setOrders(refreshed);
+      // Re-fetch AFTER the receive — the snapshot above predates the close, so
+      // using it would leave the just-closed order showing in Pending Receipt.
+      await loadOrders();
     } else {
       await loadOrders();
     }
@@ -2552,7 +2691,7 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
     const toMs = closedToDate
       ? new Date(closedToDate).getTime() + 24 * 60 * 60 * 1000 - 1
       : null;
-    return closedOrders.filter((o) => {
+    const filtered = closedOrders.filter((o) => {
       const created = new Date(o.createdAt).getTime();
       if (fromMs !== null && created < fromMs) return false;
       if (toMs !== null && created > toMs) return false;
@@ -2560,6 +2699,15 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
       if ((o.vendor ?? "").toLowerCase().includes(q)) return true;
       if ((o.notes ?? "").toLowerCase().includes(q)) return true;
       return o.items.some((i) => i.itemName.toLowerCase().includes(q));
+    });
+    // Sort by the SAME timestamp the day-grouping keys on (closed date, falling
+    // back to created), newest first. Without this, orders closed today but
+    // created on different days aren't contiguous, so the consecutive day
+    // grouping repeats the "Today" header for each interruption.
+    return filtered.sort((a, b) => {
+      const at = a.closedAt ?? a.createdAt;
+      const bt = b.closedAt ?? b.createdAt;
+      return bt.localeCompare(at);
     });
   }, [closedOrders, closedSearch, closedFromDate, closedToDate]);
 
@@ -2614,10 +2762,9 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
     if (targetPage !== closedOrdersPage) setClosedOrdersPage(targetPage);
   }, [initialFocusOrderId, filteredClosedOrders, closedOrdersPage]);
 
-  // Day label that contains the focused order — used to force the
-  // corresponding closed-orders DaySection open so its OrderCard actually
-  // mounts (DaySection skips children when collapsed). Only meaningful for
-  // closed orders; pending orders aren't day-grouped.
+  // Day label containing the focused order — that day's section starts OPEN so
+  // its OrderCard mounts + scrolls into view (DaySection skips children when
+  // collapsed). Days default closed otherwise; this is the one exception.
   const focusedClosedDayLabel = useMemo(() => {
     if (!initialFocusOrderId) return null;
     const target = filteredClosedOrders.find((o) => o.id === initialFocusOrderId);
@@ -2654,24 +2801,28 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
              *  Pending Receipt or Closed Orders. New Order picks location
              *  per-item via its own form fields. */}
             <div className="audit-tabs orders-tabs" role="tablist" aria-label="Orders sections">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "shop"}
-                className={`audit-tab${activeTab === "shop" ? " active" : ""}`}
-                onClick={() => setActiveTab("shop")}
-              >
-                <ShoppingCart size={16} /> Reorder
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "new"}
-                className={`audit-tab${activeTab === "new" ? " active" : ""}`}
-                onClick={() => setActiveTab("new")}
-              >
-                <Plus size={16} /> New Order
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "shop"}
+                  className={`audit-tab${activeTab === "shop" ? " active" : ""}`}
+                  onClick={() => setActiveTab("shop")}
+                >
+                  <ShoppingCart size={16} /> Reorder
+                </button>
+              )}
+              {!readOnly && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === "new"}
+                  className={`audit-tab${activeTab === "new" ? " active" : ""}`}
+                  onClick={() => setActiveTab("new")}
+                >
+                  <Plus size={16} /> New Order
+                </button>
+              )}
               <button
                 type="button"
                 role="tab"
@@ -2697,23 +2848,28 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
 
             {/* Shop is the 1d vendor-aware list. Mounted only when active
              *  (no count badge to keep alive across tab switches). */}
-            {inventoryLoaded && activeTab === "shop" && (
+            {!readOnly && inventoryLoaded && activeTab === "shop" && (
               <ShoppingListTab
                 rows={inventoryRows}
+                locations={locations}
+                selectedLocationId={selectedLocationId ?? null}
+                onSelectedLocationIdChange={onSelectedLocationIdChange ?? (() => {})}
                 availableVendors={vendorValues}
-                vendorPricing={vendorPricing}
+                vendorPricing={vendorPricingByName}
                 onMarkOrdered={handleMarkOrdered}
                 onOpenItemDetails={setDetailItemId}
               />
             )}
 
-            {activeTab === "new" && (
+            {!readOnly && activeTab === "new" && (
               <ComposeOrderPanel
                 inventoryRows={inventoryRows}
+                locations={locations}
+                defaultLocationId={selectedLocationId ?? null}
                 availableVendors={vendorValues}
                 onAddVendor={handleAddVendor}
                 onSubmit={handleSubmitComposeOrder}
-                vendorPricing={vendorPricing}
+                vendorPricing={vendorPricingByName}
                 allowedUnits={allowedUnits}
               />
             )}
@@ -2731,13 +2887,16 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
                     <OrderCard
                       key={order.id}
                       order={order}
+                      locations={locations}
                       hasExpirationColumn={hasExpirationColumn}
                       inventoryRows={inventoryRows}
-                      vendorPricing={vendorPricing}
+                      vendorPricing={vendorPricingByName}
                       onRefresh={handleOrderChanged}
                       onOpenItemDetails={setDetailItemId}
+                      onOpenInInventory={onOpenInInventory}
                       initialExpanded={order.id === initialFocusOrderId}
                       highlight={order.id === initialFocusOrderId}
+                      readOnly={readOnly}
                     />
                   ))
                 )}
@@ -2861,34 +3020,54 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
                     ) : (
                       <>
                         <div className="audit-flat-feed closed-orders-feed">
-                          {closedOrdersByDay.map((day) => (
+                          {closedOrdersByDay.map((day) => {
+                            // Day's received spend — sum of each order's actual
+                            // cost (received qty × unit cost). Cancelled / zero-
+                            // received orders contribute 0.
+                            const daySpend = day.orders.reduce(
+                              (sum, o) => sum + (orderTotalCost(o.items, o.status === "closed") ?? 0),
+                              0,
+                            );
+                            const orderCount = day.orders.length;
+                            return (
                             <DaySection
                               key={day.label}
                               label={day.label}
-                              summary={`${day.orders.length} order${day.orders.length !== 1 ? "s" : ""}`}
-                              defaultOpen={
-                                day.label === "Today"
-                                || day.label === "Yesterday"
-                                || day.label === focusedClosedDayLabel
+                              // Collapsed day IS the skimmable ledger row: order
+                              // count + total spend at a glance. Expand a day, or
+                              // use search / date-range, to drill in.
+                              summary={
+                                <>
+                                  {orderCount} order{orderCount !== 1 ? "s" : ""}
+                                  {daySpend > 0 ? ` · ${formatCurrency(daySpend)}` : ""}
+                                </>
                               }
+                              // Days start collapsed (the summary line carries
+                              // count + spend). Only the day holding a focused
+                              // order opens so its card mounts + scrolls.
+                              defaultOpen={day.label === focusedClosedDayLabel}
                             >
                               <div className="closed-orders-day-cards">
                                 {day.orders.map((order) => (
                                   <OrderCard
                                     key={order.id}
                                     order={order}
+                                    locations={locations}
                                     hasExpirationColumn={hasExpirationColumn}
                                     inventoryRows={inventoryRows}
-                                    vendorPricing={vendorPricing}
+                                    vendorPricing={vendorPricingByName}
                                     onRefresh={handleOrderChanged}
                                     onOpenItemDetails={setDetailItemId}
+                                    onOpenInInventory={onOpenInInventory}
                                     initialExpanded={order.id === initialFocusOrderId}
                                     highlight={order.id === initialFocusOrderId}
+                                    readOnly={readOnly}
                                   />
                                 ))}
                               </div>
                             </DaySection>
-                          ))}
+                            );
+                          })}
                         </div>
                         {closedOrdersTotalPages > 1 && (
                           <PaginationControls
@@ -2924,6 +3103,7 @@ export function OrdersPage({ selectedLocationId, initialFocusOrderId }: OrdersPa
           onPricingUpserted={handlePricingUpserted}
           onPricingDeleted={handlePricingDeleted}
           onAddVendor={handleAddVendor}
+          onOpenActivityHistory={onOpenActivityHistory}
         />
       ) : null}
     </section>

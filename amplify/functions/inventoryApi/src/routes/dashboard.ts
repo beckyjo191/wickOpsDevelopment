@@ -25,6 +25,9 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
   let expiringSoonCount = 0;
   let lowStockCount = 0;
 
+  // Keyed by locationId, NOT name — location names are only unique within a
+  // parent, so two primaries can each have an "EMS Cabinet". Keying by name
+  // would silently merge their counts.
   const locationNameById = new Map(locations.map((l) => [l.id, l.name]));
   const byLocationMap = new Map<string, { expiredCount: number; expiringSoonCount: number; lowStockCount: number }>();
 
@@ -34,7 +37,7 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
   // flag the group low only when the total is below threshold. Mirrors the
   // frontend (useInventoryFilters.ts) and the Reorder/Shop rule. Quantity-only
   // counts (expired/expiring) stay per-lot since each lot has its own date.
-  const lowAgg = new Map<string, { locationName: string; totalQty: number; maxMin: number }>();
+  const lowAgg = new Map<string, { locationId: string; totalQty: number; maxMin: number }>();
 
   for (const item of items) {
     let values: Record<string, unknown> = {};
@@ -53,11 +56,10 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
     // (mirrors the Low Stock tab). Only the Reorder list hides ordered items.
 
     const locationId = String((item as { locationId?: string }).locationId ?? "").trim();
-    const locationName = locationNameById.get(locationId) ?? "";
-    if (!byLocationMap.has(locationName)) {
-      byLocationMap.set(locationName, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
+    if (!byLocationMap.has(locationId)) {
+      byLocationMap.set(locationId, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
     }
-    const locCounts = byLocationMap.get(locationName)!;
+    const locCounts = byLocationMap.get(locationId)!;
 
     const daysUntil = getDaysUntilExpiration(values.expirationDate as string | null | undefined);
     if (daysUntil !== null) {
@@ -76,7 +78,7 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
     const aggKey = name ? `${locationId}::${name}` : `id:${item.id}`;
     const quantity = Number(values.quantity);
     const minQuantity = Number(values.minQuantity);
-    const entry = lowAgg.get(aggKey) ?? { locationName, totalQty: 0, maxMin: 0 };
+    const entry = lowAgg.get(aggKey) ?? { locationId, totalQty: 0, maxMin: 0 };
     // Expired-but-not-retired stock still counts toward on-hand (matches the
     // frontend + Shop list) — retiring an expired lot is what drops an item
     // below par. The min still defines the item's threshold.
@@ -87,25 +89,30 @@ export const handleAlertSummary = async (ctx: RouteContext) => {
 
   // Second pass: resolve each item-group to a single low/not-low verdict and
   // tally the org-wide + per-location counts.
-  for (const { locationName, totalQty, maxMin } of lowAgg.values()) {
+  for (const { locationId, totalQty, maxMin } of lowAgg.values()) {
     if (maxMin > 0 && totalQty < maxMin) {
       lowStockCount += 1;
-      const locCounts = byLocationMap.get(locationName);
+      const locCounts = byLocationMap.get(locationId);
       if (locCounts) locCounts.lowStockCount += 1;
     }
   }
 
   // Include locations that have no items yet so the dashboard renders them.
   for (const loc of locations) {
-    if (!byLocationMap.has(loc.name)) {
-      byLocationMap.set(loc.name, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
+    if (!byLocationMap.has(loc.id)) {
+      byLocationMap.set(loc.id, { expiredCount: 0, expiringSoonCount: 0, lowStockCount: 0 });
     }
   }
 
+  // Emit both the locationId (the stable key the frontend rolls up by) and the
+  // name (display fallback). `location` keeps the name for back-compat.
   const byLocation = Array.from(byLocationMap.entries())
-    .map(([location, counts]) => ({ location, ...counts }))
+    .map(([locationId, counts]) => ({
+      locationId,
+      location: locationNameById.get(locationId) ?? "",
+      ...counts,
+    }))
     .sort((a, b) => {
-      // Empty location (orphan — shouldn't happen post-migration) goes last
       if (!a.location && b.location) return 1;
       if (a.location && !b.location) return -1;
       return a.location.localeCompare(b.location);

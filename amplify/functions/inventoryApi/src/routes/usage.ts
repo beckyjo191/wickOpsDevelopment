@@ -152,6 +152,84 @@ export const applyUsageEntries = async (
       throw err;
     }
   }
+
+  // ── Collapse emptied lots ────────────────────────────────────────────────
+  // After deductions a lot may have hit 0. Within each (locationId + itemName)
+  // group this usage touched:
+  //   - if any lot still has stock → delete the now-empty lots (a stocked lot
+  //     already represents the item; empty duplicates are clutter);
+  //   - if every lot is empty → keep exactly ONE skeleton row (so the item
+  //     never vanishes from that leaf and stays reorderable) and delete the
+  //     rest, preferring to keep one that carries a reorder threshold.
+  // Mirrors the retire-path skeleton rule, keyed on leaf + name. Retired rows
+  // are history and are never touched. Housekeeping only — a failure here must
+  // not fail the approval.
+  try {
+    const newQtyById = new Map<string, number>();
+    for (const d of appliedDetails) newQtyById.set(String(d.itemId), d.quantityAfter);
+
+    const parseVals = (it: (typeof items)[number]): Record<string, unknown> => {
+      try { return JSON.parse(String(it.valuesJson ?? "{}")); } catch { return {}; }
+    };
+    const locOf = (it: (typeof items)[number]): string =>
+      typeof (it as { locationId?: unknown }).locationId === "string"
+        ? String((it as { locationId?: unknown }).locationId).trim()
+        : "";
+    const groupKey = (locId: string, nameLower: string) => `${locId}\x00${nameLower}`;
+
+    // Only groups touched by this usage can have newly emptied lots.
+    const affected = new Set<string>();
+    for (const d of appliedDetails) {
+      const it = byId.get(String(d.itemId));
+      if (!it) continue;
+      const name = String(parseVals(it).itemName ?? "").trim().toLowerCase();
+      if (name) affected.add(groupKey(locOf(it), name));
+    }
+
+    const idsToDelete: string[] = [];
+    for (const key of affected) {
+      // All non-retired lots of this (location + name) group, with the
+      // post-deduction quantity applied to the lots we just touched.
+      const lots = items
+        .map((it) => {
+          const v = parseVals(it);
+          if (v.retiredAt) return null;
+          const name = String(v.itemName ?? "").trim().toLowerCase();
+          if (groupKey(locOf(it), name) !== key) return null;
+          const qty = newQtyById.has(String(it.id))
+            ? Number(newQtyById.get(String(it.id)))
+            : Number(v.quantity ?? 0);
+          const min = Number(v.minQuantity ?? 0);
+          return { id: String(it.id), qty: Number.isFinite(qty) ? qty : 0, hasMin: Number.isFinite(min) && min > 0 };
+        })
+        .filter((x): x is { id: string; qty: number; hasMin: boolean } => x !== null);
+
+      const zeros = lots.filter((l) => l.qty <= 0);
+      if (zeros.length === 0) continue; // nothing emptied in this group
+      if (lots.some((l) => l.qty > 0)) {
+        // Stock remains → drop every empty lot.
+        for (const z of zeros) idsToDelete.push(z.id);
+      } else {
+        // Fully depleted → keep one skeleton (prefer one with a reorder
+        // threshold so it still flags as low), delete the rest.
+        const keep = zeros.find((z) => z.hasMin) ?? zeros[0];
+        for (const z of zeros) if (z.id !== keep.id) idsToDelete.push(z.id);
+      }
+    }
+
+    for (const id of idsToDelete) {
+      await ddb.send(new DeleteCommand({
+        TableName: storage.itemTable,
+        Key: { id },
+        ConditionExpression: "organizationId = :org AND #module = :module",
+        ExpressionAttributeNames: { "#module": "module" },
+        ExpressionAttributeValues: { ":org": access.organizationId, ":module": "inventory" },
+      }));
+    }
+  } catch (err) {
+    console.warn("usage lot-collapse prune failed (non-fatal):", err);
+  }
+
   return { appliedDetails };
 };
 

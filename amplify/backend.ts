@@ -36,7 +36,11 @@ const isDeployed = deployedBranch !== "" || deploymentEnv === "prod" || deployme
 const corsAllowedOrigins = isDeployed
   ? ["https://systems.wickops.com", "http://localhost:5173"]
   : ["http://localhost:5173"];
-const corsAllowedHeaders = ["Authorization", "Content-Type"];
+// `x-wickops-support-org` is the header the support console attaches when an
+// operator is viewing a customer org. It's a custom header, so it must be in
+// the CORS allowlist or the browser's preflight blocks every impersonation
+// request (see SUPPORT_ORG_HEADER in inventoryApi/userSubscriptionCheck).
+const corsAllowedHeaders = ["Authorization", "Content-Type", "x-wickops-support-org"];
 const browserCorsMethods = [
   CorsHttpMethod.GET,
   CorsHttpMethod.POST,

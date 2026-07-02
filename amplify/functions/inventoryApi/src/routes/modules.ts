@@ -63,7 +63,10 @@ export const handleUpdateOrgModules = async (ctx: RouteContext) => {
 
 export const handleListModuleAccessUsers = async (ctx: RouteContext) => {
   const { access } = ctx;
-  if (!access.canManageColumns) {
+  // Read-only support operators may view the team roster to troubleshoot; the
+  // mutating routes below still require canManageColumns and the router blocks
+  // any non-GET for support, so this stays view-only.
+  if (!access.canManageColumns && !access.isPlatformSupport) {
     return json(403, { error: "Only admins can manage module access" });
   }
 

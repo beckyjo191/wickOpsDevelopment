@@ -19,7 +19,7 @@ import { ddb } from "../clients";
 import { json } from "../http";
 import { buildAuditEvent, writeAuditEvents } from "../audit";
 import { listAllItems } from "../items";
-import { findLocationByName, createLocation } from "../locations";
+import { findLocationByName, createLocation, resolveStockLocation } from "../locations";
 import { listLocations } from "../columns";
 import { upsertVendorPricingFromReceive } from "./vendor-pricing";
 import {
@@ -70,6 +70,36 @@ const mapPurchaseToPackAxes = (
     out.packCount = orderItem.packSize;
   }
   return out;
+};
+
+/** Once a line is received, its actual PAID price becomes the truth for the
+ *  price-history rollup + timeline. Recompute the order line's canonical price
+ *  from the received per-unit cost and the item's tracking unit so history
+ *  reflects what was paid, not the ordered estimate. Pending (not-yet-received)
+ *  lines keep their ordered price. Best-effort — leaves the line untouched when
+ *  the unit is unknown/unpriceable. */
+const applyReceivedPriceToOrderItem = (
+  orderItem: {
+    pricePerCanonical?: number;
+    purchaseAmount?: number;
+    purchasePrice?: number;
+    purchaseUnit?: string;
+    dimension?: Dimension;
+  },
+  receivedUnitCost: number | undefined,
+  itemUnit: string | undefined,
+): void => {
+  if (receivedUnitCost === undefined || !Number.isFinite(receivedUnitCost) || receivedUnitCost < 0) return;
+  const unit = (itemUnit ?? "").trim() || "ct";
+  const canon = deriveCanonicalPrice(receivedUnitCost, 1, unit);
+  if (!canon) return;
+  // Per-unit basis: 1 unit for `receivedUnitCost`. The per-unit price is the
+  // history-relevant fact; order quantity is surfaced separately (qtyReceived).
+  orderItem.pricePerCanonical = canon.pricePerCanonical;
+  orderItem.purchaseAmount = 1;
+  orderItem.purchasePrice = receivedUnitCost;
+  orderItem.purchaseUnit = unit;
+  orderItem.dimension = dimensionForUnit(unit) ?? "count";
 };
 
 /** Parse + validate the amount/UoM/price triplet off a raw order entry. The
@@ -274,11 +304,16 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
         return json(400, { error: `Entry ${i + 1}: pack cost must be a non-negative number.` });
       }
 
+      // Destination location for this line (New Order picker). When set and it
+      // differs from the item's current row on receive, the qty is routed there.
+      const locationIdExisting = String(entry?.locationId ?? "").trim() || undefined;
+
       orderItems.push({
         itemId,
         itemName,
         qtyOrdered,
         qtyReceived: 0,
+        ...(locationIdExisting ? { locationId: locationIdExisting } : {}),
         ...(unitCost !== undefined ? { unitCost } : {}),
         ...(reorderLinkExisting ? { reorderLink: reorderLinkExisting } : {}),
         ...(packSizeExisting !== undefined ? { packSize: packSizeExisting } : {}),
@@ -351,6 +386,7 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
   // Audit: one event per item ordered. parentItemId lets phase 2 analytics
   // roll up cost/order history across lots sharing a logical item.
   const parentByItemId = new Map<string, string>();
+  const locationByItemId = new Map<string, string>();
   for (const item of items) {
     try {
       const vals = JSON.parse(String(item.valuesJson ?? "{}")) as Record<string, unknown>;
@@ -361,16 +397,34 @@ export const handleCreateRestockOrder = async (ctx: RouteContext) => {
     } catch {
       parentByItemId.set(String(item.id), String(item.id));
     }
+    const itemLocationId = typeof (item as { locationId?: unknown }).locationId === "string"
+      ? String((item as { locationId?: unknown }).locationId).trim()
+      : "";
+    if (itemLocationId) locationByItemId.set(String(item.id), itemLocationId);
   }
-  const auditEvents = orderItems.map((oi) =>
-    buildAuditEvent(access, "RESTOCK_ORDER_CREATE", oi.itemId, oi.itemName, {
+  // Resolve location names once so each order event can stamp both
+  // locationId (filtering / matching) and a human-readable name (feed UI).
+  const locationNameById = new Map<string, string>();
+  try {
+    const { listLocations } = await import("../locations");
+    const locations = await listLocations(storage);
+    for (const loc of locations) locationNameById.set(loc.id, loc.name);
+  } catch { /* name lookup failed — locationId-only is still correct */ }
+  const auditEvents = orderItems.map((oi) => {
+    const oiLocationId = (typeof oi.locationId === "string" && oi.locationId.trim())
+      ? oi.locationId.trim()
+      : (locationByItemId.get(oi.itemId) ?? "");
+    const oiLocationName = oiLocationId ? locationNameById.get(oiLocationId) : undefined;
+    return buildAuditEvent(access, "RESTOCK_ORDER_CREATE", oi.itemId, oi.itemName, {
       orderId,
       qtyOrdered: oi.qtyOrdered,
       parentItemId: parentByItemId.get(oi.itemId) ?? oi.itemId,
       ...(oi.unitCost !== undefined ? { unitCost: oi.unitCost } : {}),
       ...(vendor ? { vendor } : {}),
-    }),
-  );
+      ...(oiLocationId ? { locationId: oiLocationId } : {}),
+      ...(oiLocationName ? { location: oiLocationName } : {}),
+    });
+  });
   await writeAuditEvents(storage.auditTable, auditEvents);
 
   return json(200, { ok: true, orderId });
@@ -435,6 +489,15 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
   const byId = new Map(allItems.map((item) => [String(item.id), item]));
   const auditEvents: Record<string, unknown>[] = [];
   const now = new Date().toISOString();
+  // Resolve location names once so RESTOCK_RECEIVED events can stamp both
+  // locationId (analytics filtering) and a human-readable name (activity
+  // feed). Failures here are non-fatal: locationId still goes on the event.
+  const locationNameById = new Map<string, string>();
+  try {
+    const { listLocations } = await import("../locations");
+    const locations = await listLocations(storage);
+    for (const loc of locations) locationNameById.set(loc.id, loc.name);
+  } catch { /* name lookup failed — locationId-only is still correct */ }
   /** Per-line diagnostic of what the receive actually did. Returned to the
    *  client so symptoms like "qty didn't go up" can be debugged from the
    *  browser console without trawling CloudWatch. */
@@ -458,6 +521,10 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     if (isFreeform) {
       orderItem.qtyReceived += line.qtyThisReceive;
       if (line.unitCost !== undefined) orderItem.unitCost = line.unitCost;
+      // Received price is the truth for history — recompute canonical price
+      // from what was actually paid. Freeform items carry their unit on the
+      // order line's purchaseUnit.
+      applyReceivedPriceToOrderItem(orderItem, line.unitCost, orderItem.purchaseUnit);
       receiveTrace.push({
         itemId: line.itemId,
         path: line.addToInventory ? "freeform-create" : "freeform-skip",
@@ -473,7 +540,9 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
         // on a free-text row that didn't capture either).
         let resolvedLocationId: string;
         if (orderItem.locationId) {
-          resolvedLocationId = orderItem.locationId;
+          // Stock lives on leaves: a station destination resolves to its
+          // "General" bucket (created on demand).
+          resolvedLocationId = (await resolveStockLocation(storage, access.organizationId, orderItem.locationId)) ?? orderItem.locationId;
         } else if (orderItem.location) {
           const existing = await findLocationByName(storage, orderItem.location);
           if (existing) {
@@ -533,8 +602,12 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
           source: "restock_receive",
           initialValues: newValues,
         }));
-        // Update the order item to reference the real inventory ID
+        // Update the order item to reference the real inventory ID + the leaf
+        // the stock actually landed on, so the closed order shows the real
+        // "Station / Cabinet" destination (not the pre-resolution station).
         orderItem.itemId = newItemId;
+        orderItem.locationId = resolvedLocationId;
+        const newItemLocationName = locationNameById.get(resolvedLocationId);
         auditEvents.push(buildAuditEvent(access, "RESTOCK_RECEIVED", newItemId, orderItem.itemName, {
           orderId,
           qtyReceived: line.qtyThisReceive,
@@ -543,6 +616,8 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
           ...(line.expirationDate ? { expirationDate: line.expirationDate } : {}),
           ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
           ...(orderVendor ? { vendor: orderVendor } : {}),
+          ...(resolvedLocationId ? { locationId: resolvedLocationId } : {}),
+          ...(newItemLocationName ? { location: newItemLocationName } : {}),
         }));
 
         // 1g.5 → 1h.7: cache the (item, vendor) pricing on the new
@@ -569,6 +644,9 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
             vendor: orderVendor,
             ...upsert,
             ...(orderItem.packCost !== undefined ? { packCost: orderItem.packCost } : {}),
+            // Forward the receipt's per-unit cost so a price changed at receive
+            // time is reflected on the seeded vendor price.
+            ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
             ...(orderItem.reorderLink ? { reorderUrl: orderItem.reorderLink } : {}),
           });
         }
@@ -595,8 +673,113 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
       });
       continue;
     }
+    // ── Resolve the destination lot ─────────────────────────────────────────
+    // Two axes decide where received stock lands:
+    //   1. LEAF — the order line may carry a locationId (per-leaf reorder line
+    //      or New Order Destination picker). A station resolves to its "General"
+    //      bucket; absent → the referenced row's own leaf. Stock never lands on
+    //      a parent.
+    //   2. LOT — within that leaf, expiration-tracked items keep one lot per
+    //      expiration date. Receiving a NEW date creates a NEW lot so FEFO and
+    //      lot-by-expiration picking (Log Usage) stay correct; the same date
+    //      bumps the matching lot. No date → fall back to the referenced row
+    //      (own leaf) or the first same-name lot (routed leaf).
+    const rawDestId = String((orderItem as { locationId?: string }).locationId ?? "").trim();
+    const resolvedDestId = rawDestId
+      ? ((await resolveStockLocation(storage, access.organizationId, rawDestId)) ?? rawDestId)
+      : "";
+    const srcLocId = String((item as { locationId?: string }).locationId ?? "");
+    const destLeaf = resolvedDestId || srcLocId;
+
+    let srcVals: Record<string, unknown> = {};
+    try { srcVals = JSON.parse(String(item.valuesJson ?? "{}")); } catch { /* ignore */ }
+    const nameLower = String(srcVals.itemName ?? "").trim().toLowerCase();
+    const lineExpiration = String(line.expirationDate ?? "").trim();
+
+    // Non-retired lots of this item already at the destination leaf.
+    const lotsAtDest = nameLower
+      ? allItems.filter((it) => {
+          if (String((it as { locationId?: string }).locationId ?? "") !== destLeaf) return false;
+          let v: Record<string, unknown> = {};
+          try { v = JSON.parse(String(it.valuesJson ?? "{}")); } catch { return false; }
+          if (v.retiredAt) return false;
+          return String(v.itemName ?? "").trim().toLowerCase() === nameLower;
+        })
+      : [];
+
+    let targetItem: typeof item | undefined;
+    if (lineExpiration) {
+      // Match the lot with the SAME expiration; a new date falls through to a
+      // fresh lot below.
+      targetItem = lotsAtDest.find((it) => {
+        let v: Record<string, unknown> = {};
+        try { v = JSON.parse(String(it.valuesJson ?? "{}")); } catch { return false; }
+        return String(v.expirationDate ?? "").trim() === lineExpiration;
+      });
+    } else if (destLeaf === srcLocId) {
+      // No date, landing on the referenced row's own leaf → bump that exact lot
+      // (legacy behavior for non-expiry items).
+      targetItem = item;
+    } else {
+      // No date, routed to another leaf → first same-name lot there.
+      targetItem = lotsAtDest[0];
+    }
+
+    if (!targetItem) {
+      // No matching lot — create one at the destination leaf, seeded from the
+      // referenced row so it inherits min/unit/link and, crucially, the SKU
+      // identity (parentItemId) that groups lots for cross-lot analytics.
+      const newItemId = randomUUID();
+      const seeded: Record<string, unknown> = {
+        itemName: srcVals.itemName ?? "",
+        quantity: 0,
+        parentItemId: (typeof srcVals.parentItemId === "string" && srcVals.parentItemId.trim())
+          ? String(srcVals.parentItemId).trim()
+          : item.id,
+      };
+      if (srcVals.minQuantity !== undefined) seeded.minQuantity = srcVals.minQuantity;
+      if (srcVals.unit !== undefined) seeded.unit = srcVals.unit;
+      if (srcVals.reorderLink !== undefined) seeded.reorderLink = srcVals.reorderLink;
+      targetItem = {
+        id: newItemId,
+        organizationId: access.organizationId,
+        module: "inventory",
+        position: 0,
+        locationId: destLeaf,
+        valuesJson: JSON.stringify(seeded),
+        createdAt: now,
+        updatedAtCustom: now,
+      } as typeof item;
+      await ddb.send(new PutCommand({ TableName: storage.itemTable, Item: targetItem }));
+    }
+
+    // If stock landed anywhere other than the originally referenced row (routed
+    // leaf or a brand-new lot), clear that row's "ordered" markers so it leaves
+    // the reorder list.
+    if (targetItem.id !== item.id) {
+      let origVals: Record<string, unknown> = {};
+      try { origVals = JSON.parse(String(item.valuesJson ?? "{}")); } catch { /* ignore */ }
+      if (origVals.orderedAt !== undefined || origVals.reorderCheckedAt !== undefined) {
+        delete origVals.orderedAt;
+        delete origVals.reorderCheckedAt;
+        await ddb.send(new UpdateCommand({
+          TableName: storage.itemTable,
+          Key: { id: item.id },
+          ConditionExpression: "organizationId = :org AND #module = :module",
+          UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
+          ExpressionAttributeNames: { "#module": "module" },
+          ExpressionAttributeValues: {
+            ":org": access.organizationId,
+            ":module": "inventory",
+            ":values": JSON.stringify(origVals),
+            ":updatedAtCustom": now,
+          },
+        }));
+      }
+    }
+
     let values: Record<string, unknown> = {};
-    try { values = JSON.parse(String(item.valuesJson ?? "{}")); } catch { /* ignore */ }
+    try { values = JSON.parse(String(targetItem.valuesJson ?? "{}")); } catch { /* ignore */ }
     const oldQty = Number(values.quantity ?? 0);
     const newQty = oldQty + line.qtyThisReceive;
     const nextValues: Record<string, unknown> = { ...values, quantity: newQty };
@@ -605,21 +788,13 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     // column shows the most recent price paid. Authoritative history lives in
     // the RESTOCK_RECEIVED audit events.
     if (line.unitCost !== undefined) nextValues.unitCost = line.unitCost;
-    // Receiving stock against an item clears its "ordered" state. Without
-    // this, a row that had orderedAt set when it was placed on order keeps
-    // the marker after stock arrives, and the row stays hidden from the
-    // reorder list even if the user already burned through the new stock.
-    // Conversely, the user reported items reappearing on reorder after
-    // receive — the most-likely explanation is the marker was cleared by
-    // some other path (manual edit, autosave) and we never re-set it. Either
-    // way, "stock just arrived" is the right moment to reset the ordered
-    // state explicitly.
+    // Receiving stock against an item clears its "ordered" state.
     delete nextValues.orderedAt;
     delete nextValues.reorderCheckedAt;
 
     await ddb.send(new UpdateCommand({
       TableName: storage.itemTable,
-      Key: { id: item.id },
+      Key: { id: targetItem.id },
       ConditionExpression: "organizationId = :org AND #module = :module",
       UpdateExpression: "SET valuesJson = :values, updatedAtCustom = :updatedAtCustom",
       ExpressionAttributeNames: { "#module": "module" },
@@ -632,7 +807,13 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     }));
 
     orderItem.qtyReceived += line.qtyThisReceive;
+    // Stamp where the stock actually landed (the leaf — own row or routed
+    // destination) so the closed order shows the real "Station / Cabinet".
+    orderItem.locationId = String((targetItem as { locationId?: string }).locationId ?? "") || orderItem.locationId;
     if (line.unitCost !== undefined) orderItem.unitCost = line.unitCost;
+    // Received price is the truth for history — recompute canonical price from
+    // what was actually paid, using the item's tracking unit.
+    applyReceivedPriceToOrderItem(orderItem, line.unitCost, String(values.unit ?? ""));
     receiveTrace.push({
       itemId: line.itemId,
       path: "update",
@@ -647,6 +828,8 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     const parentItemId = typeof values.parentItemId === "string" && values.parentItemId.trim()
       ? String(values.parentItemId).trim()
       : line.itemId;
+    const targetLocationId = String((targetItem as { locationId?: string }).locationId ?? "").trim();
+    const targetLocationName = targetLocationId ? locationNameById.get(targetLocationId) : undefined;
     auditEvents.push(buildAuditEvent(access, "RESTOCK_RECEIVED", line.itemId, orderItem.itemName, {
       orderId,
       qtyReceived: line.qtyThisReceive,
@@ -656,6 +839,8 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
       ...(line.expirationDate ? { expirationDate: line.expirationDate } : {}),
       ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
       ...(orderVendor ? { vendor: orderVendor } : {}),
+      ...(targetLocationId ? { locationId: targetLocationId } : {}),
+      ...(targetLocationName ? { location: targetLocationName } : {}),
       snapshot,
     }));
 
@@ -668,10 +853,18 @@ export const handleReceiveRestockOrder = async (ctx: RouteContext) => {
     // shape alone. If the user wants to record a different pack
     // count, they edit it in the modal (mid-receive even).
     if (orderVendor) {
+      // Vendor pricing is keyed by inventory ROW id, so write it against the
+      // row the stock actually landed on (targetItem) — which may be a
+      // destination row, not the originally-referenced line.itemId. Otherwise
+      // the destination row shows no vendor/price.
       await upsertVendorPricingFromReceive(storage, access, {
-        itemId: line.itemId,
+        itemId: targetItem.id,
         vendor: orderVendor,
         ...(orderItem.packCost !== undefined ? { packCost: orderItem.packCost } : {}),
+        // Forward the receipt's per-unit cost so a price changed at receive
+        // time updates the vendor's current price (converted to packCost using
+        // the vendor's pack shape). packCost above still wins when present.
+        ...(line.unitCost !== undefined ? { unitCost: line.unitCost } : {}),
         ...(orderItem.reorderLink ? { reorderUrl: orderItem.reorderLink } : {}),
       });
     }

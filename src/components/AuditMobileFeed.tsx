@@ -18,6 +18,7 @@ export function AuditMobileFeed({
   events,
   onViewItemHistory,
   onOpenInOrders,
+  hasMultipleLocations,
   onUndoEvent,
   undoingEventId,
 }: {
@@ -26,10 +27,13 @@ export function AuditMobileFeed({
   /** Click target for per-order activity rows — mirrors the desktop feed
    *  so mobile users can also jump to the Orders tab. */
   onOpenInOrders?: (orderId: string) => void;
+  /** Org-has-multiple-locations flag. Order rows append "at {location}"
+   *  only when true (avoids "at Default" noise on single-location orgs). */
+  hasMultipleLocations?: boolean;
   onUndoEvent?: (undoable: UndoableEvent | UndoableEvent[]) => void;
   undoingEventId?: string | null;
 }) {
-  const days = aggregateActivityRows(events);
+  const days = aggregateActivityRows(events, { hasMultipleLocations });
   return (
     <div className="audit-mobile-feed">
       {days.map((day) => {

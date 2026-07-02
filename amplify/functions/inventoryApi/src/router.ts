@@ -9,12 +9,12 @@ import { handleGetOrgModules, handleUpdateOrgModules, handleListModuleAccessUser
 import { handleUpdateCurrentUserDisplayName, handleSyncCurrentUserEmail, handleSaveUserColumnVisibility } from "./routes/profile";
 import { handleGetSupportAccess, handleGrantSupportAccess, handleRevokeSupportAccess, handleListSupportOrgs } from "./routes/support-access";
 import { handleListOnboardingTemplates, handleApplyOnboardingTemplate } from "./routes/onboarding";
-import { handleAuditFeed, handleAuditItemHistory, handleAuditAnalytics, handleVendorBreakdown, handleAnalyticsBreakdown } from "./routes/audit";
+import { handleAuditFeed, handleAuditItemHistory, handleAuditItemNameHistory, handleAuditAnalytics, handleVendorBreakdown, handleAnalyticsBreakdown } from "./routes/audit";
 import { handleListRestockOrders, handleCreateRestockOrder, handleReceiveRestockOrder, handleCloseRestockOrder } from "./routes/restock";
 import { handleGetPriceHistory } from "./routes/price-history";
 import { handleListVendorPricing, handleUpsertVendorPricing, handleDeleteVendorPricing } from "./routes/vendor-pricing";
 import { handleGetAllowedUnits, handleSetAllowedUnits } from "./routes/allowed-units";
-import { handleAddLocation, handleListLocations, handleRemoveLocation, handleRenameLocation } from "./routes/locations";
+import { handleAddLocation, handleListLocations, handleRemoveLocation, handleRenameLocation, handleSetLocationParent, handleReorderLocations } from "./routes/locations";
 import { handleAddVendor, handleRemoveVendor, handleRenameVendor } from "./routes/vendors";
 import { handleAlertSummary, handleBootstrap } from "./routes/dashboard";
 import { handleListItems, handleMoveItems, handleSaveItems, handleUndoRetire, handleUpdateItemPricing } from "./routes/inventory";
@@ -57,6 +57,7 @@ const routes: Route[] = [
 
   // Audit
   { method: "GET",    pattern: "/inventory/audit/feed",                 needsStorage: true, module: "inventory", handler: handleAuditFeed },
+  { method: "GET",    pattern: "/inventory/audit/item-name-history",    needsStorage: true, module: "inventory", handler: handleAuditItemNameHistory },
   { method: "GET",    pattern: /\/inventory\/audit\/item\/[^/]+$/,      needsStorage: true, module: "inventory", handler: handleAuditItemHistory },
   { method: "GET",    pattern: "/inventory/audit/analytics",            needsStorage: true, module: "inventory", handler: handleAuditAnalytics },
   { method: "GET",    pattern: "/inventory/audit/analytics/vendor",     needsStorage: true, module: "inventory", handler: handleVendorBreakdown },
@@ -90,6 +91,8 @@ const routes: Route[] = [
   { method: "POST",   pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleAddLocation },
   { method: "DELETE",  pattern: "/inventory/locations",                  needsStorage: true, module: "inventory", handler: handleRemoveLocation },
   { method: "POST",   pattern: "/inventory/locations/rename",           needsStorage: true, module: "inventory", handler: handleRenameLocation },
+  { method: "POST",   pattern: "/inventory/locations/parent",           needsStorage: true, module: "inventory", handler: handleSetLocationParent },
+  { method: "POST",   pattern: "/inventory/locations/reorder",          needsStorage: true, module: "inventory", handler: handleReorderLocations },
 
   // Vendors
   { method: "POST",   pattern: "/inventory/vendors",                    needsStorage: true, module: "inventory", handler: handleAddVendor },

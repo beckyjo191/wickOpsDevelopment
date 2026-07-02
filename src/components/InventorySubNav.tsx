@@ -7,6 +7,9 @@ interface InventorySubNavProps {
   activeView: string;
   accessibleModules: AppModuleKey[];
   canEditInventory: boolean;
+  /** Read-only WickOps support view — reveals the Orders tab (read-only)
+   *  even though the operator can't edit. */
+  isSupportView?: boolean;
   onNavigate: (view: InventorySubView) => void;
   /** Optional content rendered at the far right of the nav row — e.g. a
    *  per-view help button. */
@@ -17,11 +20,12 @@ export function InventorySubNav({
   activeView,
   accessibleModules,
   canEditInventory,
+  isSupportView,
   onNavigate,
   rightSlot,
 }: InventorySubNavProps) {
   const showInventory = accessibleModules.includes("inventory");
-  const showOrders = showInventory && canEditInventory;
+  const showOrders = showInventory && (canEditInventory || !!isSupportView);
   const showActivity = showInventory;
 
   // Dashboard is always visible. If it's the only tab (user has no inventory

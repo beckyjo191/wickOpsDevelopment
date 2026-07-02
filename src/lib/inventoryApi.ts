@@ -1,5 +1,6 @@
 import { authFetch, getCachedAuthToken } from "./authFetch";
 import type { AppModuleKey } from "./moduleRegistry";
+import { locationPath } from "./locationTree";
 export type { AppModuleKey };
 
 const normalizeBaseUrl = (value?: string) => (value ?? "").replace(/\/+$/, "");
@@ -43,6 +44,10 @@ export type InventoryLocation = {
   module: "inventory";
   kind: "location";
   name: string;
+  /** Self-referential parent pointer. Absent/empty = a top-level location.
+   *  A top-level location with children is a "station" (group); a location
+   *  with no children is a leaf where stock lives. Capped at two levels. */
+  parentLocationId?: string;
   sortOrder: number;
   createdAt: string;
 };
@@ -300,12 +305,51 @@ export type RetireMetadata = {
   notes?: string;
 };
 
+/** Reason codes for a manual quantity correction. Keep in sync with backend
+ *  types.ts ADJUST_REASONS. */
+export type AdjustReason = "recount" | "found" | "shrinkage" | "damaged" | "data_entry" | "other";
+
+/** Human-friendly labels for each AdjustReason. Used by the Adjust dialog and
+ *  the activity feed. */
+export const ADJUST_REASON_LABEL: Record<AdjustReason, string> = {
+  recount: "Recount correction",
+  found: "Found stock",
+  shrinkage: "Lost / shrinkage",
+  damaged: "Damaged",
+  data_entry: "Data-entry fix",
+  other: "Other",
+};
+
+export type AdjustMetadata = {
+  reason: AdjustReason;
+  notes?: string;
+};
+
+/** Economic classification of an adjustment reason. Keep in sync with backend
+ *  types.ts ADJUST_REASON_LOSS_KIND. `loss` (shrinkage/damaged) feeds loss
+ *  analytics; `correction` (recount/found/data-entry/other) is a bookkeeping
+ *  reconciliation excluded from both loss and spend. */
+export type AdjustLossKind = "loss" | "correction";
+
+export const ADJUST_REASON_LOSS_KIND: Record<AdjustReason, AdjustLossKind> = {
+  recount: "correction",
+  found: "correction",
+  shrinkage: "loss",
+  damaged: "loss",
+  data_entry: "correction",
+  other: "correction",
+};
+
 export const saveInventoryItems = async (
   rows: InventoryRow[],
   deletedRowIds: string[] = [],
   options?: {
     restockMetadata?: Record<string, RestockMetadata>;
     retireMetadata?: Record<string, RetireMetadata>;
+    /** Per-row manual quantity-correction reason. When set, the server peels
+     *  the quantity change off into an ITEM_QTY_ADJUST event carrying the
+     *  reason + note instead of a silent ITEM_EDIT. */
+    adjustMetadata?: Record<string, AdjustMetadata>;
     /** Row ids the client created as continuation stubs for a retire. The
      *  server stamps `skeleton: true` on their ITEM_CREATE audit events so
      *  the activity feed can filter them out. */
@@ -327,6 +371,7 @@ export const saveInventoryItems = async (
       deletedRowIds,
       ...(options?.restockMetadata ? { restockMetadata: options.restockMetadata } : {}),
       ...(options?.retireMetadata ? { retireMetadata: options.retireMetadata } : {}),
+      ...(options?.adjustMetadata ? { adjustMetadata: options.adjustMetadata } : {}),
       ...(options?.skeletonRowIds && options.skeletonRowIds.length > 0 ? { skeletonRowIds: options.skeletonRowIds } : {}),
     }),
   });
@@ -989,6 +1034,9 @@ export const applyIndustryTemplate = async (
 // ─── Alert Summary ────────────────────────────────────────────────────────────
 
 export type LocationAlertBreakdown = {
+  /** Stable key the frontend rolls up by. Absent on legacy responses. */
+  locationId: string;
+  /** Location name (display fallback). Not unique across parents. */
   location: string;
   expiredCount: number;
   expiringSoonCount: number;
@@ -1010,6 +1058,7 @@ export const fetchInventoryAlertSummary = async (): Promise<InventoryAlertSummar
     const data = await res.json();
     const byLocation = Array.isArray(data.byLocation)
       ? data.byLocation.map((b: any) => ({
+          locationId: String(b.locationId ?? ""),
           location: String(b.location ?? ""),
           expiredCount: Number(b.expiredCount ?? 0),
           expiringSoonCount: Number(b.expiringSoonCount ?? 0),
@@ -1046,7 +1095,10 @@ export const listInventoryLocations = async (): Promise<InventoryLocation[]> => 
   return Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [];
 };
 
-export const addInventoryLocation = async (name: string): Promise<{
+export const addInventoryLocation = async (
+  name: string,
+  parentLocationId?: string,
+): Promise<{
   location: InventoryLocation;
   locations: InventoryLocation[];
 }> => {
@@ -1054,9 +1106,33 @@ export const addInventoryLocation = async (name: string): Promise<{
   const res = await authFetch(`${base}/inventory/locations`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(parentLocationId ? { name, parentLocationId } : { name }),
   });
   if (!res.ok) throw new Error(await extractApiError(res, "Failed to add location"));
+  const data = await res.json();
+  return {
+    location: data.location as InventoryLocation,
+    locations: Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [],
+  };
+};
+
+/**
+ * Nest a location under a parent station, or un-nest it back to top-level by
+ * passing null. The server enforces the two-level cap and refuses to nest
+ * under a location that still holds stock (PARENT_HAS_ITEMS) or to nest a
+ * location that has its own children (CHILD_HAS_CHILDREN).
+ */
+export const setInventoryLocationParent = async (
+  id: string,
+  parentLocationId: string | null,
+): Promise<{ location: InventoryLocation; locations: InventoryLocation[] }> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/locations/parent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, parentLocationId }),
+  });
+  if (!res.ok) throw new Error(await extractApiError(res, "Failed to move location"));
   const data = await res.json();
   return {
     location: data.location as InventoryLocation,
@@ -1125,6 +1201,22 @@ export const removeInventoryLocation = async (id: string): Promise<InventoryLoca
     }
     throw new Error((await res.text()) || "Failed to remove location");
   }
+  const data = await res.json();
+  return Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [];
+};
+
+/** Persist a new location ordering. Pass the COMPLETE set of location ids in
+ *  the desired order; the server stamps sortOrder = (index + 1) * 10. */
+export const reorderInventoryLocations = async (
+  locationOrder: string[],
+): Promise<InventoryLocation[]> => {
+  const base = requireBaseUrl();
+  const res = await authFetch(`${base}/inventory/locations/reorder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ locationOrder }),
+  });
+  if (!res.ok) throw new Error(await extractApiError(res, "Failed to reorder locations"));
   const data = await res.json();
   return Array.isArray(data.locations) ? (data.locations as InventoryLocation[]) : [];
 };
@@ -1271,15 +1363,14 @@ export const exportInventoryData = async (): Promise<void> => {
     nextToken = page.nextToken;
   }
 
-  const locationNameById = new Map(bootstrap.locations.map((l) => [l.id, l.name]));
-
   // --- Sheet 1: Inventory ---
   // Synthesize a "Location" column at export time so the spreadsheet stays
   // human-readable. Location is structural (not a column) in the data model,
-  // but exported XLSX rows have always carried it as a visible field.
+  // but exported XLSX rows have always carried it as a visible field. Use the
+  // path ("Station 1 / EMS Cabinet") so same-named sublocations stay distinct.
   const headers = ["Location", ...columns.map((c) => c.label)];
   const rows = allItems.map((item) => {
-    const loc = item.locationId ? locationNameById.get(item.locationId) ?? "" : "";
+    const loc = item.locationId ? locationPath(bootstrap.locations, item.locationId) : "";
     const cells = columns.map((col) => {
       const val = item.values[col.key];
       if (val == null) return "";
@@ -1296,7 +1387,7 @@ export const exportInventoryData = async (): Promise<void> => {
   ];
 
   // --- Sheet 2: Locations ---
-  const locationRows = bootstrap.locations.map((loc) => [loc.name]);
+  const locationRows = bootstrap.locations.map((loc) => [locationPath(bootstrap.locations, loc.id)]);
   const locationsWs = XLSX.utils.aoa_to_sheet([["Location"], ...locationRows]);
   locationsWs["!cols"] = [{ wch: 30 }];
 
@@ -1349,6 +1440,9 @@ export type AuditAnalyticsSlice = {
   byVendor: Array<{ vendor: string; spend: number; orderCount: number }>;
   bySpendItem: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }>;
   byUsageItem: Array<{ itemId: string; itemName: string; qtyUsed: number; cost: number }>;
+  /** Per-item retire roll-up. `value` is the dollar impact of the retire,
+   *  computed via the same cost-fallback chain as USAGE_APPROVE. */
+  byRetiredItem: Array<{ itemId: string; itemName: string; qtyRetired: number; value: number }>;
   lossByReason: Array<{ reason: string; qty: number; value: number }>;
   /** Pre-cap sizes so the dashboard can show "View all (N)" CTAs when
    *  there's a long tail past the top-10 rendered in the chart. */
@@ -1356,6 +1450,7 @@ export type AuditAnalyticsSlice = {
     byVendor: number;
     bySpendItem: number;
     byUsageItem: number;
+    byRetiredItem: number;
   };
 };
 
@@ -1441,6 +1536,18 @@ export const fetchItemHistory = async (
   return res.json();
 };
 
+/** History for a LOGICAL item (by name) — merges the audit events of every lot
+ *  row that shares this name, so a multi-lot item (expiration lots, per-location
+ *  rows) reads as one item. Returns a bounded merged list (no cursor). */
+export const fetchItemHistoryByName = async (
+  itemName: string,
+): Promise<AuditFeedResponse> => {
+  const url = `${INVENTORY_API_BASE_URL}/inventory/audit/item-name-history?itemName=${encodeURIComponent(itemName)}`;
+  const res = await authFetch(url);
+  if (!res.ok) throw new Error(await getApiErrorMessage(res, "Failed to load item history."));
+  return res.json();
+};
+
 export const fetchAuditAnalytics = async (params: {
   period: "7d" | "30d" | "90d";
   /** When true, the server also returns a `previous` aggregation for the same
@@ -1511,10 +1618,11 @@ export const fetchVendorBreakdown = async (params: {
 export type AnalyticsBreakdown =
   | { scope: "purchased"; period: string; items: Array<{ itemId: string; itemName: string; spend: number; qtyReceived: number }> }
   | { scope: "used"; period: string; items: Array<{ itemId: string; itemName: string; qtyUsed: number; cost: number }> }
+  | { scope: "retired"; period: string; items: Array<{ itemId: string; itemName: string; qtyRetired: number; value: number }> }
   | { scope: "vendors"; period: string; vendors: Array<{ vendor: string; spend: number; orderCount: number }> };
 
 export const fetchAnalyticsBreakdown = async (params: {
-  scope: "purchased" | "used" | "vendors";
+  scope: "purchased" | "used" | "vendors" | "retired";
   period: "7d" | "30d" | "90d";
   locationId?: string;
 }): Promise<AnalyticsBreakdown> => {
@@ -1622,6 +1730,9 @@ export const createRestockOrder = async (payload: {
     unitCost?: number;
     reorderLink?: string;
     location?: string;
+    /** Leaf locationId the line should receive into. Lets receive route stock
+     *  back to the right cabinet for per-leaf reorder + mixed orders. */
+    locationId?: string;
     minQuantity?: number;
     packSize?: number;
     packCost?: number;

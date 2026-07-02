@@ -116,6 +116,12 @@ export function RemoveItemDialog({
 
   const canConfirm = selectedId !== "" && !loading;
 
+  // Notes only apply to retire (loss) reasons, where the context feeds loss
+  // analytics and accountability. "Created by mistake" is a correction, not a
+  // loss, so we hide the field for it (and before any reason is picked).
+  const selectedOption = REMOVE_OPTIONS.find((o) => optionId(o) === selectedId);
+  const showNotes = selectedOption?.kind === "retire";
+
   return (
     <div
       className="confirm-dialog-overlay"
@@ -166,18 +172,20 @@ export function RemoveItemDialog({
               })}
           </ul>
 
-          <label className="remove-reason-notes">
-            <span className="remove-reason-notes-label">
-              Notes <span className="remove-reason-notes-optional">(optional)</span>
-            </span>
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value.slice(0, 500))}
-              placeholder="Anything worth recording — context, who pulled it, etc."
-              rows={2}
-              disabled={loading}
-            />
-          </label>
+          {showNotes && (
+            <label className="remove-reason-notes">
+              <span className="remove-reason-notes-label">
+                Notes <span className="remove-reason-notes-optional">(optional)</span>
+              </span>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value.slice(0, 500))}
+                placeholder="Anything worth recording — context, who pulled it, etc."
+                rows={2}
+                disabled={loading}
+              />
+            </label>
+          )}
         </div>
 
         <div className="confirm-dialog-actions">

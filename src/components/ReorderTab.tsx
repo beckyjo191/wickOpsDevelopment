@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventoryLocation, InventoryRow } from "../lib/inventoryApi";
+import { buildLocationPickerEntries, locationsInScope, locationPath } from "../lib/locationTree";
 import { formatCurrency, parseCurrency } from "../lib/currency";
 import { Check, ChevronDown, ExternalLink, Link2Off, Minus, Package, X } from "lucide-react";
 import { EmptyState } from "./shared/EmptyState";
@@ -77,6 +78,10 @@ export type OrderItem = {
   reorderLink?: string;
   // For freeform items only: location the user picked when adding the item.
   location?: string;
+  // Leaf locationId this line should receive into. Set by the Shop/Reorder tab
+  // (per-leaf lines) and the New Order destination picker so receive routes
+  // stock to the right cabinet — supports mixed multi-leaf orders.
+  locationId?: string;
   // ── 1d: amount/UoM/price triplet ───────────────────────────────────────────
   // Used by the Shop tab when the user types an inline price for an item with
   // no per-vendor history. Server derives pricePerCanonical; persists onto
@@ -149,6 +154,11 @@ type ReorderItem = {
   // as low by the auto-reorder logic). Pre-checked in the vendor card so it
   // rolls into Mark-as-Ordered alongside low-stock items.
   isExtra?: boolean;
+  // When this row rolls up shortfall from more than one cabinet (a station or
+  // "All Locations" scope), the per-cabinet shortfalls that sum to suggestedQty.
+  // Undefined for single-location rows. Drives the "Station 1 short 4 · EMS 2 ·
+  // Ambulance 2" breakdown chip.
+  locationBreakdown?: { location: string; shortfall: number }[];
 };
 
 type VendorGroup = {
@@ -477,6 +487,13 @@ function VendorChecklistCard({
                       ) : (
                         <span className="badge badge--warning">
                           Low: {itemData.activeQty}/{itemData.minQuantity}
+                        </span>
+                      )}
+                      {itemData.locationBreakdown && (
+                        <span className="reorder-loc-breakdown" title="Per-location shortfall">
+                          {itemData.locationBreakdown
+                            .map((b) => `${b.location || "—"} ${b.shortfall}`)
+                            .join(" · ")}
                         </span>
                       )}
                       {itemData.unitCost !== null && (
@@ -1057,6 +1074,13 @@ function MissingInfoCard({
                         Low: {item.activeQty}/{item.minQuantity}
                       </span>
                     )}
+                    {item.locationBreakdown && (
+                      <span className="reorder-loc-breakdown" title="Per-location shortfall">
+                        {item.locationBreakdown
+                          .map((b) => `${b.location || "—"} ${b.shortfall}`)
+                          .join(" · ")}
+                      </span>
+                    )}
                   </span>
                 </div>
               </div>
@@ -1179,8 +1203,17 @@ export function ReorderTab({
   onMarkOrdered,
 }: ReorderTabProps) {
   const { vendorGroups, incompleteItems } = useMemo(() => {
-    // Aggregate rows by itemName + location into one entry per item
-    type ItemAgg = {
+    // Locations in scope: "All Locations" → every location; a primary → itself
+    // + its sublocations; a sublocation → just itself. Any location can hold
+    // stock, so this is exactly the set whose shortfall rolls up to the scope.
+    const scopeLocationIds = locationsInScope(availableLocationsFull, selectedLocationId);
+
+    // ── Pass 1: aggregate per (itemName, location) ──────────────────────────
+    // Each location honors its own par independently. The unit of "need" is one
+    // location being short — an over-par location must NOT offset a short one,
+    // or a primary roll-up would hide an empty sublocation behind a full one.
+    type LeafAgg = {
+      locationId: string;
       rows: InventoryRow[];
       activeQty: number;
       expiredQty: number;
@@ -1191,21 +1224,13 @@ export function ReorderTab({
       latestOrderedAt: string | null;
     };
 
-    const groupMap = new Map<string, ItemAgg>();
-
-    // Scope filter:
-    //   - All Locations  → aggregate by itemName only. Moving stock between
-    //     locations doesn't change org-wide need; the reorder list reflects
-    //     "the org needs N of this item total."
-    //   - Specific loc   → aggregate by itemName + locationId. Each cabinet's
-    //     restock decision is its own; rows at other locations are ignored.
-    const isAllLocations = selectedLocationId === null || selectedLocationId === "";
+    const leafMap = new Map<string, LeafAgg>();
     for (const row of rows) {
       const itemName = String(row.values.itemName ?? "").trim();
       if (!itemName) continue;
       const locationId = String(row.locationId ?? "");
-      if (!isAllLocations && locationId !== selectedLocationId) continue;
-      const key = isAllLocations ? itemName : `${itemName}\x00${locationId}`;
+      if (!scopeLocationIds.has(locationId)) continue;
+      const key = `${itemName}\x00${locationId}`;
 
       const quantity = Number.isFinite(Number(row.values.quantity)) ? Number(row.values.quantity) : 0;
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
@@ -1214,7 +1239,7 @@ export function ReorderTab({
       const rowVendor = String(row.values.vendor ?? "").trim();
       const rowOrderedAt = row.values.orderedAt ? String(row.values.orderedAt) : null;
 
-      const existing = groupMap.get(key);
+      const existing = leafMap.get(key);
       if (!existing) {
         const minQuantityRaw = row.values.minQuantity;
         const minQuantity = Number(minQuantityRaw);
@@ -1225,7 +1250,8 @@ export function ReorderTab({
           Number.isFinite(minQuantity) &&
           minQuantity > 0;
 
-        groupMap.set(key, {
+        leafMap.set(key, {
+          locationId,
           rows: [row],
           activeQty: isExpired ? 0 : quantity,
           expiredQty: isExpired ? quantity : 0,
@@ -1242,7 +1268,7 @@ export function ReorderTab({
         } else {
           existing.activeQty += quantity;
         }
-        // Take the highest minQuantity across lots
+        // Take the highest minQuantity across lots in this cabinet
         const minQuantityRaw = row.values.minQuantity;
         const minQuantity = Number(minQuantityRaw);
         const hasMin =
@@ -1270,28 +1296,85 @@ export function ReorderTab({
       }
     }
 
-    const reorderItems: ReorderItem[] = [];
-    const incomplete: ReorderItem[] = [];
+    // ── Pass 2: roll cabinets up to one entry per item ──────────────────────
+    // Sum the shortfall of every cabinet that's actually low and not already on
+    // order. This is the heart of the hierarchy: "what is the whole station out
+    // of" = Σ per-cabinet shortfall, never total-qty-vs-total-par.
+    type ItemRollup = {
+      itemName: string;
+      shortfallUnits: number;
+      activeQty: number;   // summed over contributing (low) cabinets only
+      minQuantity: number; // summed over contributing (low) cabinets only
+      expiredQty: number;
+      rows: InventoryRow[];
+      reorderLink: string;
+      vendor: string;
+      breakdown: { location: string; shortfall: number }[];
+      repRow: InventoryRow;
+    };
 
-    for (const [key, agg] of groupMap.entries()) {
-      // Only show if actively low — expired qty doesn't count toward stock.
-      // Items without a min set are intentionally excluded; min=0 is a valid
-      // "we're discontinuing this" signal and should not be surfaced.
+    const rollup = new Map<string, ItemRollup>();
+    for (const [key, agg] of leafMap.entries()) {
+      // Only count cabinets that are actively low. Items without a min set are
+      // intentionally excluded; min=0 is a valid "we're discontinuing this"
+      // signal. Expired qty doesn't count toward on-hand.
       if (!agg.hasMin || agg.activeQty >= agg.minQuantity) continue;
-      // Already-ordered items live in the Pending Receipt section; skip here.
+      // A cabinet with a pending order is already being restocked — it doesn't
+      // add to the outstanding need (mirrors the Pending Receipt section).
       if (agg.latestOrderedAt) continue;
 
       const itemName = key.split("\x00")[0];
+      const shortfall = agg.minQuantity - agg.activeQty;
 
-      // Representative row: prefer non-expired row with lowest active qty
+      // Representative row for this cabinet: non-expired row with lowest qty.
       const activeRows = agg.rows.filter((r) => {
         const d = getDaysUntilExpiration(r.values.expirationDate);
         return d === null || d > 0;
       });
       const candidateRows = activeRows.length > 0 ? activeRows : agg.rows;
-      const repRow = candidateRows.reduce((best, r) =>
+      const leafRep = candidateRows.reduce((best, r) =>
         Number(r.values.quantity ?? 0) < Number(best.values.quantity ?? 0) ? r : best,
       );
+      // Path-qualified so two same-named sublocations (e.g. each station's "EMS
+      // Cabinet") stay distinguishable in the breakdown chip.
+      const locName = locationPath(availableLocationsFull, agg.locationId) || agg.locationId;
+
+      const existing = rollup.get(itemName);
+      if (!existing) {
+        rollup.set(itemName, {
+          itemName,
+          shortfallUnits: shortfall,
+          activeQty: agg.activeQty,
+          minQuantity: agg.minQuantity,
+          expiredQty: agg.expiredQty,
+          rows: [...agg.rows],
+          reorderLink: agg.reorderLink,
+          vendor: agg.vendor,
+          breakdown: [{ location: locName, shortfall }],
+          repRow: leafRep,
+        });
+      } else {
+        existing.shortfallUnits += shortfall;
+        existing.activeQty += agg.activeQty;
+        existing.minQuantity += agg.minQuantity;
+        existing.expiredQty += agg.expiredQty;
+        existing.rows.push(...agg.rows);
+        if (!existing.reorderLink && agg.reorderLink) existing.reorderLink = agg.reorderLink;
+        if (!existing.vendor && agg.vendor) existing.vendor = agg.vendor;
+        existing.breakdown.push({ location: locName, shortfall });
+        // Keep the most-short cabinet's representative for pricing/link display.
+        if (Number(leafRep.values.quantity ?? 0) < Number(existing.repRow.values.quantity ?? 0)) {
+          existing.repRow = leafRep;
+        }
+      }
+    }
+
+    const reorderItems: ReorderItem[] = [];
+    const incomplete: ReorderItem[] = [];
+
+    for (const r of rollup.values()) {
+      const itemName = r.itemName;
+      const repRow = r.repRow;
 
       // Effective unit cost for estimating reorder spend: prefer the derived
       // price from packCost / packSize when both are set, else the row's
@@ -1307,27 +1390,32 @@ export function ReorderTab({
         unitCost = storedUnit;
       }
 
-      // Suggest in boxes when pack-based (round up shortfall to whole boxes),
-      // else in units. Input + subtotal follow this denomination too.
-      const shortfallUnits = agg.minQuantity - agg.activeQty;
+      // Suggest in boxes when pack-based (round up the summed shortfall to whole
+      // boxes), else in units. Input + subtotal follow this denomination too.
+      const shortfallUnits = r.shortfallUnits;
       const suggestedQty = packSize > 0
         ? Math.max(1, Math.ceil(shortfallUnits / packSize))
         : Math.max(1, Math.ceil(shortfallUnits));
 
+      const breakdown = [...r.breakdown].sort((a, b) => b.shortfall - a.shortfall);
+
       const item: ReorderItem = {
         row: repRow,
-        allRowIds: agg.rows.map((r) => r.id),
+        allRowIds: r.rows.map((row) => row.id),
         itemName,
-        reorderLink: agg.reorderLink,
-        vendor: agg.vendor,
-        activeQty: agg.activeQty,
-        expiredQty: agg.expiredQty,
-        minQuantity: agg.minQuantity,
+        reorderLink: r.reorderLink,
+        vendor: r.vendor,
+        activeQty: r.activeQty,
+        expiredQty: r.expiredQty,
+        minQuantity: r.minQuantity,
         suggestedQty,
-        hasExpired: agg.expiredQty > 0,
-        orderedAt: agg.latestOrderedAt,
+        hasExpired: r.expiredQty > 0,
+        // Contributing cabinets are all not-on-order by construction.
+        orderedAt: null,
         unitCost,
         packSize,
+        // Only surface a breakdown when the need spans more than one cabinet.
+        locationBreakdown: breakdown.length > 1 ? breakdown : undefined,
       };
 
       // Vendor is the only hard requirement to land in a vendor card —
@@ -1364,9 +1452,10 @@ export function ReorderTab({
     incomplete.sort(nameCompare);
 
     return { vendorGroups: groups, incompleteItems: incomplete };
-    // selectedLocationId controls the scope: All Locations collapses items
-    // org-wide; a specific location filters to that one's rows.
-  }, [rows, selectedLocationId]);
+    // selectedLocationId controls the scope: "All Locations" sums every
+    // cabinet's shortfall; a station sums its children's; a single cabinet is
+    // just itself. availableLocationsFull supplies the tree for that roll-up.
+  }, [rows, selectedLocationId, availableLocationsFull]);
 
   // Rows the user has explicitly picked for this reorder via the panel (not
   // low-stock). Stored as rowId — we look up the live row from inventoryRows
@@ -1736,17 +1825,18 @@ export function ReorderTab({
                 >
                   All Locations
                 </button>
-                {sortedLocationsForHeader.map((loc) => (
+                {buildLocationPickerEntries(availableLocationsFull).map((entry) => (
                   <button
-                    key={loc.id}
+                    key={entry.id}
                     type="button"
-                    className={`inventory-dropdown-option${selectedLocationId === loc.id ? " active" : ""}`}
+                    className={`inventory-dropdown-option${selectedLocationId === entry.id ? " active" : ""}${entry.depth === 1 ? " inventory-dropdown-option--child" : ""}`}
                     onClick={(e) => {
-                      onSelectedLocationIdChange(loc.id);
+                      onSelectedLocationIdChange(entry.id);
                       e.currentTarget.closest("details")?.removeAttribute("open");
                     }}
                   >
-                    {loc.name}
+                    {entry.name}
+                    {entry.isStation ? <span className="inventory-dropdown-hint"> · all</span> : null}
                   </button>
                 ))}
               </div>

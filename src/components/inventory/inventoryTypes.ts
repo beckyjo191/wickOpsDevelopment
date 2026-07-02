@@ -35,6 +35,9 @@ export interface InventoryPageProps {
   /** Notifies parent of the current filter tab so subnav-level UI (e.g. tab-aware
    *  help button) can react. Fires on mount and on every change. */
   onActiveTabChange?: (tab: ActiveTab) => void;
+  /** Deep-link an item's full history into the Activity tab — passed through to
+   *  the vendor-pricing modal's embedded History view. */
+  onOpenActivityHistory?: (itemId: string, itemName: string) => void;
 }
 
 export type CsvImportDialogState = {

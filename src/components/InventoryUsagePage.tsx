@@ -51,6 +51,7 @@ type UsageGroup = {
 
 const DEFAULT_PROVISIONING_RETRY_MS = 2000;
 import { pickLoadingLine } from "../lib/loadingLines";
+import { buildLocationPickerEntries, locationsInScope } from "../lib/locationTree";
 
 const toDateInputValue = (value: unknown): string => {
   const raw = String(value ?? "").trim();
@@ -358,7 +359,7 @@ export function InventoryUsagePage({
   type RecentUsageSubmission = {
     id: string;
     submittedAt: string;
-    entries: Array<{ itemName: string; quantityUsed: number }>;
+    entries: Array<{ itemName: string; quantityUsed: number; locationId?: string }>;
   };
   const RECENT_USAGE_STORAGE_KEY = "wickops.recentUsageSubmissions";
   const [recentSubmissions, setRecentSubmissions] = useState<RecentUsageSubmission[]>(() => {
@@ -481,6 +482,18 @@ export function InventoryUsagePage({
   // Only show the picker when there are 2+ locations to pick from.
   const showLocationPicker = sortedLocations.length > 1;
   const singleLocationId = sortedLocations.length === 1 ? sortedLocations[0].id : null;
+
+  // Recent Usage, scoped to the location the page is viewing. "All Locations"
+  // (empty scope) shows everything (incl. legacy entries that predate the
+  // per-entry locationId); a primary scope includes its sublocations.
+  const scopedRecentSubmissions = useMemo(() => {
+    const scopeId = (selectedLocationId ?? "").trim();
+    if (!scopeId) return recentSubmissions;
+    const scopeSet = locationsInScope(locations, scopeId);
+    return recentSubmissions
+      .map((sub) => ({ ...sub, entries: sub.entries.filter((e) => e.locationId && scopeSet.has(e.locationId)) }))
+      .filter((sub) => sub.entries.length > 0);
+  }, [recentSubmissions, selectedLocationId, locations]);
 
   // Auto-assign the only location to all groups when there's exactly one.
   useEffect(() => {
@@ -712,7 +725,7 @@ export function InventoryUsagePage({
       const snapshotEntries = normalized.map((entry) => {
         const row = rowById.get(entry.itemId);
         const name = row ? getItemDisplayName(row) : entry.itemId;
-        return { itemName: name, quantityUsed: entry.quantityUsed };
+        return { itemName: name, quantityUsed: entry.quantityUsed, locationId: row?.locationId };
       });
       setRecentSubmissions((prev) => [
         {
@@ -806,9 +819,9 @@ export function InventoryUsagePage({
                         aria-describedby={group.locationError ? `usage-location-error-${group.id}` : undefined}
                       >
                         <option value="">Select location...</option>
-                        {sortedLocations.map((loc) => (
-                          <option key={loc.id} value={loc.id}>
-                            {loc.name}
+                        {buildLocationPickerEntries(sortedLocations).map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {entry.depth === 1 ? `  ${entry.label}` : entry.label}
                           </option>
                         ))}
                       </select>
@@ -1060,11 +1073,11 @@ export function InventoryUsagePage({
           </button>
         </div>
 
-        {recentSubmissions.length > 0 && (
+        {scopedRecentSubmissions.length > 0 && (
           <div className="usage-activity">
             <h3 className="usage-activity-title">Recent Usage</h3>
             <ul className="usage-activity-list">
-              {recentSubmissions.map((sub) => {
+              {scopedRecentSubmissions.map((sub) => {
                 // Full label is always available via the title attr for
                 // hover-to-see-everything. Visible label simplifies once the
                 // line gets long: shows the first two items + a "+N more"

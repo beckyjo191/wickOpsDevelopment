@@ -8,6 +8,7 @@ import type {
   SortDirection,
 } from "../inventoryTypes";
 import type { InventoryLocation } from "../../../lib/inventoryApi";
+import { locationsInScope, locationPath } from "../../../lib/locationTree";
 import { ROWS_PER_PAGE } from "../inventoryTypes";
 
 interface UseInventoryFiltersParams {
@@ -277,7 +278,17 @@ export function useInventoryFilters({
   const effectiveLocationName: string =
     effectiveLocationId === ALL_LOCATIONS
       ? "All Locations"
-      : locationById.get(effectiveLocationId)?.name ?? "All Locations";
+      : locationPath(locations, effectiveLocationId) || "All Locations";
+
+  // The locations the current scope covers. A sublocation is just itself; a
+  // primary is itself + its sublocations — so selecting a primary shows (and
+  // counts) its own items plus everything beneath it. ALL_LOCATIONS bypasses.
+  const scopeLocationIds = useMemo(
+    () => locationsInScope(locations, effectiveLocationId),
+    [locations, effectiveLocationId],
+  );
+  const inScope = (row: InventoryRow): boolean =>
+    effectiveLocationId === ALL_LOCATIONS || scopeLocationIds.has(String(row.locationId ?? ""));
 
   const showLocationPills = sortedLocations.length >= 1;
 
@@ -384,7 +395,7 @@ export function useInventoryFilters({
     // one entry here even though the tab still lists each of its lots.
     const lowItemKeys = new Set<string>();
     for (const row of rows) {
-      if (effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) continue;
+      if (!inScope(row)) continue;
       const isRetired = Boolean(row.values.retiredAt);
       if (isRetired) retired++;
       const daysUntil = getDaysUntilExpiration(row.values.expirationDate);
@@ -447,7 +458,7 @@ export function useInventoryFilters({
         const isPinnedRow =
           (editingRowIdRef.current && row.id === editingRowIdRef.current)
           || (recentlyEditedRowIdRef.current && row.id === recentlyEditedRowIdRef.current);
-        if (isPinnedRow && effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) {
+        if (isPinnedRow && !inScope(row)) {
           // Pinned but in a different location → hide. Editing continues in
           // the original scope; switching back will surface it again.
           return false;
@@ -482,7 +493,8 @@ export function useInventoryFilters({
         if (!passesTab) return false;
 
         // Structural location filter (replaces the old values.location compare).
-        if (effectiveLocationId !== ALL_LOCATIONS && row.locationId !== effectiveLocationId) {
+        // Subtree-aware: a station scope matches every cabinet beneath it.
+        if (!inScope(row)) {
           return false;
         }
 

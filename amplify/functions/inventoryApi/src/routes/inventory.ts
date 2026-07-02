@@ -1,13 +1,14 @@
 // ── Route handlers: inventory ───────────────────────────────────────────────
 import { BatchGetCommand, UpdateCommand, DeleteCommand } from "@aws-sdk/lib-dynamodb";
 import { randomUUID } from "node:crypto";
-import type { RetireReason, RouteContext } from "../types";
-import { RETIRE_REASONS } from "../types";
+import type { AdjustReason, RetireReason, RouteContext } from "../types";
+import { ADJUST_REASONS, ADJUST_REASON_LOSS_KIND, RETIRE_REASONS } from "../types";
 import { ddb } from "../clients";
 import { json, parseNextToken } from "../http";
 import { getParentItemId, listAllItems, listItemsPage, validateNonNegativeField } from "../items";
 import { buildAuditEvent, findAuditEventByEventId, writeAuditEvents, writeAuditEventsCoalesced, computeValuesDiff } from "../audit";
 import { listLocations } from "../columns";
+import { locationHasChildren, getOrCreateDefaultBucket, resolveStockLocation } from "../locations";
 
 // Machine-managed fields in valuesJson. Changes to these shouldn't produce
 // ITEM_EDIT audit events — they're either identity (parentItemId) or state
@@ -106,6 +107,33 @@ export const handleSaveItems = async (ctx: RouteContext) => {
   const knownLocationIds = new Set(allLocationsForSave.map((l) => l.id));
   const locationNameById = new Map(allLocationsForSave.map((l) => [l.id, l.name]));
 
+  // Stock can only live on a leaf. If a row targets a station (a primary that
+  // has sublocations) we route it into that station's default bucket child
+  // instead — created on demand and cached so a batch hitting the same station
+  // only makes one. Self-healing backstop: even an existing row that somehow
+  // sits on a now-parent gets pulled into the bucket on its next save. The
+  // common path (new rows already stamped with a leaf by the client) is a no-op.
+  let workingLocations = allLocationsForSave;
+  const leafResolution = new Map<string, string>();
+  const resolveLeaf = async (requestedId: string): Promise<string> => {
+    const cached = leafResolution.get(requestedId);
+    if (cached) return cached;
+    if (!locationHasChildren(workingLocations, requestedId)) {
+      leafResolution.set(requestedId, requestedId);
+      return requestedId;
+    }
+    const bucket = await getOrCreateDefaultBucket(
+      storage, access.organizationId, requestedId, workingLocations,
+    );
+    if (!knownLocationIds.has(bucket.id)) {
+      workingLocations = [...workingLocations, bucket];
+      knownLocationIds.add(bucket.id);
+      locationNameById.set(bucket.id, bucket.name);
+    }
+    leafResolution.set(requestedId, bucket.id);
+    return bucket.id;
+  };
+
   const auditEvents: Record<string, unknown>[] = [];
 
   for (let idx = 0; idx < rows.length; idx += 1) {
@@ -156,6 +184,8 @@ export const handleSaveItems = async (ctx: RouteContext) => {
         error: `Row ${idx + 1}: locationId is required for new rows`,
       });
     }
+    // Enforce the leaf invariant: a station id resolves to its bucket child.
+    locationId = await resolveLeaf(locationId);
 
     try {
       await ddb.send(
@@ -206,6 +236,17 @@ export const handleSaveItems = async (ctx: RouteContext) => {
       ? (retire.reason as RetireReason)
       : null;
 
+    // Adjust metadata: when present, a manual quantity correction (the user
+    // reconciled the on-hand count to reality) with a required reason. The
+    // quantity change is peeled off into a dedicated ITEM_QTY_ADJUST event so
+    // the reason is recorded; any other fields edited in the same save still
+    // flow through the generic ITEM_EDIT path below.
+    const adjustMeta = (body?.adjustMetadata as Record<string, unknown> | undefined)?.[rowId];
+    const adjust = adjustMeta && typeof adjustMeta === "object" ? (adjustMeta as Record<string, unknown>) : null;
+    const adjustReason: AdjustReason | null = adjust && typeof adjust.reason === "string" && (ADJUST_REASONS as string[]).includes(adjust.reason)
+      ? (adjust.reason as AdjustReason)
+      : null;
+
     if (retireReason && oldValues) {
       const qtyBefore = Number(oldValues.quantity ?? 0);
       const qtyAfter = Number(values.quantity ?? 0);
@@ -236,13 +277,49 @@ export const handleSaveItems = async (ctx: RouteContext) => {
       // ITEM_RETIRE events already carry that context, so we strip them from
       // the generic ITEM_EDIT diff.
       const userChanges = allChanges.filter((c) => !SYSTEM_FIELDS.has(c.field));
-      if (userChanges.length > 0) {
+      const qtyChanged = userChanges.some((c) => c.field === "quantity");
+
+      // Manual reconciliation: a tagged quantity correction becomes its own
+      // ITEM_QTY_ADJUST event carrying the reason + optional note. We only honor
+      // it when the quantity actually moved — a stray adjustMetadata with no qty
+      // delta shouldn't fabricate an event.
+      if (adjustReason && qtyChanged) {
+        const qtyBefore = Number(oldValues.quantity ?? 0);
+        const qtyAfter = Number(values.quantity ?? 0);
+        const delta = Number.isFinite(qtyBefore) && Number.isFinite(qtyAfter) ? qtyAfter - qtyBefore : 0;
+        const notes = typeof adjust?.notes === "string" && adjust.notes.trim() ? String(adjust.notes).trim() : undefined;
+        // Stamp unitCost on loss-kind downward adjustments (shrinkage/damaged)
+        // so loss analytics can value them accurately even if pricing later
+        // changes — same forward-stamping the retire path uses. Corrections
+        // (recount/found/data-entry) never feed loss, so we skip the stamp.
+        const adjustUnitCost = Number(values.unitCost);
+        const isLossAdjust = ADJUST_REASON_LOSS_KIND[adjustReason] === "loss" && delta < 0;
+        auditEvents.push(buildAuditEvent(access, "ITEM_QTY_ADJUST", rowId, itemName, {
+          reason: adjustReason,
+          qtyBefore,
+          qtyAfter,
+          delta,
+          direction: delta >= 0 ? "increase" : "decrease",
+          parentItemId: String(values.parentItemId ?? rowId),
+          ...(notes ? { notes } : {}),
+          ...(isLossAdjust && Number.isFinite(adjustUnitCost) && adjustUnitCost > 0 ? { unitCost: adjustUnitCost } : {}),
+          snapshot,
+        }));
+      }
+
+      // Remaining field changes still get a generic edit/create. When the qty
+      // change was peeled off into ITEM_QTY_ADJUST above, drop it here so it
+      // isn't double-counted in the activity feed / analytics.
+      const remainingChanges = adjustReason && qtyChanged
+        ? userChanges.filter((c) => c.field !== "quantity")
+        : userChanges;
+      if (remainingChanges.length > 0) {
         // If old values were all defaults, this is the first meaningful edit —
         // treat it as the real "create" event with the actual item name.
         const action = isAllDefaults(oldValues) ? "ITEM_CREATE" as const : "ITEM_EDIT" as const;
         auditEvents.push(buildAuditEvent(access, action, rowId, itemName, action === "ITEM_CREATE"
           ? { initialValues: values, snapshot }
-          : { changes: userChanges, snapshot }));
+          : { changes: remainingChanges, snapshot }));
       }
     } else {
       // Brand new row — only log creation if it has actual content. Stamp
@@ -521,11 +598,22 @@ export const handleMoveItems = async (ctx: RouteContext) => {
   if (rowIds.length === 0) return json(400, { error: "rowIds is required" });
   if (!locationId) return json(400, { error: "locationId is required" });
 
-  // Validate the destination exists.
+  // Validate the destination exists, then resolve it to a leaf: moving items
+  // onto a station (a primary with sublocations) routes them into its default
+  // bucket child instead, so stock never lands on a parent.
   const locations = await listLocations(storage);
   const dest = locations.find((l) => l.id === locationId);
   if (!dest) return json(400, { error: `locationId '${locationId}' does not exist` });
-  const locationNameById = new Map(locations.map((l) => [l.id, l.name]));
+  const resolvedLocationId = await resolveStockLocation(
+    storage, access.organizationId, locationId, locations,
+  ) ?? locationId;
+  // Re-list only when the resolve created/redirected to a different (possibly
+  // brand-new bucket) location, so the audit name map and dest name are right.
+  const moveLocations = resolvedLocationId === locationId
+    ? locations
+    : await listLocations(storage);
+  const destLeaf = moveLocations.find((l) => l.id === resolvedLocationId) ?? dest;
+  const locationNameById = new Map(moveLocations.map((l) => [l.id, l.name]));
 
   // Snapshot existing rows so the audit events can record the from-side.
   const oldByIdMap = new Map<string, { locationId?: string; itemName: string }>();
@@ -563,7 +651,7 @@ export const handleMoveItems = async (ctx: RouteContext) => {
   for (const id of rowIds) {
     const old = oldByIdMap.get(id);
     if (!old) continue; // not found — silently skip rather than 404 the whole batch
-    if (old.locationId === locationId) continue; // no-op move
+    if (old.locationId === resolvedLocationId) continue; // no-op move
     try {
       await ddb.send(
         new UpdateCommand({
@@ -573,7 +661,7 @@ export const handleMoveItems = async (ctx: RouteContext) => {
           ConditionExpression: "organizationId = :org AND #module = :module",
           ExpressionAttributeNames: { "#module": "module" },
           ExpressionAttributeValues: {
-            ":loc": locationId,
+            ":loc": resolvedLocationId,
             ":now": now,
             ":org": access.organizationId,
             ":module": "inventory",
@@ -584,8 +672,8 @@ export const handleMoveItems = async (ctx: RouteContext) => {
         buildAuditEvent(access, "ITEM_MOVE", id, old.itemName, {
           fromLocationId: old.locationId ?? null,
           fromLocationName: old.locationId ? locationNameById.get(old.locationId) ?? null : null,
-          toLocationId: locationId,
-          toLocationName: dest.name,
+          toLocationId: resolvedLocationId,
+          toLocationName: destLeaf.name,
         }),
       );
       movedCount += 1;

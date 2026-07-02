@@ -1,12 +1,14 @@
 // ── InventoryPage orchestrator ───────────────────────────────────────────────
 // Wires custom hooks to sub-components. All state lives in hooks.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 // Download (arrow pointing down into a tray) reads as "import — bringing
 // data in." Upload looked like Export to the user, which is the opposite.
 import { ChevronDown, Download, Plus } from "lucide-react";
 import type { InventoryPageProps } from "./inventoryTypes";
 import { isDeletableRow, normalizeHeaderKey } from "./inventoryUtils";
+import { aggregateVendorPricingByName, rawPricingForName } from "../../lib/vendorPricingAggregate";
 import { RemoveItemDialog } from "./RemoveItemDialog";
+import { AdjustQuantityDialog } from "./AdjustQuantityDialog";
 import {
   addInventoryLocation,
   addInventoryVendor,
@@ -18,6 +20,7 @@ import { useMobileDetect } from "./hooks/useMobileDetect";
 import { useColumnResize } from "./hooks/useColumnResize";
 import { useInventoryFilters } from "./hooks/useInventoryFilters";
 import { useInventoryData } from "./hooks/useInventoryData";
+import { buildLocationPickerEntries, locationPath, isStation } from "../../lib/locationTree";
 
 // Components
 import { AddLocationForm } from "./AddLocationForm";
@@ -46,6 +49,7 @@ export function InventoryPage({
   onSelectedLocationIdChange,
   onSaveFnChange,
   onActiveTabChange,
+  onOpenActivityHistory,
 }: InventoryPageProps) {
   const { isMobile } = useMobileDetect();
 
@@ -84,6 +88,14 @@ export function InventoryPage({
     setCurrentPage: filtersRef.current?.setCurrentPage ?? (() => {}),
   });
 
+  // Name-aggregated pricing for READS: a logical item spans multiple lot rows,
+  // so a price set on one lot should be visible from every lot (and count as
+  // "has pricing"). `data.vendorPricing` stays the per-row write target.
+  const vendorPricingByName = useMemo(
+    () => aggregateVendorPricingByName(data.rows, data.vendorPricing),
+    [data.rows, data.vendorPricing],
+  );
+
   // ── Save bar fade-out effect ──────────────────────────────────────────────
   useEffect(() => {
     if (data.saving) {
@@ -116,7 +128,7 @@ export function InventoryPage({
     newRowPositionRef: data.newRowPositionRef,
     editingOriginalIndexRef: data.editingOriginalIndexRef,
     sortEpoch: data.sortEpoch,
-    vendorPricing: data.vendorPricing,
+    vendorPricing: vendorPricingByName,
   });
 
   // ── Notify parent of active tab so subnav-level UI can react ──────────────
@@ -124,6 +136,13 @@ export function InventoryPage({
     onActiveTabChange?.(filters.activeTab);
   }, [filters.activeTab, onActiveTabChange]);
   filtersRef.current = filters;
+
+  // Aggregate scopes — "All Locations" and a station's "· all" roll-up — are
+  // read-only views (a station isn't a leaf, so stock can't live on it).
+  // Writes (Add Row, Import, per-location columns) require a specific leaf.
+  const isAggregateScope =
+    filters.effectiveLocationId === filters.ALL_LOCATIONS
+    || isStation(data.locations, filters.effectiveLocationId);
 
   // ── Stale-location auto-sync ──────────────────────────────────────────────
   // When the saved `selectedLocationId` (persisted to localStorage) refers to
@@ -249,8 +268,10 @@ export function InventoryPage({
   const detailItem = detailItemId
     ? data.rows.find((r) => r.id === detailItemId) ?? null
     : null;
-  const detailItemPricing: ItemVendorPricingEntry[] = detailItemId
-    ? Array.from(data.vendorPricing.get(detailItemId)?.values() ?? [])
+  // Modal gets the RAW union across the item's lots so it can edit in place and
+  // delete a vendor across every lot.
+  const detailItemPricing: ItemVendorPricingEntry[] = detailItem
+    ? rawPricingForName(String(detailItem.values.itemName ?? ""), data.rows, data.vendorPricing)
     : [];
   const handlePricingUpserted = (entry: ItemVendorPricingEntry) => {
     data.setVendorPricing((prev) => {
@@ -363,36 +384,20 @@ export function InventoryPage({
                     <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                   </summary>
                   <div className="inventory-dropdown-panel">
-                    {filters.sortedLocations.map((loc) => (
+                    {buildLocationPickerEntries(filters.sortedLocations).map((entry) => (
                       <button
-                        key={loc.id}
+                        key={entry.id}
                         type="button"
-                        className={`inventory-dropdown-option${filters.effectiveLocationId === loc.id ? " active" : ""}`}
+                        className={`inventory-dropdown-option${filters.effectiveLocationId === entry.id ? " active" : ""}${entry.depth === 1 ? " inventory-dropdown-option--child" : ""}`}
                         onClick={(e) => {
-                          onSelectedLocationIdChange(loc.id);
+                          onSelectedLocationIdChange(entry.id);
                           e.currentTarget.closest("details")?.removeAttribute("open");
                         }}
                       >
-                        {loc.name}
+                        {entry.label}
+                        {entry.isStation ? <span className="inventory-dropdown-hint"> · all</span> : null}
                       </button>
                     ))}
-                    {canEditInventory && (
-                      <>
-                        <div className="inventory-dropdown-divider" />
-                        <button
-                          type="button"
-                          className="inventory-dropdown-option inventory-dropdown-action"
-                          onClick={(e) => {
-                            data.setAddingLocation(true);
-                            data.setAddLocationError(null);
-                            filters.setSelectedRowIds(new Set());
-                            e.currentTarget.closest("details")?.removeAttribute("open");
-                          }}
-                        >
-                          <Plus size={14} /> Add Location
-                        </button>
-                      </>
-                    )}
                   </div>
                 </details>
               )}
@@ -456,36 +461,20 @@ export function InventoryPage({
                     <ChevronDown className="inventory-dropdown-chevron" size={14} aria-hidden="true" />
                   </summary>
                   <div className="inventory-dropdown-panel">
-                    {filters.sortedLocations.map((loc) => (
+                    {buildLocationPickerEntries(filters.sortedLocations).map((entry) => (
                       <button
-                        key={loc.id}
+                        key={entry.id}
                         type="button"
-                        className={`inventory-dropdown-option${filters.effectiveLocationId === loc.id ? " active" : ""}`}
+                        className={`inventory-dropdown-option${filters.effectiveLocationId === entry.id ? " active" : ""}${entry.depth === 1 ? " inventory-dropdown-option--child" : ""}`}
                         onClick={(e) => {
-                          onSelectedLocationIdChange(loc.id);
+                          onSelectedLocationIdChange(entry.id);
                           e.currentTarget.closest("details")?.removeAttribute("open");
                         }}
                       >
-                        {loc.name}
+                        {entry.label}
+                        {entry.isStation ? <span className="inventory-dropdown-hint"> · all</span> : null}
                       </button>
                     ))}
-                    {canEditInventory && (
-                      <>
-                        <div className="inventory-dropdown-divider" />
-                        <button
-                          type="button"
-                          className="inventory-dropdown-option inventory-dropdown-action"
-                          onClick={(e) => {
-                            data.setAddingLocation(true);
-                            data.setAddLocationError(null);
-                            filters.setSelectedRowIds(new Set());
-                            e.currentTarget.closest("details")?.removeAttribute("open");
-                          }}
-                        >
-                          <Plus size={14} /> Add Location
-                        </button>
-                      </>
-                    )}
                   </div>
                 </details>
               )}
@@ -523,12 +512,23 @@ export function InventoryPage({
 
               <div className="inventory-actions-group">
                 {/* Import dropdown — scoped to the current location since CSV
-                 *  imports always land items at one specific location. Hidden
-                 *  in "All Locations" view because a destination is required. */}
+                 *  imports always land items at one specific location. Disabled
+                 *  in aggregate (All Locations / station) views — a leaf is
+                 *  required as the destination. */}
+                {canEditInventory && data.canEditTable && !isMobile && isAggregateScope ? (
+                  <button
+                    type="button"
+                    className="inventory-toolbar-action"
+                    disabled
+                    title="Pick a specific location to import"
+                  >
+                    <Download size={14} aria-hidden="true" /> Import
+                  </button>
+                ) : null}
                 {canEditInventory
                 && data.canEditTable
                 && !isMobile
-                && filters.effectiveLocationId !== filters.ALL_LOCATIONS
+                && !isAggregateScope
                 ? (
                   <details className="inventory-move-menu">
                     <summary
@@ -571,16 +571,15 @@ export function InventoryPage({
                     </div>
                   </details>
                 ) : null}
-                {data.canEditTable
-                && !isMobile
-                && filters.effectiveLocationId !== filters.ALL_LOCATIONS
-                && currentLocation
-                ? (
+                {data.canEditTable && !isMobile && (isAggregateScope || currentLocation) ? (
                   <button
                     type="button"
                     className="inventory-toolbar-action"
                     onClick={() => setShowColumnDialog(true)}
-                    title="Manage which custom columns appear at this location"
+                    disabled={isAggregateScope}
+                    title={isAggregateScope
+                      ? "Pick a specific location to manage columns"
+                      : "Manage which custom columns appear at this location"}
                   >
                     Manage columns
                   </button>
@@ -593,20 +592,23 @@ export function InventoryPage({
                           Move to…
                         </summary>
                         <div className="inventory-move-panel">
-                          {filters.sortedLocations
-                            .filter((loc) => loc.id !== filters.effectiveLocationId)
-                            .map((loc) => (
+                          {/* Any location can hold stock, so every location is a
+                           *  valid move target. Labeled with their primary for
+                           *  context. */}
+                          {buildLocationPickerEntries(filters.sortedLocations)
+                            .filter((entry) => entry.id !== filters.effectiveLocationId)
+                            .map((entry) => (
                               <button
-                                key={loc.id}
+                                key={entry.id}
                                 type="button"
                                 className="inventory-move-option"
                                 onClick={(e) => {
-                                  void data.onMoveSelectedRows(loc.id);
+                                  void data.onMoveSelectedRows(entry.id);
                                   const details = e.currentTarget.closest("details");
                                   details?.removeAttribute("open");
                                 }}
                               >
-                                {loc.name}
+                                {locationPath(filters.sortedLocations, entry.id)}
                               </button>
                             ))}
                         </div>
@@ -633,10 +635,12 @@ export function InventoryPage({
                       type="button"
                       className="inventory-add-row-btn"
                       onClick={() => data.onAddRow("top")}
+                      disabled={isAggregateScope}
+                      title={isAggregateScope ? "Pick a specific location to add items" : undefined}
                     >
                       <Plus size={14} /> Add Row
                     </button>
-                    {filters.selectedRowIds.size > 0 && (
+                    {!isAggregateScope && filters.selectedRowIds.size > 0 && (
                       <details className="inventory-add-row-menu">
                         <summary className="inventory-add-row-chevron" aria-label="Add row options">
                           <ChevronDown size={14} aria-hidden="true" />
@@ -738,6 +742,7 @@ export function InventoryPage({
                 onRequestRemove={data.onRequestRemoveSelectedRows}
                 onRequestRemoveRow={data.onRequestRemoveRow}
                 onCellChange={data.onCellChange}
+                onRequestAdjustQuantity={data.onRequestAdjustQuantity}
                 getReadOnlyCellText={data.getReadOnlyCellText}
                 toDateInputValue={filters.toDateInputValue}
                 normalizeLinkValue={data.normalizeLinkValue}
@@ -749,7 +754,7 @@ export function InventoryPage({
                 activeTab={filters.activeTab}
                 availableVendors={data.registeredVendors}
                 onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
-                vendorPricing={data.vendorPricing}
+                vendorPricing={vendorPricingByName}
               />
             ) : (
               <InventoryDesktopTable
@@ -771,6 +776,7 @@ export function InventoryPage({
                 onSetSelectedRowId={data.setSelectedRowId}
                 onSortColumn={filters.onSortColumn}
                 onCellChange={data.onCellChange}
+                onRequestAdjustQuantity={data.onRequestAdjustQuantity}
                 sortState={filters.sortState}
                 columnWidths={resize.columnWidths}
                 getAppliedColumnWidth={resize.getAppliedColumnWidth}
@@ -792,7 +798,7 @@ export function InventoryPage({
                 onRemoveRow={canEditInventory ? data.onRequestRemoveRow : undefined}
                 availableVendors={data.registeredVendors}
                 onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
-                vendorPricing={data.vendorPricing}
+                vendorPricing={vendorPricingByName}
                 onOpenItemDetails={canEditInventory ? setDetailItemId : undefined}
               />
             )}
@@ -869,9 +875,20 @@ export function InventoryPage({
             />
           );
         })() : null}
+
+        {data.adjustTarget ? (
+          <AdjustQuantityDialog
+            itemName={data.adjustTarget.itemName}
+            currentQty={data.adjustTarget.currentQty}
+            unit={data.adjustTarget.unit}
+            loading={data.saving}
+            onConfirm={data.onConfirmAdjustQuantity}
+            onCancel={data.onCancelAdjustQuantity}
+          />
+        ) : null}
       </div>
 
-      {isMobile && canEditInventory && data.canEditTable && (
+      {isMobile && canEditInventory && data.canEditTable && !isAggregateScope && (
         <button
           type="button"
           className="inventory-fab"
@@ -894,6 +911,7 @@ export function InventoryPage({
           onPricingUpserted={handlePricingUpserted}
           onPricingDeleted={handlePricingDeleted}
           onAddVendor={canManageInventoryColumns ? handleAddVendor : undefined}
+          onOpenActivityHistory={onOpenActivityHistory}
         />
       ) : null}
     </section>

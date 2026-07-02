@@ -60,6 +60,13 @@ export type InventoryLocation = {
   module: "inventory";
   kind: "location";
   name: string;
+  /** Self-referential parent pointer. Absent/empty = a top-level location.
+   *  A top-level location that has children is a "station" (a pure group);
+   *  a location with no children is a leaf and is where stock actually lives.
+   *  The hierarchy is capped at two levels: a child may not itself be a parent
+   *  (enforced in routes/locations.ts), so this either points at a root or is
+   *  unset. Absent in pre-hierarchy rows; readers treat absent as a root. */
+  parentLocationId?: string;
   sortOrder: number;
   createdAt: string;
 };
@@ -202,6 +209,14 @@ export type AuditAction =
   /** Reverses a previous ITEM_RETIRE: clears the retire markers and marks the
    *  original event as undone. Soft-delete becomes "still in service" again. */
   | "ITEM_UNRETIRE"
+  /** Manual quantity reconciliation: the on-hand count was corrected to match
+   *  reality (miscount, found stock, shrinkage, etc.) with a required reason.
+   *  Body shape: { reason: AdjustReason, qtyBefore, qtyAfter, delta, direction,
+   *  parentItemId, notes? }. Distinct from usage/restock/retire — it's a
+   *  correction, not a real stock movement. Historically this label was derived
+   *  client-side from a qty-only ITEM_EDIT; it's now a first-class event so the
+   *  reason can be stored. */
+  | "ITEM_QTY_ADJUST"
   | "USAGE_SUBMIT"
   | "USAGE_APPROVE"
   | "USAGE_REJECT"
@@ -219,6 +234,9 @@ export type AuditAction =
    *  the values-JSON of every affected row; now it's a first-class event. */
   | "LOCATION_CREATE"
   | "LOCATION_RENAME"
+  /** Location nested under (or un-nested from) a parent station. Body shape:
+   *  { locationId, name, fromParentId, toParentId }. */
+  | "LOCATION_REPARENT"
   | "LOCATION_DELETE"
   | "CSV_IMPORT"
   | "TEMPLATE_APPLY"
@@ -227,6 +245,11 @@ export type AuditAction =
   | "RESTOCK_ORDER_CLOSED"
   /** Fast Restock: quantity added directly to an inventory row (not via an order). */
   | "RESTOCK_ADDED"
+  /** A vendor's price for this item was set/changed in the pricing modal. Body
+   *  shape: { vendor, unitCost, packCost?, packCount? }. Feeds the item's
+   *  cost-over-time (the current vendor price is a real price point) and shows
+   *  in the activity feed. Distinct from RESTOCK_RECEIVED (what was paid). */
+  | "VENDOR_PRICE_EDIT"
   /** One-shot record of a schema migration applying to the org (e.g. v0 → v1
    *  when location goes structural). Body shape: { fromVersion, toVersion,
    *  itemsMovedToDefault, locationsCreated }. */
@@ -255,6 +278,43 @@ export type AuditAction =
 export type RetireReason = "expired" | "damaged" | "lost" | "recalled" | "discontinued";
 
 export const RETIRE_REASONS: RetireReason[] = ["expired", "damaged", "lost", "recalled", "discontinued"];
+
+/** Reason codes attached to ITEM_QTY_ADJUST events. Required whenever a user
+ *  manually corrects an on-hand count so the audit trail records *why* the
+ *  number drifted (rather than a silent overwrite).
+ *
+ *  - recount: physical recount didn't match the system; corrected to actual.
+ *  - found: stock that existed but wasn't recorded (e.g. an un-logged delivery).
+ *  - shrinkage: quantity is short with no recorded usage/retire (loss/theft).
+ *  - damaged: units written off as unusable during a count.
+ *  - data_entry: fixing a typo / earlier mis-entry, not a real-world change.
+ *  - other: anything else; pairs with a free-text note.
+ */
+export type AdjustReason = "recount" | "found" | "shrinkage" | "damaged" | "data_entry" | "other";
+
+export const ADJUST_REASONS: AdjustReason[] = ["recount", "found", "shrinkage", "damaged", "data_entry", "other"];
+
+/** Economic classification of an adjustment reason.
+ *
+ *  - loss: real value left inventory (shrinkage, damaged) — a downward
+ *    adjustment with this reason feeds loss analytics alongside ITEM_RETIRE.
+ *  - correction: a bookkeeping reconciliation of the book count to reality
+ *    (recount, data-entry fix, found stock). These change on-hand quantity /
+ *    inventory valuation but are NOT a loss and NOT spend, so they're excluded
+ *    from both. A "we never actually had it" miscount is a correction, not a
+ *    loss; "found stock" is a correction, not spend (log a restock if money
+ *    was actually paid).
+ */
+export type AdjustLossKind = "loss" | "correction";
+
+export const ADJUST_REASON_LOSS_KIND: Record<AdjustReason, AdjustLossKind> = {
+  recount: "correction",
+  found: "correction",
+  shrinkage: "loss",
+  damaged: "loss",
+  data_entry: "correction",
+  other: "correction",
+};
 
 export type PendingEntry = {
   itemId: string;

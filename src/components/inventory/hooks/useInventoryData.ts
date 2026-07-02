@@ -32,6 +32,7 @@ import {
   UNDO_HISTORY_LIMIT,
 } from "../inventoryTypes";
 import { buildRowsSignature, createBlankInventoryRow, normalizeHeaderKey } from "../inventoryUtils";
+import { isStation, defaultBucketChildId } from "../../../lib/locationTree";
 import { useToast } from "../../shared/Toast";
 
 interface UseInventoryDataParams {
@@ -131,6 +132,12 @@ export function useInventoryData({
    *  target (matters for the mobile per-row case where selectedRowIds may
    *  not even reflect the row that triggered the dialog). Null = closed. */
   const [removeTarget, setRemoveTarget] = useState<{ rowIds: string[] } | null>(null);
+  // Quantity-adjustment dialog target. Set when the user edits the Quantity
+  // cell of an already-saved row (see CellEditor's gate) — a manual count
+  // correction that must capture a reason.
+  const [adjustTarget, setAdjustTarget] = useState<
+    { rowId: string; itemName: string; currentQty: number; unit?: string } | null
+  >(null);
   const [userColumnOverrides, setUserColumnOverrides] = useState<ColumnVisibilityOverrides>({});
 
   // ── Refs ──
@@ -247,50 +254,6 @@ export function useInventoryData({
       snap.set(nextRows[i].id, JSON.stringify({ values: nextRows[i].values, position: i }));
     }
     lastSavedSnapshotRef.current = snap;
-  };
-
-  /** Reload inventory from the API, then prune zero-quantity rows that have
-   *  at least one non-zero sibling with the same itemName. Used after
-   *  approving a usage submission so "used up" duplicate rows are cleaned up. */
-  const reloadAndPruneZeroRows = async () => {
-    try {
-      const bootstrap = await loadInventoryBootstrap();
-      const freshRows = bootstrap.items;
-
-      // Group rows by itemName
-      const byName = new Map<string, typeof freshRows>();
-      for (const row of freshRows) {
-        const name = String(row.values.itemName ?? "").trim().toLowerCase();
-        if (!name) continue;
-        const group = byName.get(name) ?? [];
-        group.push(row);
-        byName.set(name, group);
-      }
-
-      // Identify zero-qty rows to prune (only when the item has at least one non-zero sibling)
-      const idsToDelete: string[] = [];
-      for (const group of byName.values()) {
-        if (group.length < 2) continue;
-        const hasNonZero = group.some((r) => Number(r.values.quantity ?? 0) > 0);
-        if (!hasNonZero) continue;
-        for (const r of group) {
-          if (Number(r.values.quantity ?? 0) === 0) {
-            idsToDelete.push(r.id);
-          }
-        }
-      }
-
-      if (idsToDelete.length > 0) {
-        await saveInventoryItems([], idsToDelete);
-        // Reload again to get the cleaned-up state
-        const cleaned = await loadInventoryBootstrap();
-        applyBootstrap(cleaned);
-      } else {
-        applyBootstrap(bootstrap);
-      }
-    } catch {
-      // Silently fall back -- the approval itself already succeeded
-    }
   };
 
   /** Sync-on-reconnect: replay a save that didn't reach the server in a prior
@@ -595,8 +558,18 @@ export function useInventoryData({
       // "All Locations" view (the toolbar disables Add Row there); fall back
       // to the first available location if the scope is somehow ALL.
       const fallbackLoc = locations[0]?.id;
-      created.locationId =
+      // A new row lands on the location in scope. Stock must live on a LEAF,
+      // though: if the scope is a station (a primary with sublocations) the row
+      // can't sit on the parent, so stamp its "General" bucket child instead.
+      // When that bucket doesn't exist yet, fall back to the parent id — the
+      // backend creates it on save and the reload reconciles the row into it.
+      // Fall back to the first location only in the "All Locations" view.
+      let target =
         effectiveLocationId !== ALL_LOCATIONS ? effectiveLocationId : fallbackLoc;
+      if (target && isStation(locations, target)) {
+        target = defaultBucketChildId(locations, target) ?? target;
+      }
+      created.locationId = target;
       const next = [
         ...prev.slice(0, insertIndex),
         created,
@@ -723,8 +696,16 @@ export function useInventoryData({
   const performDeleteRows = (idsToDelete: Set<string>) => {
     if (!canEditTable || idsToDelete.size === 0) return;
     pushUndoSnapshot();
+    // A row needs a server-side delete (and an ITEM_DELETE audit event) when it
+    // exists on the server. `createdAt` only gets stamped on bootstrap-loaded
+    // rows, so a row created AND saved in the same session never has it — the
+    // saved-snapshot is the authoritative "exists on the server" signal and
+    // covers both cases. Without this, deleting a just-created row silently
+    // dropped the delete (orphaned row, no audit entry).
+    const isPersisted = (row: InventoryRow) =>
+      Boolean(row.createdAt) || lastSavedSnapshotRef.current.has(row.id);
     const persistedIdsToDelete = rows
-      .filter((row) => idsToDelete.has(row.id) && Boolean(row.createdAt))
+      .filter((row) => idsToDelete.has(row.id) && isPersisted(row))
       .map((row) => row.id);
     setDeletedRowIds((prev) => {
       const next = new Set(prev);
@@ -814,6 +795,10 @@ export function useInventoryData({
 
     if (choice.kind === "delete") {
       performDeleteRows(new Set(target.rowIds));
+      // Flush immediately rather than waiting on the autosave interval, so the
+      // removal reaches the activity log right away — mirrors the retire path,
+      // which also saves directly.
+      await onSaveRef.current(false);
       return;
     }
 
@@ -956,10 +941,22 @@ export function useInventoryData({
 
     if (changedRows.length === 0 && pendingDeleted.length === 0) return;
 
+    // Stamp createdAt on rows being persisted for the first time so the field
+    // is a reliable "exists on the server" signal in-session (not just after a
+    // reload). We send the client value, which the server stores via
+    // if_not_exists(createdAt, …), so client and server agree exactly.
+    const stampedAt = new Date().toISOString();
+    const newlyPersistedIds = new Set(
+      changedRows.filter((r) => !r.createdAt).map((r) => r.id),
+    );
+    const rowsToSave = newlyPersistedIds.size > 0
+      ? changedRows.map((r) => (r.createdAt ? r : { ...r, createdAt: stampedAt }))
+      : changedRows;
+
     savingRef.current = true;
     setSaving(true);
     try {
-      await saveInventoryItems(changedRows, pendingDeleted);
+      await saveInventoryItems(rowsToSave, pendingDeleted);
 
       // Update snapshot to reflect what was just saved
       const nextSnap = new Map(snap);
@@ -970,6 +967,26 @@ export function useInventoryData({
         nextSnap.delete(id);
       }
       lastSavedSnapshotRef.current = nextSnap;
+
+      // Reflect the stamped createdAt in local state so subsequent in-session
+      // logic (deletes, blank-row detection) sees these rows as persisted.
+      // Only touch rows still present and still unstamped — the user may have
+      // edited or removed some during the save round-trip.
+      if (newlyPersistedIds.size > 0) {
+        setRows((prev) => {
+          let changed = false;
+          const next = prev.map((row) => {
+            if (newlyPersistedIds.has(row.id) && !row.createdAt) {
+              changed = true;
+              return { ...row, createdAt: stampedAt };
+            }
+            return row;
+          });
+          if (!changed) return prev;
+          rowsRef.current = next;
+          return next;
+        });
+      }
 
       // Clear deleted IDs that were just saved
       if (pendingDeleted.length > 0) {
@@ -1124,10 +1141,9 @@ export function useInventoryData({
       toast.info("Select at least one column to import.");
       return;
     }
-    // CSV imports require an explicit destination location. The toolbar's
-    // import flow (via handleChooseCsvImport) only opens the dialog when
-    // we're scoped to a real location — but defensively reject if somehow
-    // the user is in "All Locations" view here.
+    // CSV imports require an explicit destination location. The toolbar only
+    // opens the dialog when scoped to a real location — defensively reject the
+    // "All Locations" view here.
     if (effectiveLocationId === ALL_LOCATIONS) {
       toast.error("Pick a specific location before importing a CSV.");
       return;
@@ -1589,6 +1605,97 @@ export function useInventoryData({
     }
   };
 
+  // ── Quantity adjustment (manual reconciliation) ──
+  // Opened by editing the Quantity cell of a saved row. The cell itself is
+  // gated (CellEditor renders it as a trigger, not an input) so every manual
+  // count correction routes through this reason-capturing flow.
+  const onRequestAdjustQuantity = (rowId: string) => {
+    if (!canEditInventory) return;
+    const row = rowsRef.current.find((r) => r.id === rowId);
+    if (!row) return;
+    const currentQty = Number(row.values.quantity ?? 0);
+    setAdjustTarget({
+      rowId,
+      itemName: String(row.values.itemName ?? "").trim() || "this item",
+      currentQty: Number.isFinite(currentQty) ? currentQty : 0,
+      unit:
+        String(row.values.displayUnit ?? "").trim() ||
+        String(row.values.unit ?? "").trim() ||
+        undefined,
+    });
+  };
+
+  const onCancelAdjustQuantity = () => setAdjustTarget(null);
+
+  const onConfirmAdjustQuantity = async (input: {
+    newQty: number;
+    reason: import("../../../lib/inventoryApi").AdjustReason;
+    notes?: string;
+  }) => {
+    const target = adjustTarget;
+    if (!target || !canEditInventory) {
+      setAdjustTarget(null);
+      return;
+    }
+    const row = rowsRef.current.find((r) => r.id === target.rowId);
+    if (!row) {
+      setAdjustTarget(null);
+      return;
+    }
+    const nextQty = Number.isFinite(input.newQty) ? Math.max(0, input.newQty) : 0;
+    // Mirror inline-edit semantics: changing quantity clears the "ordered"
+    // marker so a pending-order badge doesn't linger after a manual recount.
+    const updatedRow: InventoryRow = {
+      ...row,
+      values: {
+        ...row.values,
+        quantity: nextQty,
+        ...(row.values.orderedAt ? { orderedAt: null } : {}),
+      },
+    };
+
+    pushUndoSnapshot();
+    setRows((prev) => {
+      const next = prev.map((r) => (r.id === target.rowId ? updatedRow : r));
+      rowsRef.current = next;
+      return next;
+    });
+
+    // Direct save with adjustMetadata — bypasses the batched autosave so the
+    // reason lands on the same request as the qty change (same pattern as
+    // onRetireRows).
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await saveInventoryItems([updatedRow], [], {
+        adjustMetadata: {
+          [target.rowId]: {
+            reason: input.reason,
+            ...(input.notes ? { notes: input.notes } : {}),
+          },
+        },
+      });
+      const snap = lastSavedSnapshotRef.current;
+      const nextSnap = new Map(snap);
+      nextSnap.set(updatedRow.id, serializeRowForSnapshot(updatedRow, updatedRow.position));
+      lastSavedSnapshotRef.current = nextSnap;
+      setDirtyRowIds((prev) => {
+        const next = new Set(prev);
+        next.delete(target.rowId);
+        dirtyRowIdsRef.current = next;
+        return next;
+      });
+      setShowSaved(true);
+      window.setTimeout(() => setShowSaved(false), 2000);
+      setAdjustTarget(null);
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to adjust quantity");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  };
+
   // ── Computed derived values ──
   const selectedFilteredCount = useMemo(
     () => filteredRowIds.filter((rowId) => selectedRowIds.has(rowId)).length,
@@ -1668,6 +1775,11 @@ export function useInventoryData({
     onRequestRemoveSelectedRows,
     onConfirmRemove,
     onCancelRemove,
+    // Quantity adjustment (manual reconciliation with a required reason)
+    adjustTarget,
+    onRequestAdjustQuantity,
+    onConfirmAdjustQuantity,
+    onCancelAdjustQuantity,
     // Refs
     importInputRef,
     selectAllCheckboxRef,
@@ -1718,7 +1830,6 @@ export function useInventoryData({
     applySnapshot,
     // Bootstrap
     applyBootstrap,
-    reloadAndPruneZeroRows,
     // Import handlers
     onChooseCsvImport,
     onOpenPasteImport,
